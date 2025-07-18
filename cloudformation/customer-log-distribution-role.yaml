@@ -1,52 +1,43 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Customer-deployed log distribution role for multi-tenant logging pipeline cross-account access'
+Description: 'Customer-deployed logging infrastructure for multi-tenant logging pipeline cross-account access'
 
 Parameters:
-  TenantId:
-    Type: String
-    Description: 'Unique identifier for this tenant (e.g., acme-corp)'
-    AllowedPattern: '^[a-z0-9\-]+$'
-    ConstraintDescription: 'Must contain only lowercase letters, numbers, and hyphens'
-    
   CentralLogDistributionRoleArn:
     Type: String
     Description: 'ARN of the central log distribution role (provided by log service provider)'
     AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/CentralLogDistributionRole$'
     ConstraintDescription: 'Must be a valid IAM role ARN for CentralLogDistributionRole'
     
-  Environment:
-    Type: String
-    Description: 'Environment name (production, staging, development)'
-    Default: 'production'
-    AllowedValues: ['production', 'staging', 'development']
+  LogRetentionDays:
+    Type: Number
+    Description: 'Number of days to retain logs in CloudWatch'
+    Default: 90
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: "Tenant Configuration"
-        Parameters:
-          - TenantId
-          - Environment
-      - Label:
           default: "Cross-Account Access"
         Parameters:
           - CentralLogDistributionRoleArn
+      - Label:
+          default: "Log Retention"
+        Parameters:
+          - LogRetentionDays
     ParameterLabels:
-      TenantId:
-        default: "Tenant Identifier"
       CentralLogDistributionRoleArn:
         default: "Central Log Distribution Role ARN"
-      Environment:
-        default: "Environment"
+      LogRetentionDays:
+        default: "Log Retention Period (Days)"
 
 Resources:
-  # IAM role for cross-account log delivery with ABAC
+  # IAM role for cross-account log delivery
   CustomerLogDistributionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'CustomerLogDistribution-${TenantId}-${Environment}'
-      Description: !Sub 'Customer-side role for cross-account log delivery for tenant ${TenantId} in ${Environment}'
+      RoleName: 'CustomerLogDistribution'
+      Description: 'Customer-side role for cross-account log delivery'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -56,10 +47,7 @@ Resources:
             Action: 'sts:AssumeRole'
             Condition:
               StringEquals:
-                'aws:PrincipalTag/tenant_id': !Ref TenantId
                 'aws:RequestedRegion': !Ref 'AWS::Region'
-              StringLike:
-                'aws:PrincipalTag/environment': !Ref Environment
       Policies:
         - PolicyName: CloudWatchLogsDeliveryPolicy
           PolicyDocument:
@@ -73,24 +61,130 @@ Resources:
                   - 'logs:DescribeLogGroups'
                   - 'logs:DescribeLogStreams'
                 Resource: 
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ROSA/cluster-logs/*'
               - Sid: PutLogEvents
                 Effect: Allow
                 Action:
                   - 'logs:PutLogEvents'
                 Resource: 
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*:log-stream:*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ROSA/cluster-logs/*:log-stream:*'
       Tags:
-        - Key: 'TenantId'
-          Value: !Ref TenantId
-        - Key: 'Environment'
-          Value: !Ref Environment
         - Key: 'Purpose'
           Value: 'CrossAccountLogDelivery'
         - Key: 'ManagedBy'
           Value: 'CloudFormation'
         - Key: 'DeployedBy'
           Value: 'Customer'
+
+  # Primary log group for application logs
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: '/ROSA/cluster-logs/application'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: 'LogType'
+          Value: 'Application'
+
+  # Log group for system/infrastructure logs
+  SystemLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: '/ROSA/cluster-logs/system'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: 'LogType'
+          Value: 'System'
+
+  # Log group for audit logs (longer retention)
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: '/ROSA/cluster-logs/audit'
+      RetentionInDays: 365  # Audit logs typically need longer retention
+      Tags:
+        - Key: 'LogType'
+          Value: 'Audit'
+
+  # CloudWatch metric filter for error monitoring
+  ErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroup
+      FilterPattern: '[timestamp, request_id, level="ERROR", ...]'
+      MetricTransformations:
+        - MetricNamespace: 'ROSA/ClusterLogs'
+          MetricName: 'ErrorCount'
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # CloudWatch alarm for error rate monitoring
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: 'ROSA-ClusterLogs-HighErrorRate'
+      AlarmDescription: 'High error rate detected in ROSA cluster logs'
+      MetricName: 'ErrorCount'
+      Namespace: 'ROSA/ClusterLogs'
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # CloudWatch dashboard for monitoring
+  ClusterLogsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: 'ROSA-ClusterLogs'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "log",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/ROSA/cluster-logs/application'\n| fields @timestamp, @message\n| sort @timestamp desc\n| limit 100",
+                "region": "${AWS::Region}",
+                "title": "Recent Application Logs",
+                "view": "table"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "ROSA/ClusterLogs", "ErrorCount" ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Error Count"
+              }
+            },
+            {
+              "type": "log",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/ROSA/cluster-logs/application'\n| filter @message like /ERROR/\n| fields @timestamp, @message\n| sort @timestamp desc\n| limit 50",
+                "region": "${AWS::Region}",
+                "title": "Recent Errors",
+                "view": "table"
+              }
+            }
+          ]
+        }
 
 Outputs:
   CustomerLogDistributionRoleArn:
@@ -99,25 +193,33 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-CustomerLogDistributionRoleArn'
 
-  TenantId:
-    Description: 'Tenant identifier for this deployment'
-    Value: !Ref TenantId
+  ApplicationLogGroupName:
+    Description: 'Name of the application log group'
+    Value: !Ref ApplicationLogGroup
     Export:
-      Name: !Sub '${AWS::StackName}-TenantId'
+      Name: !Sub '${AWS::StackName}-ApplicationLogGroup'
 
-  Environment:
-    Description: 'Environment for this deployment'
-    Value: !Ref Environment
+  SystemLogGroupName:
+    Description: 'Name of the system log group'
+    Value: !Ref SystemLogGroup
     Export:
-      Name: !Sub '${AWS::StackName}-Environment'
+      Name: !Sub '${AWS::StackName}-SystemLogGroup'
+
+  AuditLogGroupName:
+    Description: 'Name of the audit log group'
+    Value: !Ref AuditLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AuditLogGroup'
+
+  DashboardURL:
+    Description: 'URL to the CloudWatch dashboard'
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=ROSA-ClusterLogs'
 
   HandshakeInformation:
-    Description: 'Information to provide to the log service provider for tenant setup'
+    Description: 'Information to provide to the log service provider for setup'
     Value: !Sub |
-      Tenant ID: ${TenantId}
-      Environment: ${Environment}
       Customer Account ID: ${AWS::AccountId}
       Customer Log Distribution Role ARN: ${CustomerLogDistributionRole.Arn}
       Target Region: ${AWS::Region}
       
-      Please provide this information to your log service provider to complete the tenant setup.
+      Please provide this information to your log service provider to complete the setup.
