@@ -76,6 +76,59 @@ resource "aws_iam_role_policy" "firehose_glue_policy" {
   })
 }
 
+# Central log distribution role for cross-account access
+resource "aws_iam_role" "central_log_distribution_role" {
+  name = "CentralLogDistributionRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.log_distributor_role.arn
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "CentralLogDistributionRole"
+    Environment = "production"
+    Purpose     = "multi-tenant-logging"
+    Role        = "log-distribution"
+  }
+}
+
+# IAM policy for central log distribution role
+resource "aws_iam_role_policy" "central_log_distribution_policy" {
+  name = "CentralLogDistributionPolicy"
+  role = aws_iam_role.central_log_distribution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = data.aws_region.current.name
+          }
+          StringLike = {
+            "aws:ResourceTag/Purpose" = "CrossAccountLogDelivery"
+          }
+        }
+      }
+    ]
+  })
+}
+
 # IAM role for Lambda log distributor
 resource "aws_iam_role" "log_distributor_role" {
   name = "LogDistributorRole"
@@ -144,7 +197,7 @@ resource "aws_iam_role_policy" "log_distributor_policy" {
           "sts:AssumeRole",
           "sts:TagSession"
         ]
-        Resource = "*"
+        Resource = aws_iam_role.central_log_distribution_role.arn
         Condition = {
           StringEquals = {
             "aws:RequestedRegion" = data.aws_region.current.name

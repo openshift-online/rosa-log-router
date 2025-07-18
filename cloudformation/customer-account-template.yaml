@@ -14,6 +14,12 @@ Parameters:
     AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/.+$'
     ConstraintDescription: 'Must be a valid IAM role ARN'
     
+  CustomerLogDistributionRoleArn:
+    Type: String
+    Description: 'ARN of the customer log distribution role (created separately using customer-log-distribution-role.yaml)'
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/CustomerLogDistribution-.+$'
+    ConstraintDescription: 'Must be a valid IAM role ARN for CustomerLogDistribution role'
+    
   LogRetentionDays:
     Type: Number
     Description: 'Number of days to retain logs in CloudWatch'
@@ -38,6 +44,7 @@ Metadata:
           default: "Cross-Account Access"
         Parameters:
           - CentralLogDistributorRoleArn
+          - CustomerLogDistributionRoleArn
       - Label:
           default: "Log Retention"
         Parameters:
@@ -47,61 +54,14 @@ Metadata:
         default: "Tenant Identifier"
       CentralLogDistributorRoleArn:
         default: "Central Log Distributor Role ARN"
+      CustomerLogDistributionRoleArn:
+        default: "Customer Log Distribution Role ARN"
       LogRetentionDays:
         default: "Log Retention Period (Days)"
       Environment:
         default: "Environment"
 
 Resources:
-  # IAM role for cross-account log delivery with ABAC
-  LogDistributionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub 'LogDistribution-${TenantId}-${Environment}'
-      Description: !Sub 'Role for cross-account log delivery for tenant ${TenantId} in ${Environment}'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Ref CentralLogDistributorRoleArn
-            Action: 'sts:AssumeRole'
-            Condition:
-              StringEquals:
-                'aws:PrincipalTag/tenant_id': !Ref TenantId
-                'aws:RequestedRegion': !Ref 'AWS::Region'
-              StringLike:
-                'aws:PrincipalTag/environment': !Ref Environment
-      Policies:
-        - PolicyName: CloudWatchLogsDeliveryPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: CreateLogGroupAndStream
-                Effect: Allow
-                Action:
-                  - 'logs:CreateLogGroup'
-                  - 'logs:CreateLogStream'
-                  - 'logs:DescribeLogGroups'
-                  - 'logs:DescribeLogStreams'
-                Resource: 
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*'
-              - Sid: PutLogEvents
-                Effect: Allow
-                Action:
-                  - 'logs:PutLogEvents'
-                Resource: 
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*:log-stream:*'
-      Tags:
-        - Key: 'TenantId'
-          Value: !Ref TenantId
-        - Key: 'Environment'
-          Value: !Ref Environment
-        - Key: 'Purpose'
-          Value: 'CrossAccountLogDelivery'
-        - Key: 'ManagedBy'
-          Value: 'CloudFormation'
-
   # Primary log group for application logs
   ApplicationLogGroup:
     Type: AWS::Logs::LogGroup
@@ -230,11 +190,11 @@ Resources:
         }
 
 Outputs:
-  LogDistributionRoleArn:
-    Description: 'ARN of the log distribution role for cross-account access'
-    Value: !GetAtt LogDistributionRole.Arn
+  CustomerLogDistributionRoleArn:
+    Description: 'ARN of the customer log distribution role for cross-account access'
+    Value: !Ref CustomerLogDistributionRoleArn
     Export:
-      Name: !Sub '${AWS::StackName}-LogDistributionRoleArn'
+      Name: !Sub '${AWS::StackName}-CustomerLogDistributionRoleArn'
 
   ApplicationLogGroupName:
     Description: 'Name of the application log group'
@@ -265,7 +225,7 @@ Outputs:
         "tenant_id": "${TenantId}",
         "account_id": "${AWS::AccountId}",
         "environment": "${Environment}",
-        "log_distribution_role_arn": "${LogDistributionRole.Arn}",
+        "log_distribution_role_arn": "${CustomerLogDistributionRoleArn}",
         "target_region": "${AWS::Region}",
         "log_groups": {
           "application": "${ApplicationLogGroup}",

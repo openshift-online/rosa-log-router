@@ -28,6 +28,28 @@ zip -r log_distributor.zip .
 aws lambda update-function-code --function-name log-distributor --zip-file fileb://log_distributor.zip
 ```
 
+### Customer Onboarding (Two-Step Process)
+```bash
+# Step 1: Customer deploys their log distribution role
+aws cloudformation create-stack \
+  --stack-name customer-log-distribution-role \
+  --template-body file://cloudformation/customer-log-distribution-role.yaml \
+  --parameters ParameterKey=TenantId,ParameterValue=your-tenant-id \
+               ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+               ParameterKey=Environment,ParameterValue=production \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# Step 2: Customer deploys their infrastructure using the role ARN from Step 1
+aws cloudformation create-stack \
+  --stack-name customer-logging-infrastructure \
+  --template-body file://cloudformation/customer-account-template.yaml \
+  --parameters ParameterKey=TenantId,ParameterValue=your-tenant-id \
+               ParameterKey=CentralLogDistributorRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/LogDistributorRole \
+               ParameterKey=CustomerLogDistributionRoleArn,ParameterValue=arn:aws:iam::CUSTOMER-ACCOUNT:role/CustomerLogDistribution-tenant-env \
+               ParameterKey=Environment,ParameterValue=production \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
 ### Testing and Validation
 ```bash
 # Validate Terraform configuration
@@ -95,11 +117,13 @@ The system consists of 5 main stages:
 
 ## Security Model
 
-The system uses Attribute-Based Access Control (ABAC) for cross-account access:
-- Single Lambda execution role in central account
+The system uses a double-hop Attribute-Based Access Control (ABAC) architecture for cross-account access:
+- Lambda execution role in central account (assumes central log distribution role)
+- Central log distribution role in central account (assumes customer roles)
 - Customer-specific "log distribution" roles in customer accounts
 - Session tags for tenant isolation (`tenant_id`, `cluster_id`, `environment`)
 - Trust policies that validate session tags match customer's tenant ID
+- Two-step role assumption provides additional security boundaries
 
 ## Environment Variables
 
@@ -107,6 +131,7 @@ The system uses Attribute-Based Access Control (ABAC) for cross-account access:
 - `TENANT_CONFIG_TABLE`: DynamoDB table for tenant configurations
 - `MAX_BATCH_SIZE`: Maximum events per CloudWatch Logs batch (default: 1000)
 - `RETRY_ATTEMPTS`: Number of retry attempts for failed operations (default: 3)
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the central log distribution role for double-hop access
 
 ### Vector ConfigMap
 - `AWS_REGION`: AWS region for Firehose stream

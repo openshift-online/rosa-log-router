@@ -11,10 +11,11 @@ resource "aws_lambda_function" "log_distributor" {
   # Environment variables
   environment {
     variables = {
-      TENANT_CONFIG_TABLE = aws_dynamodb_table.tenant_configurations.name
-      MAX_BATCH_SIZE     = "1000"
-      RETRY_ATTEMPTS     = "3"
-      LOG_LEVEL          = "INFO"
+      TENANT_CONFIG_TABLE                    = aws_dynamodb_table.tenant_configurations.name
+      MAX_BATCH_SIZE                        = "1000"
+      RETRY_ATTEMPTS                        = "3"
+      LOG_LEVEL                             = "INFO"
+      CENTRAL_LOG_DISTRIBUTION_ROLE_ARN     = aws_iam_role.central_log_distribution_role.arn
     }
   }
 

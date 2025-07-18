@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Customer-deployed log distribution role for multi-tenant logging pipeline cross-account access'
+
+Parameters:
+  TenantId:
+    Type: String
+    Description: 'Unique identifier for this tenant (e.g., acme-corp)'
+    AllowedPattern: '^[a-z0-9\-]+$'
+    ConstraintDescription: 'Must contain only lowercase letters, numbers, and hyphens'
+    
+  CentralLogDistributionRoleArn:
+    Type: String
+    Description: 'ARN of the central log distribution role (provided by log service provider)'
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/CentralLogDistributionRole$'
+    ConstraintDescription: 'Must be a valid IAM role ARN for CentralLogDistributionRole'
+    
+  Environment:
+    Type: String
+    Description: 'Environment name (production, staging, development)'
+    Default: 'production'
+    AllowedValues: ['production', 'staging', 'development']
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Tenant Configuration"
+        Parameters:
+          - TenantId
+          - Environment
+      - Label:
+          default: "Cross-Account Access"
+        Parameters:
+          - CentralLogDistributionRoleArn
+    ParameterLabels:
+      TenantId:
+        default: "Tenant Identifier"
+      CentralLogDistributionRoleArn:
+        default: "Central Log Distribution Role ARN"
+      Environment:
+        default: "Environment"
+
+Resources:
+  # IAM role for cross-account log delivery with ABAC
+  CustomerLogDistributionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'CustomerLogDistribution-${TenantId}-${Environment}'
+      Description: !Sub 'Customer-side role for cross-account log delivery for tenant ${TenantId} in ${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref CentralLogDistributionRoleArn
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:PrincipalTag/tenant_id': !Ref TenantId
+                'aws:RequestedRegion': !Ref 'AWS::Region'
+              StringLike:
+                'aws:PrincipalTag/environment': !Ref Environment
+      Policies:
+        - PolicyName: CloudWatchLogsDeliveryPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CreateLogGroupAndStream
+                Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                Resource: 
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*'
+              - Sid: PutLogEvents
+                Effect: Allow
+                Action:
+                  - 'logs:PutLogEvents'
+                Resource: 
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/tenant-logs/${TenantId}*:log-stream:*'
+      Tags:
+        - Key: 'TenantId'
+          Value: !Ref TenantId
+        - Key: 'Environment'
+          Value: !Ref Environment
+        - Key: 'Purpose'
+          Value: 'CrossAccountLogDelivery'
+        - Key: 'ManagedBy'
+          Value: 'CloudFormation'
+        - Key: 'DeployedBy'
+          Value: 'Customer'
+
+Outputs:
+  CustomerLogDistributionRoleArn:
+    Description: 'ARN of the customer log distribution role - provide this to the log service provider'
+    Value: !GetAtt CustomerLogDistributionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CustomerLogDistributionRoleArn'
+
+  TenantId:
+    Description: 'Tenant identifier for this deployment'
+    Value: !Ref TenantId
+    Export:
+      Name: !Sub '${AWS::StackName}-TenantId'
+
+  Environment:
+    Description: 'Environment for this deployment'
+    Value: !Ref Environment
+    Export:
+      Name: !Sub '${AWS::StackName}-Environment'
+
+  HandshakeInformation:
+    Description: 'Information to provide to the log service provider for tenant setup'
+    Value: !Sub |
+      Tenant ID: ${TenantId}
+      Environment: ${Environment}
+      Customer Account ID: ${AWS::AccountId}
+      Customer Log Distribution Role ARN: ${CustomerLogDistributionRole.Arn}
+      Target Region: ${AWS::Region}
+      
+      Please provide this information to your log service provider to complete the tenant setup.

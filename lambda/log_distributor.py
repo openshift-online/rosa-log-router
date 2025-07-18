@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import logging
 import os
+import io
 from botocore.exceptions import ClientError, NoCredentialsError
 
 # Configure logging
@@ -28,6 +29,7 @@ dynamodb = boto3.resource('dynamodb')
 TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
 MAX_BATCH_SIZE = int(os.environ.get('MAX_BATCH_SIZE', '1000'))
 RETRY_ATTEMPTS = int(os.environ.get('RETRY_ATTEMPTS', '3'))
+CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = os.environ.get('CENTRAL_LOG_DISTRIBUTION_ROLE_ARN')
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
@@ -207,13 +209,13 @@ def deliver_logs_to_customer(
     tenant_info: Dict[str, str]
 ) -> None:
     """
-    Deliver log events to customer's CloudWatch Logs using cross-account role assumption
+    Deliver log events to customer's CloudWatch Logs using double-hop cross-account role assumption
     """
     try:
-        # Assume the customer's log distribution role with session tags
-        assumed_role_response = sts_client.assume_role(
-            RoleArn=tenant_config['log_distribution_role_arn'],
-            RoleSessionName=f"LogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
+        # Step 1: Assume the central log distribution role with session tags
+        central_role_response = sts_client.assume_role(
+            RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
+            RoleSessionName=f"CentralLogDistribution-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
             Tags=[
                 {
                     'Key': 'tenant_id',
@@ -230,13 +232,41 @@ def deliver_logs_to_customer(
             ]
         )
         
-        # Create CloudWatch Logs client with assumed credentials
+        # Step 2: Create STS client with central role credentials
+        central_sts_client = boto3.client(
+            'sts',
+            aws_access_key_id=central_role_response['Credentials']['AccessKeyId'],
+            aws_secret_access_key=central_role_response['Credentials']['SecretAccessKey'],
+            aws_session_token=central_role_response['Credentials']['SessionToken']
+        )
+        
+        # Step 3: Assume the customer's log distribution role using central role
+        customer_role_response = central_sts_client.assume_role(
+            RoleArn=tenant_config['log_distribution_role_arn'],
+            RoleSessionName=f"CustomerLogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
+            Tags=[
+                {
+                    'Key': 'tenant_id',
+                    'Value': tenant_info['tenant_id']
+                },
+                {
+                    'Key': 'cluster_id', 
+                    'Value': tenant_info['cluster_id']
+                },
+                {
+                    'Key': 'environment',
+                    'Value': tenant_info['environment']
+                }
+            ]
+        )
+        
+        # Step 4: Create CloudWatch Logs client with customer role credentials
         logs_client = boto3.client(
             'logs',
             region_name=tenant_config['target_region'],
-            aws_access_key_id=assumed_role_response['Credentials']['AccessKeyId'],
-            aws_secret_access_key=assumed_role_response['Credentials']['SecretAccessKey'],
-            aws_session_token=assumed_role_response['Credentials']['SessionToken']
+            aws_access_key_id=customer_role_response['Credentials']['AccessKeyId'],
+            aws_secret_access_key=customer_role_response['Credentials']['SecretAccessKey'],
+            aws_session_token=customer_role_response['Credentials']['SessionToken']
         )
         
         # Ensure log group and stream exist
