@@ -162,7 +162,6 @@ graph TB
 │   ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, and alerting
 │   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
 │   ├── deploy.sh                          # CloudFormation deployment script
-│   ├── MIGRATION_GUIDE.md                 # Migration from Terraform guide
 │   └── README.md                          # CloudFormation-specific documentation
 ├── docs/
 │   └── README.md                          # This file
@@ -236,13 +235,7 @@ aws cloudformation create-stack \
 
 ## CloudFormation Infrastructure
 
-This project uses CloudFormation for infrastructure deployment with a nested stack architecture:
-
-- **CloudFormation**: Nested stack architecture with comprehensive parameter management, validation, and rollback capabilities. Includes automated deployment scripts. See [cloudformation/README.md](../cloudformation/README.md) for detailed documentation.
-
-### Migration from Terraform
-
-If you previously used Terraform with this project, see [cloudformation/MIGRATION_GUIDE.md](../cloudformation/MIGRATION_GUIDE.md) for migration instructions. The Terraform code has been removed in favor of CloudFormation.
+This project uses CloudFormation for infrastructure deployment with a nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
 
 ## Configuration
 
