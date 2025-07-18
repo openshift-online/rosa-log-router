@@ -17,33 +17,24 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 
 ```
 ├── cloudformation/
-│   ├── main.yaml                       # Main CloudFormation orchestration template
-│   ├── core-infrastructure.yaml        # S3, DynamoDB, KMS, IAM resources
-│   ├── kinesis-stack.yaml              # Firehose delivery stream and Glue catalog
-│   ├── lambda-stack.yaml               # Lambda functions and event mappings
-│   ├── monitoring-stack.yaml           # CloudWatch, SNS/SQS, and alerting
-│   ├── customer-account-template.yaml  # CloudFormation template for customer accounts
-│   ├── deploy.sh                       # CloudFormation deployment script
-│   ├── MIGRATION_GUIDE.md              # Migration from Terraform guide
-│   └── README.md                       # CloudFormation-specific documentation
+│   ├── main.yaml                          # Main CloudFormation orchestration template
+│   ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
+│   ├── kinesis-stack.yaml                 # Firehose delivery stream and Glue catalog
+│   ├── lambda-stack.yaml                  # Lambda functions and event mappings
+│   ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, and alerting
+│   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
+│   ├── deploy.sh                          # CloudFormation deployment script
+│   ├── MIGRATION_GUIDE.md                 # Migration from Terraform guide
+│   └── README.md                          # CloudFormation-specific documentation
 ├── docs/
-│   └── README.md                       # This file
+│   └── README.md                          # This file
 ├── k8s/
-│   ├── vector-config.yaml             # Vector ConfigMap
-│   └── vector-daemonset.yaml          # Vector DaemonSet deployment
+│   ├── vector-config.yaml                # Vector ConfigMap
+│   └── vector-daemonset.yaml             # Vector DaemonSet deployment
 ├── lambda/
-│   ├── log_distributor.py             # Main Lambda function
-│   └── requirements.txt               # Python dependencies
-├── terraform/
-│   ├── dynamodb.tf                    # DynamoDB tenant configuration table
-│   ├── firehose.tf                    # Kinesis Data Firehose configuration
-│   ├── iam.tf                         # IAM roles and policies
-│   ├── lambda.tf                      # Lambda function and event sources
-│   ├── main.tf                        # Main Terraform configuration
-│   ├── outputs.tf                     # Terraform outputs
-│   ├── sns_sqs.tf                     # SNS topics and SQS queues
-│   └── variables.tf                   # Terraform variables
-└── DESIGN.md                          # Comprehensive architecture design
+│   ├── log_distributor.py                # Main Lambda function
+│   └── requirements.txt                  # Python dependencies
+└── DESIGN.md                             # Comprehensive architecture design
 ```
 
 ## Quick Start
@@ -51,14 +42,11 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 ### Prerequisites
 
 - AWS CLI configured with appropriate permissions
-- **Option 1 (CloudFormation)**: S3 bucket for storing CloudFormation templates
-- **Option 2 (Terraform)**: Terraform >= 1.0
+- S3 bucket for storing CloudFormation templates
 - kubectl configured for your Kubernetes clusters
 - Python 3.11+ (for Lambda development)
 
 ### 1. Deploy Core Infrastructure
-
-**Option A: CloudFormation (Recommended)**
 
 ```bash
 cd cloudformation/
@@ -71,15 +59,6 @@ cd cloudformation/
 
 # Deploy with custom parameters
 ./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
-```
-
-**Option B: Terraform**
-
-```bash
-cd terraform/
-terraform init
-terraform plan -var="eks_oidc_issuer=your-eks-oidc-issuer"
-terraform apply
 ```
 
 ### 2. Deploy Vector to Kubernetes
@@ -110,25 +89,22 @@ Provide customers with the CloudFormation template:
 
 ```bash
 aws cloudformation create-stack \
-  --stack-name tenant-logging-infrastructure \
-  --template-body file://cloudformation/customer-account-template.yaml \
-  --parameters ParameterKey=TenantId,ParameterValue=your-tenant-id \
-               ParameterKey=CentralLogDistributorRoleArn,ParameterValue=arn:aws:iam::ACCOUNT:role/LogDistributorRole \
+  --stack-name customer-logging-infrastructure \
+  --template-body file://cloudformation/customer-log-distribution-role.yaml \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+               ParameterKey=LogRetentionDays,ParameterValue=90 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-## Deployment Options
+## CloudFormation Infrastructure
 
-### CloudFormation vs Terraform
-
-This project supports both CloudFormation and Terraform for infrastructure deployment:
+This project uses CloudFormation for infrastructure deployment with a nested stack architecture:
 
 - **CloudFormation**: Nested stack architecture with comprehensive parameter management, validation, and rollback capabilities. Includes automated deployment scripts. See [cloudformation/README.md](../cloudformation/README.md) for detailed documentation.
-- **Terraform**: Modular configuration with state management. Original implementation method.
 
-### Migration from Terraform to CloudFormation
+### Migration from Terraform
 
-If you're currently using Terraform and want to migrate to CloudFormation, see [cloudformation/MIGRATION_GUIDE.md](../cloudformation/MIGRATION_GUIDE.md) for step-by-step migration instructions.
+If you previously used Terraform with this project, see [cloudformation/MIGRATION_GUIDE.md](../cloudformation/MIGRATION_GUIDE.md) for migration instructions. The Terraform code has been removed in favor of CloudFormation.
 
 ## Configuration
 
@@ -140,29 +116,21 @@ The following environment variables can be configured:
 - `KINESIS_STREAM_NAME`: Name of the Firehose stream
 - `TENANT_CONFIG_TABLE`: DynamoDB table name for tenant configurations
 
-### Terraform Variables
+### CloudFormation Parameters
 
-Key variables for customization:
+Key parameters for customization:
 
-```hcl
-# Core configuration
-aws_region = "us-east-1"
-environment = "production"
-project_name = "multi-tenant-logging"
-
-# Performance tuning
-lambda_reserved_concurrency = 100
-firehose_buffer_size_mb = 128
-firehose_buffer_interval_seconds = 900
-
-# Cost optimization
-enable_parquet_conversion = true
-enable_s3_intelligent_tiering = true
-s3_log_retention_days = 2555
-
-# Security
-enable_s3_encryption = true
-enable_xray_tracing = true
+```json
+{
+  "Environment": "production",
+  "ProjectName": "multi-tenant-logging",
+  "LambdaReservedConcurrency": 100,
+  "FirehoseBufferSizeMB": 128,
+  "EnableS3Encryption": true,
+  "EnableDetailedMonitoring": true,
+  "AlertEmailEndpoints": "ops@company.com",
+  "CostCenter": "platform-engineering"
+}
 ```
 
 ## Monitoring and Alerts
@@ -284,10 +252,9 @@ aws firehose describe-delivery-stream \
 cd lambda/
 python -m pytest tests/
 
-# Validate Terraform configuration
-cd terraform/
-terraform validate
-terraform plan
+# Validate CloudFormation templates
+cd cloudformation/
+./deploy.sh --validate-only -b your-templates-bucket
 ```
 
 ### Contributing
