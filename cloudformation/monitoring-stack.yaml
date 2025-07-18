@@ -498,31 +498,6 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Cost Anomaly Detection
-  CostAnomalyDetector:
-    Type: AWS::CE::AnomalyDetector
-    Properties:
-      AnomalyDetectorName: !Sub '${ProjectName}-${Environment}-cost-anomaly'
-      MonitorType: DIMENSIONAL
-      MonitorSpecification: !Sub |
-        {
-          "Dimension": "SERVICE",
-          "MatchOptions": ["EQUALS"],
-          "Values": [
-            "Amazon Kinesis Firehose",
-            "Amazon Simple Storage Service",
-            "AWS Lambda",
-            "Amazon Simple Queue Service",
-            "Amazon DynamoDB"
-          ]
-        }
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
 
   # Cost Budget
   CostBudget:
@@ -639,8 +614,3 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-ResourceGroupName'
 
-  CostAnomalyDetectorArn:
-    Description: ARN of the cost anomaly detector
-    Value: !GetAtt CostAnomalyDetector.AnomalyDetectorArn
-    Export:
-      Name: !Sub '${AWS::StackName}-CostAnomalyDetectorArn'

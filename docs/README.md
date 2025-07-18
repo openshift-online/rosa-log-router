@@ -60,7 +60,7 @@ graph TB
         
         subgraph "Monitoring"
             CW[CloudWatch<br/>Metrics & Dashboards]
-            Alarms[CloudWatch Alarms<br/>Cost Monitoring]
+            Alarms[CloudWatch Alarms<br/>Budget Alerts]
         end
     end
 
@@ -196,6 +196,11 @@ cd cloudformation/
 
 # Deploy with custom parameters
 ./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
+
+# Deploy using environment variables
+export AWS_PROFILE=your-profile
+export AWS_REGION=us-east-2
+./deploy.sh -b your-cloudformation-templates-bucket
 ```
 
 ### 2. Deploy Vector to Kubernetes
@@ -236,6 +241,15 @@ aws cloudformation create-stack \
 ## CloudFormation Infrastructure
 
 This project uses CloudFormation for infrastructure deployment with a nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
+
+### Recent Infrastructure Updates
+
+The CloudFormation templates have been updated to address several deployment issues:
+- **IAM Policy Fixes**: Corrected S3 bucket ARN format in IAM policies to use proper CloudFormation intrinsic functions
+- **Template URL Format**: Updated nested stack URLs to use the legacy S3 format (`https://s3.amazonaws.com/bucket/key`) required by CloudFormation
+- **Resource Type Validation**: Removed invalid `AWS::DynamoDB::Item` resources that aren't supported by CloudFormation
+- **Encryption Configuration**: Fixed DynamoDB SSE configuration to include required `SSEType` parameter
+- **Environment Variable Support**: Deployment script now properly honors `AWS_PROFILE` and `AWS_REGION` environment variables
 
 ## Configuration
 
@@ -280,8 +294,7 @@ The infrastructure includes comprehensive monitoring:
 - Dead letter queue messages
 
 ### Cost Monitoring
-- AWS Cost Budget alerts
-- Cost anomaly detection
+- AWS Cost Budget alerts with threshold notifications
 - Resource tagging for cost allocation
 
 ## Security

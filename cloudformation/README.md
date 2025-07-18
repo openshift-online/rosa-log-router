@@ -12,6 +12,15 @@ The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" 
 4. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions for log distribution
 5. **Monitoring Stack** (`monitoring-stack.yaml`) - CloudWatch, SNS/SQS, and alerting
 
+### Recent Updates
+
+The CloudFormation templates have been updated to fix several critical deployment issues:
+- Fixed IAM policy S3 ARN format errors (using `.Arn` attribute instead of bucket names)
+- Updated nested stack template URLs to use legacy S3 format required by CloudFormation
+- Removed invalid `AWS::DynamoDB::Item` resources from upstream changes
+- Fixed DynamoDB SSE configuration to include required `SSEType` parameter
+- Updated deployment script to properly honor `AWS_PROFILE` and `AWS_REGION` environment variables
+
 ## Quick Start
 
 ### Prerequisites
@@ -34,6 +43,11 @@ cd cloudformation/
 
 # Deploy with custom parameters
 ./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
+
+# Deploy using environment variables for AWS configuration
+export AWS_PROFILE=your-profile
+export AWS_REGION=us-east-2
+./deploy.sh -b your-cloudformation-templates-bucket
 ```
 
 ### Validate Templates Only
@@ -64,17 +78,17 @@ cloudformation/
 
 ### Main Template Parameters
 
-| Parameter | Description | Default | Required |
-|-----------|-------------|---------|----------|
-| Environment | Environment name | production | Yes |
-| ProjectName | Project name for resource naming | multi-tenant-logging | Yes |
-| EksOidcIssuer | OIDC issuer URL for EKS cluster | "" | No |
-| LambdaReservedConcurrency | Reserved concurrency for Lambda | 100 | No |
-| FirehoseBufferSizeMB | Firehose buffer size in MB | 128 | No |
-| AlertEmailEndpoints | Email addresses for alerts | "" | No |
-| EnableAnalytics | Enable analytics pipeline | false | No |
-| EnableS3Encryption | Enable S3 encryption | true | No |
-| CostCenter | Cost center for billing | "" | No |
+| Parameter                 | Description                     | Default              | Required |
+|---------------------------|---------------------------------|----------------------|----------|
+| Environment               | Environment name                | development          | Yes |
+| ProjectName               | Project name for resource naming | multi-tenant-logging | Yes |
+| EksOidcIssuer             | OIDC issuer URL for EKS cluster | ""                   | No |
+| LambdaReservedConcurrency | Reserved concurrency for Lambda | 100                  | No |
+| FirehoseBufferSizeMB      | Firehose buffer size in MB      | 128                  | No |
+| AlertEmailEndpoints       | Email addresses for alerts      | ""                   | No |
+| EnableAnalytics           | Enable analytics pipeline       | false                | No |
+| EnableS3Encryption        | Enable S3 encryption            | true                 | No |
+| CostCenter                | Cost center for billing         | ""                   | No |
 
 ### Environment-Specific Parameters
 
@@ -147,14 +161,14 @@ OPTIONS:
 
 ### Main Stack Outputs
 
-| Output | Description |
-|--------|-------------|
-| CentralLoggingBucketName | S3 bucket for central logging |
-| TenantConfigTableName | DynamoDB table for tenant configs |
-| FirehoseDeliveryStreamName | Kinesis Firehose stream name |
-| LogDistributorFunctionName | Lambda function name |
-| CloudWatchDashboardURL | CloudWatch dashboard URL |
-| VectorRoleArn | IAM role ARN for Vector |
+| Output                     | Description                       |
+|----------------------------|-----------------------------------|
+| CentralLoggingBucketName   | S3 bucket for central logging     |
+| TenantConfigTableName      | DynamoDB table for tenant configs |
+| FirehoseDeliveryStreamName | Kinesis Firehose stream name      |
+| LogDistributorFunctionName | Lambda function name              |
+| CloudWatchDashboardURL     | CloudWatch dashboard URL          |
+| VectorRoleArn              | IAM role ARN for Vector           |
 
 ### Using Outputs
 
@@ -191,7 +205,7 @@ Automatically configured alarms for:
 - Firehose delivery failures
 - SQS queue depth and message age
 - DynamoDB throttling
-- Cost anomalies
+- Budget threshold alerts
 
 ### SNS Notifications
 
@@ -299,6 +313,22 @@ Automatic transitions:
      --action-names cloudformation:CreateStack \
      --resource-arns "*"
    ```
+
+4. **IAM Policy ARN Format Errors**
+   - Error: `Resource handler returned message: "Resource multi-tenant-logging-production-central-* must be in ARN format"`
+   - Solution: Use `!Sub '${BucketName.Arn}/*'` instead of `!Sub '${BucketName}/*'` in IAM policies
+
+5. **Nested Stack Template URL Errors**
+   - Error: `TemplateURL must be a supported URL`
+   - Solution: Use legacy S3 URL format: `https://s3.amazonaws.com/bucket/path` instead of `https://bucket.s3.region.amazonaws.com/path`
+
+6. **Invalid Resource Type Errors**
+   - Error: `Invalid template resource property 'AWS::DynamoDB::Item'`
+   - Solution: Remove AWS::DynamoDB::Item resources - use Lambda or AWS CLI to populate DynamoDB tables
+
+7. **DynamoDB SSE Configuration Errors**
+   - Error: `One or more parameter values were invalid: SSEType is required`
+   - Solution: Include `SSEType: KMS` when using `KMSMasterKeyId` in SSE configuration
 
 ### Debugging Commands
 

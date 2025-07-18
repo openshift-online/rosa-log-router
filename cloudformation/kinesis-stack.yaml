@@ -81,26 +81,6 @@ Resources:
         Parameters:
           classification: parquet
           typeOfData: file
-          # Partition projection for cost optimization
-          projection.enabled: "true"
-          projection.tenant_id.type: "enum"
-          projection.tenant_id.values: "acme-corp,globodyne-inc,default-tenant"
-          projection.cluster_id.type: "enum"
-          projection.cluster_id.values: "prod-cluster-1,prod-cluster-2,staging-cluster"
-          projection.environment.type: "enum"
-          projection.environment.values: "production,staging,development"
-          projection.year.type: "integer"
-          projection.year.range: "2024,2030"
-          projection.month.type: "integer"
-          projection.month.range: "1,12"
-          projection.month.digits: "2"
-          projection.day.type: "integer"
-          projection.day.range: "1,31"
-          projection.day.digits: "2"
-          projection.hour.type: "integer"
-          projection.hour.range: "0,23"
-          projection.hour.digits: "2"
-          storage.location.template: !Sub 's3://${CentralLoggingBucketName}/logs/tenant_id=${tenant_id}/cluster_id=${cluster_id}/environment=${environment}/year=${year}/month=${month}/day=${day}/hour=${hour}/'
         StorageDescriptor:
           Location: !Sub 's3://${CentralLoggingBucketName}/logs/'
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
@@ -186,7 +166,7 @@ Resources:
             AWSKMSKeyARN: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
         # Data format conversion to Parquet for cost savings
         DataFormatConversionConfiguration:
-          Enabled: !Ref IsParquetConversionEnabled
+          Enabled: !If [IsParquetConversionEnabled, true, false]
           OutputFormatConfiguration:
             Serializer:
               ParquetSerDe: {}

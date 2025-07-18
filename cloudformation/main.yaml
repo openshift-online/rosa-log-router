@@ -170,6 +170,10 @@ Parameters:
     Default: ""
     Description: Cost center for billing allocation
 
+  TemplateBucket:
+    Type: String
+    Description: S3 bucket containing the nested CloudFormation templates
+
 Conditions:
   HasAlertEmails: !Not [!Equals [!Join ["", !Ref AlertEmailEndpoints], ""]]
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
@@ -191,7 +195,7 @@ Resources:
   CoreInfrastructureStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/core-infrastructure.yaml'
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/core-infrastructure.yaml'
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
@@ -221,7 +225,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: CoreInfrastructureStack
     Properties:
-      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/kinesis-stack.yaml'
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/kinesis-stack.yaml'
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
@@ -247,7 +251,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: [CoreInfrastructureStack, KinesisStack]
     Properties:
-      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/lambda-stack.yaml'
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/lambda-stack.yaml'
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
@@ -275,7 +279,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: [CoreInfrastructureStack, KinesisStack, LambdaStack]
     Properties:
-      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/monitoring-stack.yaml'
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/monitoring-stack.yaml'
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName

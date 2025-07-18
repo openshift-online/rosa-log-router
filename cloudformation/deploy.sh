@@ -6,12 +6,12 @@
 set -e  # Exit on any error
 
 # Default values
-ENVIRONMENT="production"
+ENVIRONMENT="development"
 PROJECT_NAME="multi-tenant-logging"
-REGION="us-east-1"
+REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
 TEMPLATE_BUCKET=""
-PROFILE=""
+PROFILE="${AWS_PROFILE:-}"
 DRY_RUN=false
 VALIDATE_ONLY=false
 
@@ -47,7 +47,7 @@ Usage: $0 [OPTIONS]
 Deploy the multi-tenant logging infrastructure using CloudFormation.
 
 OPTIONS:
-    -e, --environment ENV       Environment name (production, staging, development). Default: production
+    -e, --environment ENV       Environment name (production, staging, development). Default: development
     -p, --project-name NAME     Project name. Default: multi-tenant-logging
     -r, --region REGION         AWS region. Default: us-east-1
     -s, --stack-name NAME       CloudFormation stack name. Default: PROJECT_NAME-ENVIRONMENT
@@ -154,15 +154,14 @@ check_aws_cli() {
         exit 1
     fi
     
-    local account_id=$(aws sts get-caller-identity --query Account --output text)
-    local current_region=$(aws configure get region)
+    local account_id=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
     print_status "AWS Account: $account_id"
-    print_status "Current region: ${current_region:-$REGION}"
+    print_status "Current region: $REGION"
 }
 
 # Function to check if S3 bucket exists
 check_template_bucket() {
-    if ! aws s3api head-bucket --bucket "$TEMPLATE_BUCKET" 2>/dev/null; then
+    if ! aws s3api head-bucket --bucket "$TEMPLATE_BUCKET" --region "$REGION" 2>/dev/null; then
         print_error "S3 bucket '$TEMPLATE_BUCKET' does not exist or is not accessible."
         print_status "Creating S3 bucket '$TEMPLATE_BUCKET'..."
         
@@ -279,6 +278,7 @@ deploy_stack() {
     local parameters=(
         "Environment=$ENVIRONMENT"
         "ProjectName=$PROJECT_NAME"
+        "TemplateBucket=$TEMPLATE_BUCKET"
     )
     
     # Add optional parameters if not default

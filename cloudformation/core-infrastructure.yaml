@@ -188,8 +188,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   LoggingKMSKeyAlias:
     Type: AWS::KMS::Alias
@@ -230,11 +228,6 @@ Resources:
             Transitions:
               - TransitionInDays: 1
                 StorageClass: INTELLIGENT_TIERING
-      NotificationConfiguration:
-        CloudWatchConfigurations:
-          - Event: 's3:ObjectCreated:*'
-            CloudWatchConfiguration:
-              LogGroupName: !Ref S3AccessLogGroup
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-central-logging'
@@ -244,8 +237,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # Backup S3 Bucket
   BackupBucket:
@@ -270,7 +261,7 @@ Resources:
             Transitions:
               - TransitionInDays: 7
                 StorageClass: GLACIER
-              - TransitionInDays: 30
+              - TransitionInDays: 97
                 StorageClass: DEEP_ARCHIVE
             ExpirationInDays: 365
       Tags:
@@ -282,8 +273,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # S3 Access Log Group
   S3AccessLogGroup:
@@ -332,6 +321,7 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
+        SSEType: !If [IsS3EncryptionEnabled, KMS, !Ref 'AWS::NoValue']
         KMSMasterKeyId: !If [IsS3EncryptionEnabled, !Ref LoggingKMSKey, !Ref 'AWS::NoValue']
       Tags:
         - Key: Name
@@ -342,91 +332,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
-
-  # Sample tenant configuration items
-  SampleTenant1:
-    Type: AWS::DynamoDB::Item
-    Properties:
-      TableName: !Ref TenantConfigTable
-      Item:
-        tenant_id:
-          S: acme-corp
-        account_id:
-          S: "123456789012"
-        environment:
-          S: production
-        log_distribution_role_arn:
-          S: "arn:aws:iam::123456789012:role/LogDistribution-acme-corp-production"
-        target_region:
-          S: us-east-1
-        log_groups:
-          M:
-            application:
-              S: "/ROSA/cluster-logs/application"
-            system:
-              S: "/ROSA/cluster-logs/system"
-            audit:
-              S: "/ROSA/cluster-logs/audit"
-        created_at:
-          S: "2024-01-15T10:30:00Z"
-        updated_at:
-          S: "2024-01-15T10:30:00Z"
-        status:
-          S: active
-        retention_days:
-          N: "90"
-        max_log_rate_per_minute:
-          N: "1000"
-        alert_endpoints:
-          L:
-            - M:
-                type:
-                  S: email
-                endpoint:
-                  S: "ops@acme-corp.com"
-
-  SampleTenant2:
-    Type: AWS::DynamoDB::Item
-    Properties:
-      TableName: !Ref TenantConfigTable
-      Item:
-        tenant_id:
-          S: globodyne-inc
-        account_id:
-          S: "987654321098"
-        environment:
-          S: production
-        log_distribution_role_arn:
-          S: "arn:aws:iam::987654321098:role/LogDistribution-globodyne-inc-production"
-        target_region:
-          S: eu-west-1
-        log_groups:
-          M:
-            application:
-              S: "/ROSA/cluster-logs/application"
-            system:
-              S: "/ROSA/cluster-logs/system"
-            audit:
-              S: "/ROSA/cluster-logs/audit"
-        created_at:
-          S: "2024-01-20T14:15:00Z"
-        updated_at:
-          S: "2024-01-20T14:15:00Z"
-        status:
-          S: active
-        retention_days:
-          N: "120"
-        max_log_rate_per_minute:
-          N: "2000"
-        alert_endpoints:
-          L:
-            - M:
-                type:
-                  S: slack
-                endpoint:
-                  S: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
 
   # IAM Role for Firehose
   FirehoseRole:
@@ -454,7 +359,7 @@ Resources:
                   - s3:ListBucketMultipartUploads
                   - s3:PutObject
                 Resource:
-                  - !Sub '${CentralLoggingBucket}/*'
+                  - !Sub '${CentralLoggingBucket.Arn}/*'
                   - !GetAtt CentralLoggingBucket.Arn
               - Effect: Allow
                 Action:
@@ -496,8 +401,8 @@ Resources:
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                !Sub '${EksOidcIssuer}:sub': 'system:serviceaccount:logging:vector-logs'
-                !Sub '${EksOidcIssuer}:aud': 'sts.amazonaws.com'
+                ${EksOidcIssuer}:sub: 'system:serviceaccount:logging:vector-logs'
+                ${EksOidcIssuer}:aud: 'sts.amazonaws.com'
       Policies:
         - PolicyName: VectorFirehosePolicy
           PolicyDocument:
@@ -554,7 +459,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:GetObject
-                Resource: !Sub '${CentralLoggingBucket}/*'
+                Resource: !Sub '${CentralLoggingBucket.Arn}/*'
               - Effect: Allow
                 Action:
                   - sts:AssumeRole
@@ -610,7 +515,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub '${BackupBucket}/*'
+                Resource: !Sub '${BackupBucket.Arn}/*'
               - Effect: Allow
                 Action:
                   - sns:Publish
