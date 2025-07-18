@@ -1,6 +1,6 @@
 # CloudFormation Multi-Tenant Logging Infrastructure
 
-This directory contains CloudFormation templates for deploying the multi-tenant logging infrastructure, converted from the original Terraform configuration.
+This directory contains CloudFormation templates for deploying the multi-tenant logging infrastructure.
 
 ## Architecture Overview
 
@@ -50,18 +50,14 @@ cd cloudformation/
 
 ```
 cloudformation/
-├── main.yaml                 # Main orchestration template
-├── core-infrastructure.yaml  # S3, DynamoDB, KMS, IAM resources
-├── kinesis-stack.yaml        # Firehose and Glue catalog
-├── lambda-stack.yaml         # Lambda functions and event mappings
-├── monitoring-stack.yaml     # CloudWatch, SNS/SQS, alerting
-├── deploy.sh                 # Deployment script
-├── MIGRATION_GUIDE.md        # Migration from Terraform guide
-├── README.md                 # This file
-└── parameters/               # Parameter files for different environments
-    ├── production.json
-    ├── staging.json
-    └── development.json
+├── main.yaml                          # Main orchestration template
+├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
+├── kinesis-stack.yaml                 # Firehose and Glue catalog
+├── lambda-stack.yaml                  # Lambda functions and event mappings
+├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, alerting
+├── customer-log-distribution-role.yaml # Customer account template
+├── deploy.sh                          # Deployment script
+└── README.md                          # This file
 ```
 
 ## Parameters
@@ -348,10 +344,6 @@ aws cloudformation create-change-set \
   --template-body file://main.yaml \
   --change-set-name update-$(date +%Y%m%d-%H%M%S)
 ```
-
-## Migration from Terraform
-
-See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for detailed instructions on migrating from the existing Terraform infrastructure.
 
 ## Support
 

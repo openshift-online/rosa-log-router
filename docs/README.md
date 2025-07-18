@@ -13,37 +13,165 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 - **Lambda** function for cross-account log delivery
 - **DynamoDB** for tenant configuration management
 
+### AWS Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Customer Kubernetes Clusters"
+        K8s1[Kubernetes Cluster 1<br/>ROSA/OpenShift]
+        K8s2[Kubernetes Cluster 2<br/>ROSA/OpenShift]
+        K8s3[Kubernetes Cluster N<br/>ROSA/OpenShift]
+        
+        subgraph "Vector DaemonSets"
+            V1[Vector Agent<br/>Pod Logs + Metadata]
+            V2[Vector Agent<br/>Pod Logs + Metadata]
+            V3[Vector Agent<br/>Pod Logs + Metadata]
+        end
+        
+        K8s1 --> V1
+        K8s2 --> V2
+        K8s3 --> V3
+    end
+
+    subgraph "Central AWS Account - Log Processing"
+        subgraph "Ingestion Layer"
+            KF[Kinesis Data Firehose<br/>Dynamic Partitioning<br/>JSON → Parquet]
+        end
+        
+        subgraph "Storage Layer"
+            S3[S3 Central Bucket<br/>Tenant Partitioned<br/>Lifecycle Policies]
+            S3E[S3 Event Notifications]
+        end
+        
+        subgraph "Event Processing"
+            SNS[SNS Topic<br/>Hub-and-Spoke]
+            SQS[SQS Queue<br/>+DLQ]
+            Lambda[Lambda Function<br/>Log Distributor]
+        end
+        
+        subgraph "Configuration"
+            DDB[DynamoDB<br/>Tenant Config]
+        end
+        
+        subgraph "Security"
+            STS[AWS STS<br/>Cross-Account Roles]
+            CentralRole[Central Log<br/>Distribution Role]
+        end
+        
+        subgraph "Monitoring"
+            CW[CloudWatch<br/>Metrics & Dashboards]
+            Alarms[CloudWatch Alarms<br/>Cost Monitoring]
+        end
+    end
+
+    subgraph "Customer AWS Account A"
+        subgraph "Log Delivery"
+            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+        end
+        
+        subgraph "Customer IAM"
+            Role_A[Customer Log<br/>Distribution Role]
+            Trust_A[Trust Policy<br/>Session Tag Validation]
+        end
+        
+        subgraph "Customer Monitoring"
+            Dash_A[CloudWatch Dashboard<br/>Log Insights Queries]
+            Metric_A[Custom Metrics<br/>Error Filtering]
+        end
+    end
+
+    subgraph "Customer AWS Account B"
+        subgraph "Log Delivery "
+            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+        end
+        
+        subgraph "Customer IAM "
+            Role_B[Customer Log<br/>Distribution Role]
+            Trust_B[Trust Policy<br/>Session Tag Validation]
+        end
+    end
+
+    %% Data Flow
+    V1 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    V2 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    V3 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    
+    KF -->|Parquet Files<br/>Partitioned by Tenant| S3
+    S3 --> S3E
+    S3E -->|ObjectCreated Events| SNS
+    SNS -->|Fan-out Events| SQS
+    SQS -->|Batch Messages| Lambda
+    
+    Lambda -->|Tenant Lookup| DDB
+    Lambda -->|Assume Role| STS
+    STS -->|Session Tags<br/>tenant_id, cluster_id| CentralRole
+    
+    %% Cross-Account Access
+    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_A
+    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_B
+    
+    Role_A -->|Deliver Logs| CWL_A
+    Role_B -->|Deliver Logs| CWL_B
+    
+    %% Trust Validation
+    Trust_A -.->|Validate Session Tags| Role_A
+    Trust_B -.->|Validate Session Tags| Role_B
+    
+    %% Monitoring Flows
+    Lambda --> CW
+    KF --> CW
+    S3 --> CW
+    SQS --> CW
+    
+    CW --> Alarms
+    CWL_A --> Dash_A
+    CWL_A --> Metric_A
+
+    %% Styling
+    classDef customer fill:#e1f5fe
+    classDef central fill:#f3e5f5
+    classDef security fill:#fff3e0
+    classDef storage fill:#e8f5e8
+    classDef processing fill:#fce4ec
+    
+    class K8s1,K8s2,K8s3,V1,V2,V3 customer
+    class Lambda,SQS,SNS,KF central
+    class STS,CentralRole,Role_A,Role_B,Trust_A,Trust_B security
+    class S3,DDB storage
+    class CWL_A,CWL_B,CW,Dash_A,Metric_A processing
+```
+
+### Data Flow Summary
+
+1. **Collection**: Vector agents collect logs from Kubernetes pods and enrich with tenant metadata
+2. **Ingestion**: Kinesis Firehose receives logs and applies dynamic partitioning by tenant
+3. **Staging**: S3 stores logs in Parquet format with tenant-segregated partitions
+4. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
+5. **Processing**: Lambda function processes SQS messages and delivers logs cross-account
+6. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
+7. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
+
 ## Repository Structure
 
 ```
 ├── cloudformation/
-│   ├── main.yaml                       # Main CloudFormation orchestration template
-│   ├── core-infrastructure.yaml        # S3, DynamoDB, KMS, IAM resources
-│   ├── kinesis-stack.yaml              # Firehose delivery stream and Glue catalog
-│   ├── lambda-stack.yaml               # Lambda functions and event mappings
-│   ├── monitoring-stack.yaml           # CloudWatch, SNS/SQS, and alerting
-│   ├── customer-account-template.yaml  # CloudFormation template for customer accounts
-│   ├── deploy.sh                       # CloudFormation deployment script
-│   ├── MIGRATION_GUIDE.md              # Migration from Terraform guide
-│   └── README.md                       # CloudFormation-specific documentation
+│   ├── main.yaml                          # Main CloudFormation orchestration template
+│   ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
+│   ├── kinesis-stack.yaml                 # Firehose delivery stream and Glue catalog
+│   ├── lambda-stack.yaml                  # Lambda functions and event mappings
+│   ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, and alerting
+│   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
+│   ├── deploy.sh                          # CloudFormation deployment script
+│   └── README.md                          # CloudFormation-specific documentation
 ├── docs/
-│   └── README.md                       # This file
+│   └── README.md                          # This file
 ├── k8s/
-│   ├── vector-config.yaml             # Vector ConfigMap
-│   └── vector-daemonset.yaml          # Vector DaemonSet deployment
+│   ├── vector-config.yaml                # Vector ConfigMap
+│   └── vector-daemonset.yaml             # Vector DaemonSet deployment
 ├── lambda/
-│   ├── log_distributor.py             # Main Lambda function
-│   └── requirements.txt               # Python dependencies
-├── terraform/
-│   ├── dynamodb.tf                    # DynamoDB tenant configuration table
-│   ├── firehose.tf                    # Kinesis Data Firehose configuration
-│   ├── iam.tf                         # IAM roles and policies
-│   ├── lambda.tf                      # Lambda function and event sources
-│   ├── main.tf                        # Main Terraform configuration
-│   ├── outputs.tf                     # Terraform outputs
-│   ├── sns_sqs.tf                     # SNS topics and SQS queues
-│   └── variables.tf                   # Terraform variables
-└── DESIGN.md                          # Comprehensive architecture design
+│   ├── log_distributor.py                # Main Lambda function
+│   └── requirements.txt                  # Python dependencies
+└── DESIGN.md                             # Comprehensive architecture design
 ```
 
 ## Quick Start
@@ -51,14 +179,11 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 ### Prerequisites
 
 - AWS CLI configured with appropriate permissions
-- **Option 1 (CloudFormation)**: S3 bucket for storing CloudFormation templates
-- **Option 2 (Terraform)**: Terraform >= 1.0
+- S3 bucket for storing CloudFormation templates
 - kubectl configured for your Kubernetes clusters
 - Python 3.11+ (for Lambda development)
 
 ### 1. Deploy Core Infrastructure
-
-**Option A: CloudFormation (Recommended)**
 
 ```bash
 cd cloudformation/
@@ -71,15 +196,6 @@ cd cloudformation/
 
 # Deploy with custom parameters
 ./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
-```
-
-**Option B: Terraform**
-
-```bash
-cd terraform/
-terraform init
-terraform plan -var="eks_oidc_issuer=your-eks-oidc-issuer"
-terraform apply
 ```
 
 ### 2. Deploy Vector to Kubernetes
@@ -110,25 +226,16 @@ Provide customers with the CloudFormation template:
 
 ```bash
 aws cloudformation create-stack \
-  --stack-name tenant-logging-infrastructure \
-  --template-body file://cloudformation/customer-account-template.yaml \
-  --parameters ParameterKey=TenantId,ParameterValue=your-tenant-id \
-               ParameterKey=CentralLogDistributorRoleArn,ParameterValue=arn:aws:iam::ACCOUNT:role/LogDistributorRole \
+  --stack-name customer-logging-infrastructure \
+  --template-body file://cloudformation/customer-log-distribution-role.yaml \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+               ParameterKey=LogRetentionDays,ParameterValue=90 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-## Deployment Options
+## CloudFormation Infrastructure
 
-### CloudFormation vs Terraform
-
-This project supports both CloudFormation and Terraform for infrastructure deployment:
-
-- **CloudFormation**: Nested stack architecture with comprehensive parameter management, validation, and rollback capabilities. Includes automated deployment scripts. See [cloudformation/README.md](../cloudformation/README.md) for detailed documentation.
-- **Terraform**: Modular configuration with state management. Original implementation method.
-
-### Migration from Terraform to CloudFormation
-
-If you're currently using Terraform and want to migrate to CloudFormation, see [cloudformation/MIGRATION_GUIDE.md](../cloudformation/MIGRATION_GUIDE.md) for step-by-step migration instructions.
+This project uses CloudFormation for infrastructure deployment with a nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
 
 ## Configuration
 
@@ -140,29 +247,21 @@ The following environment variables can be configured:
 - `KINESIS_STREAM_NAME`: Name of the Firehose stream
 - `TENANT_CONFIG_TABLE`: DynamoDB table name for tenant configurations
 
-### Terraform Variables
+### CloudFormation Parameters
 
-Key variables for customization:
+Key parameters for customization:
 
-```hcl
-# Core configuration
-aws_region = "us-east-1"
-environment = "production"
-project_name = "multi-tenant-logging"
-
-# Performance tuning
-lambda_reserved_concurrency = 100
-firehose_buffer_size_mb = 128
-firehose_buffer_interval_seconds = 900
-
-# Cost optimization
-enable_parquet_conversion = true
-enable_s3_intelligent_tiering = true
-s3_log_retention_days = 2555
-
-# Security
-enable_s3_encryption = true
-enable_xray_tracing = true
+```json
+{
+  "Environment": "production",
+  "ProjectName": "multi-tenant-logging",
+  "LambdaReservedConcurrency": 100,
+  "FirehoseBufferSizeMB": 128,
+  "EnableS3Encryption": true,
+  "EnableDetailedMonitoring": true,
+  "AlertEmailEndpoints": "ops@company.com",
+  "CostCenter": "platform-engineering"
+}
 ```
 
 ## Monitoring and Alerts
@@ -284,10 +383,9 @@ aws firehose describe-delivery-stream \
 cd lambda/
 python -m pytest tests/
 
-# Validate Terraform configuration
-cd terraform/
-terraform validate
-terraform plan
+# Validate CloudFormation templates
+cd cloudformation/
+./deploy.sh --validate-only -b your-templates-bucket
 ```
 
 ### Contributing

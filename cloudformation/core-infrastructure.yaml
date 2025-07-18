@@ -364,11 +364,11 @@ Resources:
         log_groups:
           M:
             application:
-              S: "/tenant-logs/acme-corp/application"
+              S: "/ROSA/cluster-logs/application"
             system:
-              S: "/tenant-logs/acme-corp/system"
+              S: "/ROSA/cluster-logs/system"
             audit:
-              S: "/tenant-logs/acme-corp/audit"
+              S: "/ROSA/cluster-logs/audit"
         created_at:
           S: "2024-01-15T10:30:00Z"
         updated_at:
@@ -405,11 +405,11 @@ Resources:
         log_groups:
           M:
             application:
-              S: "/tenant-logs/globodyne-inc/application"
+              S: "/ROSA/cluster-logs/application"
             system:
-              S: "/tenant-logs/globodyne-inc/system"
+              S: "/ROSA/cluster-logs/system"
             audit:
-              S: "/tenant-logs/globodyne-inc/audit"
+              S: "/ROSA/cluster-logs/audit"
         created_at:
           S: "2024-01-20T14:15:00Z"
         updated_at:
