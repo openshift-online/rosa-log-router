@@ -10,12 +10,6 @@ This is a multi-tenant logging pipeline infrastructure for AWS that implements a
 
 ### Infrastructure Management
 ```bash
-# Deploy infrastructure
-cd terraform/
-terraform init
-terraform plan -var="eks_oidc_issuer=your-eks-oidc-issuer"
-terraform apply
-
 # Deploy Vector to Kubernetes
 kubectl create namespace logging
 kubectl apply -f k8s/vector-config.yaml
@@ -28,13 +22,19 @@ zip -r log_distributor.zip .
 aws lambda update-function-code --function-name log-distributor --zip-file fileb://log_distributor.zip
 ```
 
+### Customer Onboarding
+```bash
+# Customer deploys their logging infrastructure
+aws cloudformation create-stack \
+  --stack-name customer-logging-infrastructure \
+  --template-body file://cloudformation/customer-log-distribution-role.yaml \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+               ParameterKey=LogRetentionDays,ParameterValue=90 \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
 ### Testing and Validation
 ```bash
-# Validate Terraform configuration
-cd terraform/
-terraform validate
-terraform plan
-
 # Test Lambda function locally (if tests exist)
 cd lambda/
 python -m pytest tests/
@@ -87,19 +87,21 @@ The system consists of 5 main stages:
 - Handles both Parquet and JSON log formats
 - Delivers logs to customer CloudWatch Logs in batches
 
-### Terraform Infrastructure (`terraform/`)
-- Modular configuration with separate files for each service
+### CloudFormation Infrastructure (`cloudformation/`)
+- Customer-deployed logging infrastructure with single template
 - Comprehensive monitoring with CloudWatch dashboards and alarms
 - Cost optimization features (S3 lifecycle, Parquet conversion, intelligent tiering)
 - Security best practices (encryption, least privilege IAM)
 
 ## Security Model
 
-The system uses Attribute-Based Access Control (ABAC) for cross-account access:
-- Single Lambda execution role in central account
+The system uses a double-hop Attribute-Based Access Control (ABAC) architecture for cross-account access:
+- Lambda execution role in central account (assumes central log distribution role)
+- Central log distribution role in central account (assumes customer roles)
 - Customer-specific "log distribution" roles in customer accounts
 - Session tags for tenant isolation (`tenant_id`, `cluster_id`, `environment`)
 - Trust policies that validate session tags match customer's tenant ID
+- Two-step role assumption provides additional security boundaries
 
 ## Environment Variables
 
@@ -107,6 +109,7 @@ The system uses Attribute-Based Access Control (ABAC) for cross-account access:
 - `TENANT_CONFIG_TABLE`: DynamoDB table for tenant configurations
 - `MAX_BATCH_SIZE`: Maximum events per CloudWatch Logs batch (default: 1000)
 - `RETRY_ATTEMPTS`: Number of retry attempts for failed operations (default: 3)
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the central log distribution role for double-hop access
 
 ### Vector ConfigMap
 - `AWS_REGION`: AWS region for Firehose stream
@@ -142,7 +145,7 @@ The architecture prioritizes cost efficiency:
 ## Development Guidelines
 
 - Follow existing code patterns and conventions
-- Use Terraform for all infrastructure changes
+- Use CloudFormation for all infrastructure changes
 - Tag all resources with project and environment labels
 - Implement comprehensive error handling and logging
 - Use least privilege IAM policies
