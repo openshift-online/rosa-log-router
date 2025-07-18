@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: logging
+data:
+  aws_region: "us-east-1"
+  kinesis_stream_name: "central-logging-stream"
+  vector.yaml: |
+    # Vector configuration for multi-tenant logging
+    data_dir: "/vector-data-dir"
+    
+    api:
+      enabled: true
+      address: "0.0.0.0:8686"
+      playground: false
+    
+    # Sources
+    sources:
+      kubernetes_logs:
+        type: "kubernetes_logs"
+        auto_partial_merge: true
+        include_paths: ["/var/log/pods/**/*.log"]
+        exclude_paths: [
+          "/var/log/pods/kube-system_**",
+          "/var/log/pods/logging_vector-logs-**"
+        ]
+        
+    # Transforms
+    transforms:
+      enrich_metadata:
+        type: "remap"
+        inputs: ["kubernetes_logs"]
+        source: |
+          # Extract tenant information from pod labels
+          .customer_tenant = .kubernetes.pod_labels."customer-tenant-id" || "unknown"
+          .cluster_id = .kubernetes.pod_labels."cluster-id" || get_env_var("CLUSTER_ID") || "unknown"
+          .environment = .kubernetes.pod_labels."environment" || "production"
+          .application = .kubernetes.pod_labels."app" || "unknown"
+          
+          # Extract log level if present
+          log_level_match = parse_regex(.message, r'(?P<level>TRACE|DEBUG|INFO|WARN|ERROR|FATAL)') ?? {}
+          .log_level = log_level_match.level || "INFO"
+          
+          # Add timestamp if not present
+          if !exists(.timestamp) {
+            .timestamp = now()
+          }
+          
+          # Clean up kubernetes metadata to reduce payload size
+          del(.kubernetes.pod_labels)
+          del(.kubernetes.pod_annotations)
+          .kubernetes = object!({
+            "namespace": .kubernetes.pod_namespace,
+            "pod_name": .kubernetes.pod_name,
+            "container_name": .kubernetes.container_name,
+            "node_name": .kubernetes.pod_node_name
+          })
+          
+      filter_tenant_logs:
+        type: "filter"
+        inputs: ["enrich_metadata"]
+        condition: '.customer_tenant != "unknown"'
+        
+      structure_for_firehose:
+        type: "remap"
+        inputs: ["filter_tenant_logs"]
+        source: |
+          # Restructure for Kinesis Firehose dynamic partitioning
+          . = {
+            "timestamp": .timestamp,
+            "customer_tenant": .customer_tenant,
+            "cluster_id": .cluster_id,
+            "environment": .environment,
+            "application": .application,
+            "log_level": .log_level,
+            "message": .message,
+            "kubernetes": .kubernetes,
+            "source_type": .source_type,
+            "file": .file
+          }
+    
+    # Sinks
+    sinks:
+      kinesis_firehose:
+        type: "aws_kinesis_firehose"
+        inputs: ["structure_for_firehose"]
+        stream_name: "${KINESIS_STREAM_NAME}"
+        region: "${AWS_REGION}"
+        encoding:
+          codec: "json"
+        batch:
+          max_bytes: 4000000  # 4MB (Firehose limit is 4MB)
+          max_events: 500
+          timeout_secs: 1
+        buffer:
+          type: "disk"
+          max_size: 268435456  # 256MB
+          when_full: "block"
+        request:
+          retry_attempts: 3
+          retry_initial_backoff_secs: 1
+          retry_max_duration_secs: 60
+        compression: "gzip"
+        
+      # Optional: Local file backup for debugging
+      debug_file:
+        type: "file"
+        inputs: ["structure_for_firehose"]
+        path: "/vector-data-dir/debug.log"
+        encoding:
+          codec: "json"
+        buffer:
+          type: "memory"
+          max_events: 100

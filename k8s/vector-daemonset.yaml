@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-logs
+  namespace: logging
+  labels:
+    app: vector-logs
+spec:
+  selector:
+    matchLabels:
+      app: vector-logs
+  template:
+    metadata:
+      labels:
+        app: vector-logs
+    spec:
+      serviceAccountName: vector-logs
+      containers:
+      - name: vector
+        image: timberio/vector:0.34.1-distroless-libc
+        env:
+        - name: VECTOR_CONFIG_YAML
+          value: /etc/vector/vector.yaml
+        - name: VECTOR_REQUIRE_HEALTHY
+          value: "true"
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: vector-config
+              key: aws_region
+        - name: KINESIS_STREAM_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: vector-config
+              key: kinesis_stream_name
+        ports:
+        - containerPort: 8686
+          name: prometheus
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: var-log
+          mountPath: /var/log
+          readOnly: true
+        - name: var-lib-docker-containers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: vector-config
+          mountPath: /etc/vector
+          readOnly: true
+        - name: vector-data
+          mountPath: /vector-data-dir
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: var-log
+        hostPath:
+          path: /var/log
+      - name: var-lib-docker-containers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: vector-config
+        configMap:
+          name: vector-config
+      - name: vector-data
+        emptyDir: {}
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vector-logs
+  namespace: logging
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/VectorLogsRole
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vector-logs
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vector-logs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vector-logs
+subjects:
+- kind: ServiceAccount
+  name: vector-logs
+  namespace: logging

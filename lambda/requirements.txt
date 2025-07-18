@@ -1,0 +1,5 @@
+# Requirements for the log distributor Lambda function
+boto3>=1.26.0
+pandas>=1.5.0
+pyarrow>=10.0.0
+botocore>=1.29.0
