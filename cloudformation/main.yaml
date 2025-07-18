@@ -1,0 +1,384 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Multi-tenant logging infrastructure - Main template with nested stacks'
+
+Parameters:
+  # Basic Configuration
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Environment name
+    
+  ProjectName:
+    Type: String
+    Default: multi-tenant-logging
+    Description: Name of the project for resource naming
+    
+  # EKS Configuration
+  EksOidcIssuer:
+    Type: String
+    Default: ""
+    Description: OIDC issuer URL for the EKS cluster (without https://)
+    
+  ClusterNames:
+    Type: CommaDelimitedList
+    Default: "prod-cluster-1,prod-cluster-2"
+    Description: List of Kubernetes cluster names that will send logs
+    
+  # Lambda Configuration
+  LambdaReservedConcurrency:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 1000
+    Description: Reserved concurrency for the log distributor Lambda function
+    
+  LambdaMaxConcurrency:
+    Type: Number
+    Default: 50
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum concurrency for Lambda event source mapping
+    
+  # Firehose Configuration
+  FirehoseBufferSizeMB:
+    Type: Number
+    Default: 128
+    MinValue: 1
+    MaxValue: 128
+    Description: Buffer size for Firehose in MB
+    
+  FirehoseBufferIntervalSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 60
+    MaxValue: 900
+    Description: Buffer interval for Firehose in seconds
+    
+  # S3 Configuration
+  S3StandardIADays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: Days after which to transition S3 objects to Standard-IA
+    
+  S3GlacierDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days after which to transition S3 objects to Glacier
+    
+  S3DeepArchiveDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: Days after which to transition S3 objects to Deep Archive
+    
+  S3LogRetentionDays:
+    Type: Number
+    Default: 2555
+    MinValue: 1
+    Description: Number of days to retain logs in S3
+    
+  # Monitoring Configuration
+  AlertEmailEndpoints:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: List of email addresses for alerts
+    
+  # Feature Flags
+  EnableAnalytics:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable analytics processing pipeline
+    
+  EnableDetailedMonitoring:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable detailed CloudWatch monitoring
+    
+  EnableS3IntelligentTiering:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable S3 Intelligent Tiering for cost optimization
+    
+  EnableParquetConversion:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable Parquet format conversion in Firehose
+    
+  EnableS3Encryption:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable S3 server-side encryption
+    
+  EnableCrossRegionReplication:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable cross-region replication for S3 buckets
+    
+  BackupRegion:
+    Type: String
+    Default: us-west-2
+    Description: AWS region for backup/replication
+    
+  EnableXRayTracing:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable AWS X-Ray tracing
+    
+  EnableEnhancedMonitoring:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable enhanced monitoring and custom metrics
+    
+  EnableLogSampling:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable log sampling for cost optimization
+    
+  LogSamplingRate:
+    Type: Number
+    Default: 1.0
+    MinValue: 0.0
+    MaxValue: 1.0
+    Description: Sampling rate for logs (0.0 to 1.0)
+    
+  EnableDLQProcessor:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable DLQ processor Lambda function
+    
+  EnableLambdaInsights:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable CloudWatch Lambda Insights
+    
+  CostCenter:
+    Type: String
+    Default: ""
+    Description: Cost center for billing allocation
+
+Conditions:
+  HasAlertEmails: !Not [!Equals [!Join ["", !Ref AlertEmailEndpoints], ""]]
+  HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
+  HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
+  IsAnalyticsEnabled: !Equals [!Ref EnableAnalytics, "true"]
+  IsDetailedMonitoringEnabled: !Equals [!Ref EnableDetailedMonitoring, "true"]
+  IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
+  IsParquetConversionEnabled: !Equals [!Ref EnableParquetConversion, "true"]
+  IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
+  IsCrossRegionReplicationEnabled: !Equals [!Ref EnableCrossRegionReplication, "true"]
+  IsXRayTracingEnabled: !Equals [!Ref EnableXRayTracing, "true"]
+  IsEnhancedMonitoringEnabled: !Equals [!Ref EnableEnhancedMonitoring, "true"]
+  IsLogSamplingEnabled: !Equals [!Ref EnableLogSampling, "true"]
+  IsDLQProcessorEnabled: !Equals [!Ref EnableDLQProcessor, "true"]
+  IsLambdaInsightsEnabled: !Equals [!Ref EnableLambdaInsights, "true"]
+
+Resources:
+  # Core Infrastructure Stack
+  CoreInfrastructureStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/core-infrastructure.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+        EksOidcIssuer: !Ref EksOidcIssuer
+        ClusterNames: !Join [",", !Ref ClusterNames]
+        S3StandardIADays: !Ref S3StandardIADays
+        S3GlacierDays: !Ref S3GlacierDays
+        S3DeepArchiveDays: !Ref S3DeepArchiveDays
+        S3LogRetentionDays: !Ref S3LogRetentionDays
+        EnableS3IntelligentTiering: !Ref EnableS3IntelligentTiering
+        EnableS3Encryption: !Ref EnableS3Encryption
+        EnableCrossRegionReplication: !Ref EnableCrossRegionReplication
+        BackupRegion: !Ref BackupRegion
+        CostCenter: !Ref CostCenter
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackType
+          Value: core-infrastructure
+  
+  # Kinesis Data Processing Stack
+  KinesisStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: CoreInfrastructureStack
+    Properties:
+      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/kinesis-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+        FirehoseBufferSizeMB: !Ref FirehoseBufferSizeMB
+        FirehoseBufferIntervalSeconds: !Ref FirehoseBufferIntervalSeconds
+        EnableParquetConversion: !Ref EnableParquetConversion
+        CentralLoggingBucketName: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
+        FirehoseRoleArn: !GetAtt CoreInfrastructureStack.Outputs.FirehoseRoleArn
+        KMSKeyId: !GetAtt CoreInfrastructureStack.Outputs.KMSKeyId
+        CostCenter: !Ref CostCenter
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackType
+          Value: kinesis-processing
+  
+  # Lambda Functions Stack
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [CoreInfrastructureStack, KinesisStack]
+    Properties:
+      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/lambda-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+        LambdaReservedConcurrency: !Ref LambdaReservedConcurrency
+        LambdaMaxConcurrency: !Ref LambdaMaxConcurrency
+        EnableXRayTracing: !Ref EnableXRayTracing
+        EnableLambdaInsights: !Ref EnableLambdaInsights
+        EnableDLQProcessor: !Ref EnableDLQProcessor
+        LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
+        DLQProcessorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.DLQProcessorRoleArn
+        TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
+        CostCenter: !Ref CostCenter
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackType
+          Value: lambda-functions
+  
+  # Monitoring and Alerting Stack
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [CoreInfrastructureStack, KinesisStack, LambdaStack]
+    Properties:
+      TemplateURL: !Sub 'https://${AWS::Region}.amazonaws.com/cloudformation/templates/monitoring-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+        EnableDetailedMonitoring: !Ref EnableDetailedMonitoring
+        EnableEnhancedMonitoring: !Ref EnableEnhancedMonitoring
+        AlertEmailEndpoints: !Join [",", !Ref AlertEmailEndpoints]
+        LogDistributorFunctionName: !GetAtt LambdaStack.Outputs.LogDistributorFunctionName
+        DLQProcessorFunctionName: !GetAtt LambdaStack.Outputs.DLQProcessorFunctionName
+        FirehoseDeliveryStreamName: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamName
+        CentralLoggingBucketName: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
+        TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
+        CostCenter: !Ref CostCenter
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackType
+          Value: monitoring-alerting
+
+Outputs:
+  # Core Infrastructure Outputs
+  CentralLoggingBucketName:
+    Description: Name of the central logging S3 bucket
+    Value: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-CentralLoggingBucketName'
+  
+  BackupBucketName:
+    Description: Name of the backup S3 bucket
+    Value: !GetAtt CoreInfrastructureStack.Outputs.BackupBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-BackupBucketName'
+  
+  TenantConfigTableName:
+    Description: Name of the tenant configuration DynamoDB table
+    Value: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
+    Export:
+      Name: !Sub '${AWS::StackName}-TenantConfigTableName'
+  
+  KMSKeyId:
+    Description: KMS key ID for encryption
+    Value: !GetAtt CoreInfrastructureStack.Outputs.KMSKeyId
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyId'
+  
+  # Kinesis Outputs
+  FirehoseDeliveryStreamName:
+    Description: Name of the Firehose delivery stream
+    Value: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamName
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamName'
+  
+  FirehoseDeliveryStreamArn:
+    Description: ARN of the Firehose delivery stream
+    Value: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamArn
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamArn'
+  
+  # Lambda Outputs
+  LogDistributorFunctionName:
+    Description: Name of the log distributor Lambda function
+    Value: !GetAtt LambdaStack.Outputs.LogDistributorFunctionName
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDistributorFunctionName'
+  
+  LogDistributorFunctionArn:
+    Description: ARN of the log distributor Lambda function
+    Value: !GetAtt LambdaStack.Outputs.LogDistributorFunctionArn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDistributorFunctionArn'
+  
+  # Monitoring Outputs
+  CloudWatchDashboardURL:
+    Description: URL of the CloudWatch dashboard
+    Value: !GetAtt MonitoringStack.Outputs.CloudWatchDashboardURL
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudWatchDashboardURL'
+  
+  # IAM Role Outputs
+  VectorRoleArn:
+    Description: ARN of the Vector service account role
+    Value: !GetAtt CoreInfrastructureStack.Outputs.VectorRoleArn
+    Export:
+      Name: !Sub '${AWS::StackName}-VectorRoleArn'
+  
+  LogDistributorRoleArn:
+    Description: ARN of the log distributor Lambda role
+    Value: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
+  
+  # Stack Information
+  StackVersion:
+    Description: Version of this CloudFormation stack
+    Value: "1.0.0"
+    Export:
+      Name: !Sub '${AWS::StackName}-StackVersion'
+  
+  DeploymentTimestamp:
+    Description: Deployment timestamp
+    Value: !Sub '${AWS::AccountId}-${AWS::Region}-${AWS::StackId}'
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentTimestamp'

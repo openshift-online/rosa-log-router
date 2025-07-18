@@ -1,0 +1,402 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Kinesis Data Firehose and Glue catalog for multi-tenant logging'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Environment name
+    
+  ProjectName:
+    Type: String
+    Default: multi-tenant-logging
+    Description: Name of the project for resource naming
+    
+  FirehoseBufferSizeMB:
+    Type: Number
+    Default: 128
+    MinValue: 1
+    MaxValue: 128
+    Description: Buffer size for Firehose in MB
+    
+  FirehoseBufferIntervalSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 60
+    MaxValue: 900
+    Description: Buffer interval for Firehose in seconds
+    
+  EnableParquetConversion:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable Parquet format conversion in Firehose
+    
+  CentralLoggingBucketName:
+    Type: String
+    Description: Name of the central logging S3 bucket
+    
+  FirehoseRoleArn:
+    Type: String
+    Description: ARN of the Firehose IAM role
+    
+  KMSKeyId:
+    Type: String
+    Description: KMS key ID for encryption
+    
+  CostCenter:
+    Type: String
+    Default: ""
+    Description: Cost center for billing allocation
+
+Conditions:
+  HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
+  IsParquetConversionEnabled: !Equals [!Ref EnableParquetConversion, "true"]
+
+Resources:
+  # Glue Catalog Database
+  GlueCatalogDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub '${ProjectName}-${Environment}-logs-db'
+        Description: Database for central logging schema
+        Parameters:
+          classification: parquet
+          typeOfData: file
+        LocationUri: !Sub 's3://${CentralLoggingBucketName}/logs/'
+
+  # Glue Catalog Table
+  GlueCatalogTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueCatalogDatabase
+      TableInput:
+        Name: !Sub '${ProjectName}-${Environment}-logs-table'
+        Description: Table for central logging data
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          typeOfData: file
+          # Partition projection for cost optimization
+          projection.enabled: "true"
+          projection.tenant_id.type: "enum"
+          projection.tenant_id.values: "acme-corp,globodyne-inc,default-tenant"
+          projection.cluster_id.type: "enum"
+          projection.cluster_id.values: "prod-cluster-1,prod-cluster-2,staging-cluster"
+          projection.environment.type: "enum"
+          projection.environment.values: "production,staging,development"
+          projection.year.type: "integer"
+          projection.year.range: "2024,2030"
+          projection.month.type: "integer"
+          projection.month.range: "1,12"
+          projection.month.digits: "2"
+          projection.day.type: "integer"
+          projection.day.range: "1,31"
+          projection.day.digits: "2"
+          projection.hour.type: "integer"
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          storage.location.template: !Sub 's3://${CentralLoggingBucketName}/logs/tenant_id=${tenant_id}/cluster_id=${cluster_id}/environment=${environment}/year=${year}/month=${month}/day=${day}/hour=${hour}/'
+        StorageDescriptor:
+          Location: !Sub 's3://${CentralLoggingBucketName}/logs/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+            Parameters:
+              serialization.format: "1"
+          Columns:
+            - Name: timestamp
+              Type: timestamp
+              Comment: Log timestamp
+            - Name: customer_tenant
+              Type: string
+              Comment: Customer tenant identifier
+            - Name: cluster_id
+              Type: string
+              Comment: Kubernetes cluster identifier
+            - Name: environment
+              Type: string
+              Comment: Environment (prod, staging, dev)
+            - Name: application
+              Type: string
+              Comment: Application name
+            - Name: log_level
+              Type: string
+              Comment: Log level (ERROR, WARN, INFO, DEBUG)
+            - Name: message
+              Type: string
+              Comment: Log message content
+            - Name: kubernetes
+              Type: struct<namespace:string,pod_name:string,container_name:string,node_name:string>
+              Comment: Kubernetes metadata
+            - Name: source_type
+              Type: string
+              Comment: Source type (file, stdout, stderr)
+            - Name: file
+              Type: string
+              Comment: Source file path
+        PartitionKeys:
+          - Name: tenant_id
+            Type: string
+            Comment: Tenant identifier for partitioning
+          - Name: cluster_id
+            Type: string
+            Comment: Cluster identifier for partitioning
+          - Name: environment
+            Type: string
+            Comment: Environment for partitioning
+          - Name: year
+            Type: string
+            Comment: Year for partitioning
+          - Name: month
+            Type: string
+            Comment: Month for partitioning
+          - Name: day
+            Type: string
+            Comment: Day for partitioning
+          - Name: hour
+            Type: string
+            Comment: Hour for partitioning
+
+  # Kinesis Data Firehose Delivery Stream
+  FirehoseDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub '${ProjectName}-${Environment}-stream'
+      DeliveryStreamType: DirectPut
+      ExtendedS3DestinationConfiguration:
+        RoleARN: !Ref FirehoseRoleArn
+        BucketARN: !Sub 'arn:aws:s3:::${CentralLoggingBucketName}'
+        # Dynamic partitioning with tenant segregation
+        Prefix: 'logs/tenant_id=!{partitionKeyFromQuery:customer_tenant}/cluster_id=!{partitionKeyFromQuery:cluster_id}/environment=!{partitionKeyFromQuery:environment}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/'
+        ErrorOutputPrefix: 'errors/'
+        # Buffering configuration for cost optimization
+        BufferingHints:
+          SizeInMBs: !Ref FirehoseBufferSizeMB
+          IntervalInSeconds: !Ref FirehoseBufferIntervalSeconds
+        CompressionFormat: GZIP
+        # Encryption configuration
+        EncryptionConfiguration:
+          KMSEncryptionConfig:
+            AWSKMSKeyARN: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
+        # Data format conversion to Parquet for cost savings
+        DataFormatConversionConfiguration:
+          Enabled: !Ref IsParquetConversionEnabled
+          OutputFormatConfiguration:
+            Serializer:
+              ParquetSerDe: {}
+          SchemaConfiguration:
+            DatabaseName: !Ref GlueCatalogDatabase
+            TableName: !Ref GlueCatalogTable
+            RoleARN: !Ref FirehoseRoleArn
+        # Dynamic partitioning configuration
+        DynamicPartitioning:
+          Enabled: true
+          RetryDuration: 3600
+        # Processing configuration for metadata extraction
+        ProcessingConfiguration:
+          Enabled: true
+          Processors:
+            - Type: MetadataExtraction
+              Parameters:
+                - ParameterName: JsonParsingEngine
+                  ParameterValue: JQ-1.6
+                - ParameterName: MetadataExtractionQuery
+                  ParameterValue: '{customer_tenant: .customer_tenant, cluster_id: .cluster_id, environment: .environment}'
+        # CloudWatch logging
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Sub '/aws/kinesisfirehose/${ProjectName}-${Environment}-stream'
+          LogStreamName: !Sub '${ProjectName}-${Environment}-delivery'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-firehose'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: CostCenter
+          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
+
+  # CloudWatch Log Group for Firehose
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/kinesisfirehose/${ProjectName}-${Environment}-stream'
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # CloudWatch Alarms for Firehose monitoring
+  FirehoseDeliveryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-firehose-delivery-errors'
+      AlarmDescription: 'Alarm when Firehose delivery fails'
+      MetricName: DeliveryToS3.Records
+      Namespace: AWS/Kinesis/Firehose
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Dimensions:
+        - Name: DeliveryStreamName
+          Value: !Ref FirehoseDeliveryStream
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  FirehoseDeliverySuccessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-firehose-delivery-success'
+      AlarmDescription: 'Alarm when Firehose delivery success rate drops'
+      MetricName: DeliveryToS3.Success
+      Namespace: AWS/Kinesis/Firehose
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 95
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      Dimensions:
+        - Name: DeliveryStreamName
+          Value: !Ref FirehoseDeliveryStream
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # CloudWatch Metric Filter for error tracking
+  FirehoseErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      FilterPattern: 'ERROR'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${ProjectName}/Firehose'
+          MetricName: ErrorCount
+          MetricValue: "1"
+          DefaultValue: 0
+
+  # Custom CloudWatch Dashboard Widget Data
+  FirehoseMetrics:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt FirehoseMetricsFunction.Arn
+      FirehoseStreamName: !Ref FirehoseDeliveryStream
+      
+  FirehoseMetricsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-firehose-metrics'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt FirehoseMetricsRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          
+          def lambda_handler(event, context):
+              try:
+                  if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      # Return metric configuration for dashboard
+                      response_data = {
+                          'DeliveryMetrics': [
+                              ['AWS/Kinesis/Firehose', 'DeliveryToS3.Records', 'DeliveryStreamName', event['ResourceProperties']['FirehoseStreamName']],
+                              ['AWS/Kinesis/Firehose', 'DeliveryToS3.Success', 'DeliveryStreamName', event['ResourceProperties']['FirehoseStreamName']],
+                              ['AWS/Kinesis/Firehose', 'DeliveryToS3.DataFreshness', 'DeliveryStreamName', event['ResourceProperties']['FirehoseStreamName']]
+                          ]
+                      }
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  FirehoseMetricsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+Outputs:
+  FirehoseDeliveryStreamName:
+    Description: Name of the Firehose delivery stream
+    Value: !Ref FirehoseDeliveryStream
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamName'
+
+  FirehoseDeliveryStreamArn:
+    Description: ARN of the Firehose delivery stream
+    Value: !GetAtt FirehoseDeliveryStream.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamArn'
+
+  GlueCatalogDatabaseName:
+    Description: Name of the Glue catalog database
+    Value: !Ref GlueCatalogDatabase
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueCatalogDatabaseName'
+
+  GlueCatalogTableName:
+    Description: Name of the Glue catalog table
+    Value: !Ref GlueCatalogTable
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueCatalogTableName'
+
+  FirehoseLogGroupName:
+    Description: CloudWatch Log Group for Firehose
+    Value: !Ref FirehoseLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseLogGroupName'
+
+  FirehoseDeliveryErrorsAlarmName:
+    Description: CloudWatch Alarm for Firehose delivery errors
+    Value: !Ref FirehoseDeliveryErrorsAlarm
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliveryErrorsAlarmName'
+
+  FirehoseDeliverySuccessAlarmName:
+    Description: CloudWatch Alarm for Firehose delivery success rate
+    Value: !Ref FirehoseDeliverySuccessAlarm
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseDeliverySuccessAlarmName'
