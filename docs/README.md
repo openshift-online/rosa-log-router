@@ -13,6 +13,144 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 - **Lambda** function for cross-account log delivery
 - **DynamoDB** for tenant configuration management
 
+### AWS Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Customer Kubernetes Clusters"
+        K8s1[Kubernetes Cluster 1<br/>ROSA/OpenShift]
+        K8s2[Kubernetes Cluster 2<br/>ROSA/OpenShift]
+        K8s3[Kubernetes Cluster N<br/>ROSA/OpenShift]
+        
+        subgraph "Vector DaemonSets"
+            V1[Vector Agent<br/>Pod Logs + Metadata]
+            V2[Vector Agent<br/>Pod Logs + Metadata]
+            V3[Vector Agent<br/>Pod Logs + Metadata]
+        end
+        
+        K8s1 --> V1
+        K8s2 --> V2
+        K8s3 --> V3
+    end
+
+    subgraph "Central AWS Account - Log Processing"
+        subgraph "Ingestion Layer"
+            KF[Kinesis Data Firehose<br/>Dynamic Partitioning<br/>JSON → Parquet]
+        end
+        
+        subgraph "Storage Layer"
+            S3[S3 Central Bucket<br/>Tenant Partitioned<br/>Lifecycle Policies]
+            S3E[S3 Event Notifications]
+        end
+        
+        subgraph "Event Processing"
+            SNS[SNS Topic<br/>Hub-and-Spoke]
+            SQS[SQS Queue<br/>+DLQ]
+            Lambda[Lambda Function<br/>Log Distributor]
+        end
+        
+        subgraph "Configuration"
+            DDB[DynamoDB<br/>Tenant Config]
+        end
+        
+        subgraph "Security"
+            STS[AWS STS<br/>Cross-Account Roles]
+            CentralRole[Central Log<br/>Distribution Role]
+        end
+        
+        subgraph "Monitoring"
+            CW[CloudWatch<br/>Metrics & Dashboards]
+            Alarms[CloudWatch Alarms<br/>Cost Monitoring]
+        end
+    end
+
+    subgraph "Customer AWS Account A"
+        subgraph "Log Delivery"
+            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+        end
+        
+        subgraph "Customer IAM"
+            Role_A[Customer Log<br/>Distribution Role]
+            Trust_A[Trust Policy<br/>Session Tag Validation]
+        end
+        
+        subgraph "Customer Monitoring"
+            Dash_A[CloudWatch Dashboard<br/>Log Insights Queries]
+            Metric_A[Custom Metrics<br/>Error Filtering]
+        end
+    end
+
+    subgraph "Customer AWS Account B"
+        subgraph "Log Delivery "
+            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+        end
+        
+        subgraph "Customer IAM "
+            Role_B[Customer Log<br/>Distribution Role]
+            Trust_B[Trust Policy<br/>Session Tag Validation]
+        end
+    end
+
+    %% Data Flow
+    V1 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    V2 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    V3 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
+    
+    KF -->|Parquet Files<br/>Partitioned by Tenant| S3
+    S3 --> S3E
+    S3E -->|ObjectCreated Events| SNS
+    SNS -->|Fan-out Events| SQS
+    SQS -->|Batch Messages| Lambda
+    
+    Lambda -->|Tenant Lookup| DDB
+    Lambda -->|Assume Role| STS
+    STS -->|Session Tags<br/>tenant_id, cluster_id| CentralRole
+    
+    %% Cross-Account Access
+    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_A
+    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_B
+    
+    Role_A -->|Deliver Logs| CWL_A
+    Role_B -->|Deliver Logs| CWL_B
+    
+    %% Trust Validation
+    Trust_A -.->|Validate Session Tags| Role_A
+    Trust_B -.->|Validate Session Tags| Role_B
+    
+    %% Monitoring Flows
+    Lambda --> CW
+    KF --> CW
+    S3 --> CW
+    SQS --> CW
+    
+    CW --> Alarms
+    CWL_A --> Dash_A
+    CWL_A --> Metric_A
+
+    %% Styling
+    classDef customer fill:#e1f5fe
+    classDef central fill:#f3e5f5
+    classDef security fill:#fff3e0
+    classDef storage fill:#e8f5e8
+    classDef processing fill:#fce4ec
+    
+    class K8s1,K8s2,K8s3,V1,V2,V3 customer
+    class Lambda,SQS,SNS,KF central
+    class STS,CentralRole,Role_A,Role_B,Trust_A,Trust_B security
+    class S3,DDB storage
+    class CWL_A,CWL_B,CW,Dash_A,Metric_A processing
+```
+
+### Data Flow Summary
+
+1. **Collection**: Vector agents collect logs from Kubernetes pods and enrich with tenant metadata
+2. **Ingestion**: Kinesis Firehose receives logs and applies dynamic partitioning by tenant
+3. **Staging**: S3 stores logs in Parquet format with tenant-segregated partitions
+4. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
+5. **Processing**: Lambda function processes SQS messages and delivers logs cross-account
+6. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
+7. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
+
 ## Repository Structure
 
 ```
