@@ -17,7 +17,15 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 
 ```
 ├── cloudformation/
-│   └── customer-account-template.yaml  # CloudFormation template for customer accounts
+│   ├── main.yaml                       # Main CloudFormation orchestration template
+│   ├── core-infrastructure.yaml        # S3, DynamoDB, KMS, IAM resources
+│   ├── kinesis-stack.yaml              # Firehose delivery stream and Glue catalog
+│   ├── lambda-stack.yaml               # Lambda functions and event mappings
+│   ├── monitoring-stack.yaml           # CloudWatch, SNS/SQS, and alerting
+│   ├── customer-account-template.yaml  # CloudFormation template for customer accounts
+│   ├── deploy.sh                       # CloudFormation deployment script
+│   ├── MIGRATION_GUIDE.md              # Migration from Terraform guide
+│   └── README.md                       # CloudFormation-specific documentation
 ├── docs/
 │   └── README.md                       # This file
 ├── k8s/
@@ -43,11 +51,29 @@ The solution implements a "Centralized Ingestion, Decentralized Delivery" model 
 ### Prerequisites
 
 - AWS CLI configured with appropriate permissions
-- Terraform >= 1.0
+- **Option 1 (CloudFormation)**: S3 bucket for storing CloudFormation templates
+- **Option 2 (Terraform)**: Terraform >= 1.0
 - kubectl configured for your Kubernetes clusters
 - Python 3.11+ (for Lambda development)
 
 ### 1. Deploy Core Infrastructure
+
+**Option A: CloudFormation (Recommended)**
+
+```bash
+cd cloudformation/
+
+# Deploy with minimal configuration
+./deploy.sh -b your-cloudformation-templates-bucket
+
+# Deploy to staging environment
+./deploy.sh -e staging -b your-cloudformation-templates-bucket
+
+# Deploy with custom parameters
+./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
+```
+
+**Option B: Terraform**
 
 ```bash
 cd terraform/
@@ -90,6 +116,19 @@ aws cloudformation create-stack \
                ParameterKey=CentralLogDistributorRoleArn,ParameterValue=arn:aws:iam::ACCOUNT:role/LogDistributorRole \
   --capabilities CAPABILITY_NAMED_IAM
 ```
+
+## Deployment Options
+
+### CloudFormation vs Terraform
+
+This project supports both CloudFormation and Terraform for infrastructure deployment:
+
+- **CloudFormation**: Nested stack architecture with comprehensive parameter management, validation, and rollback capabilities. Includes automated deployment scripts. See [cloudformation/README.md](../cloudformation/README.md) for detailed documentation.
+- **Terraform**: Modular configuration with state management. Original implementation method.
+
+### Migration from Terraform to CloudFormation
+
+If you're currently using Terraform and want to migrate to CloudFormation, see [cloudformation/MIGRATION_GUIDE.md](../cloudformation/MIGRATION_GUIDE.md) for step-by-step migration instructions.
 
 ## Configuration
 
