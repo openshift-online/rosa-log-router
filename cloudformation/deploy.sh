@@ -373,8 +373,8 @@ AWS Profile:    ${PROFILE:-default}
 
 Templates:
 - main.yaml (main template)
-- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS/SQS)
-- lambda-stack.yaml (Lambda functions)
+- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS)
+- lambda-stack.yaml (Lambda functions, SQS)
 
 ========================================
 
@@ -407,8 +407,8 @@ main() {
         print_success "Deployment completed successfully!"
         
         # Display useful information
-        print_status "CloudWatch Dashboard: https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#dashboards:name=${PROJECT_NAME}-${ENVIRONMENT}-overview"
         print_status "CloudFormation Console: https://${REGION}.console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks/stackinfo?stackId=${STACK_NAME}"
+        print_status "Lambda Function: https://${REGION}.console.aws.amazon.com/lambda/home?region=${REGION}#/functions/${PROJECT_NAME}-${ENVIRONMENT}-log-distributor"
     else
         print_error "Deployment failed!"
         exit 1
