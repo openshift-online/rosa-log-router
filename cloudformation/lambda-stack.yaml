@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Lambda functions for multi-tenant log distribution'
+Description: 'Container-based Lambda functions for multi-tenant log distribution'
 
 Parameters:
   Environment:
@@ -21,71 +21,19 @@ Parameters:
     Type: String
     Description: Name of the tenant configuration DynamoDB table
     
-  LogDeliveryTopicArn:
+  SQSQueueArn:
     Type: String
-    Description: ARN of the log delivery SNS topic
+    Description: ARN of the SQS queue to process messages from
+    
+  ECRImageUri:
+    Type: String
+    Description: URI of the ECR container image for the log processor
+    
+  CentralLogDistributionRoleArn:
+    Type: String
+    Description: ARN of the central log distribution role for cross-account access
 
 Resources:
-  # SQS queue for log delivery processing
-  LogDeliveryQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-queue'
-      MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeout: 900    # 15 minutes
-      ReceiveMessageWaitTimeSeconds: 20 # Long polling
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt LogDeliveryDLQ.Arn
-        maxReceiveCount: 3
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # Dead Letter Queue for failed messages
-  LogDeliveryDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-dlq'
-      MessageRetentionPeriod: 1209600  # 14 days
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # SQS queue policy
-  LogDeliveryQueuePolicy:
-    Type: AWS::SQS::QueuePolicy
-    Properties:
-      Queues:
-        - !Ref LogDeliveryQueue
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowSNSMessages
-            Effect: Allow
-            Principal:
-              Service: sns.amazonaws.com
-            Action: sqs:SendMessage
-            Resource: !GetAtt LogDeliveryQueue.Arn
-            Condition:
-              ArnEquals:
-                'aws:SourceArn': !Ref LogDeliveryTopicArn
-
-  # SNS subscription: SNS topic to SQS queue
-  LogDeliveryQueueSubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      TopicArn: !Ref LogDeliveryTopicArn
-      Protocol: sqs
-      Endpoint: !GetAtt LogDeliveryQueue.Arn
-      # No filter policy - S3 notifications don't use message attributes
 
   # CloudWatch Log Group for Lambda functions
   LogDistributorLogGroup:
@@ -100,139 +48,28 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
+        - Key: StackType
+          Value: lambda-functions
 
-
-  # Main Lambda function for log distribution
+  # Container-based Lambda function for log distribution
   LogDistributorFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${ProjectName}-${Environment}-log-distributor'
-      Runtime: python3.13
-      Handler: index.lambda_handler
-      Role: !Ref LogDistributorRoleArn
+      PackageType: Image
       Code:
-        ZipFile: |
-          import json
-          import boto3
-          import os
-          import logging
-          from datetime import datetime
-
-          logger = logging.getLogger()
-          logger.setLevel(logging.INFO)
-
-          def lambda_handler(event, context):
-              """
-              Lambda function to distribute logs to tenant accounts
-              """
-              try:
-                  logger.info("Processing log distribution request")
-                  
-                  for record in event.get('Records', []):
-                      try:
-                          # Parse S3 event from SQS message
-                          message_body = json.loads(record['body'])
-                          if 'Message' in message_body:
-                              s3_event = json.loads(message_body['Message'])
-                          else:
-                              s3_event = message_body
-                          
-                          # Process S3 records
-                          for s3_record in s3_event.get('Records', []):
-                              bucket = s3_record['s3']['bucket']['name']
-                              key = s3_record['s3']['object']['key']
-                              logger.info(f"Processing S3 object: s3://{bucket}/{key}")
-                              
-                              # Extract tenant info from key path
-                              path_parts = key.split('/')
-                              if len(path_parts) >= 4:
-                                  customer_id = path_parts[0]
-                                  cluster_id = path_parts[1]
-                                  application = path_parts[2]
-                                  pod_name = path_parts[3]
-                                  
-                                  # Get and decompress log file from S3
-                                  s3_client = boto3.client('s3')
-                                  obj = s3_client.get_object(Bucket=bucket, Key=key)
-                                  
-                                  import gzip
-                                  if key.endswith('.gz'):
-                                      content = gzip.decompress(obj['Body'].read()).decode('utf-8')
-                                  else:
-                                      content = obj['Body'].read().decode('utf-8')
-                                  
-                                  # Parse JSON logs - handle both arrays and ndjson
-                                  log_events = []
-                                  try:
-                                      # Try parsing as JSON array first (Vector format)
-                                      data = json.loads(content)
-                                      if isinstance(data, list):
-                                          for log_record in data:
-                                              event = convert_log_record_to_event(log_record)
-                                              if event:
-                                                  log_events.append(event)
-                                      else:
-                                          # Single JSON object
-                                          event = convert_log_record_to_event(data)
-                                          if event:
-                                              log_events.append(event)
-                                  except json.JSONDecodeError:
-                                      # Try line-delimited JSON
-                                      for line in content.strip().split('\n'):
-                                          if line:
-                                              try:
-                                                  log_record = json.loads(line)
-                                                  event = convert_log_record_to_event(log_record)
-                                                  if event:
-                                                      log_events.append(event)
-                                              except json.JSONDecodeError:
-                                                  continue
-                                  
-                                  logger.info(f"Parsed {len(log_events)} log events for {customer_id}")
-                              
-                      except Exception as e:
-                          logger.error(f"Error processing record {record.get('messageId', 'unknown')}: {e}")
-                          continue
-                  
-                  return {'statusCode': 200, 'processed': len(event.get('Records', []))}
-                  
-              except Exception as e:
-                  logger.error(f"Error processing logs: {e}")
-                  raise
-          
-          def convert_log_record_to_event(log_record):
-              """Convert log record to CloudWatch Logs event format"""
-              try:
-                  if isinstance(log_record, dict):
-                      timestamp = log_record.get('timestamp')
-                      if timestamp:
-                          if isinstance(timestamp, str):
-                              from datetime import datetime
-                              try:
-                                  dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                                  timestamp_ms = int(dt.timestamp() * 1000)
-                              except ValueError:
-                                  timestamp_ms = int(datetime.now().timestamp() * 1000)
-                          else:
-                              timestamp_ms = int(timestamp * 1000) if timestamp < 1e12 else int(timestamp)
-                      else:
-                          timestamp_ms = int(datetime.now().timestamp() * 1000)
-                      
-                      message = log_record.get('message', str(log_record))
-                      
-                      return {
-                          'timestamp': timestamp_ms,
-                          'message': message
-                      }
-              except Exception:
-                  return None
+        ImageUri: !Ref ECRImageUri
+      Role: !Ref LogDistributorRoleArn
       Environment:
         Variables:
           TENANT_CONFIG_TABLE: !Ref TenantConfigTableName
           MAX_BATCH_SIZE: "1000"
           RETRY_ATTEMPTS: "3"
-      Timeout: 120
-      MemorySize: 512
+          CENTRAL_LOG_DISTRIBUTION_ROLE_ARN: !Ref CentralLogDistributionRoleArn
+          EXECUTION_MODE: "lambda"
+          AWS_REGION: !Ref AWS::Region
+      Timeout: 300
+      MemorySize: 1024
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-log-distributor'
@@ -242,12 +79,14 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
+        - Key: StackType
+          Value: lambda-functions
 
   # Event Source Mapping for SQS to Lambda
   LogDeliveryEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
-      EventSourceArn: !GetAtt LogDeliveryQueue.Arn
+      EventSourceArn: !Ref SQSQueueArn
       FunctionName: !Ref LogDistributorFunction
       BatchSize: 10
       MaximumBatchingWindowInSeconds: 5
@@ -265,21 +104,3 @@ Outputs:
     Value: !GetAtt LogDistributorFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorFunctionArn'
-
-  LogDeliveryQueueArn:
-    Description: ARN of the log delivery SQS queue
-    Value: !GetAtt LogDeliveryQueue.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
-
-  LogDeliveryQueueName:
-    Description: Name of the log delivery SQS queue
-    Value: !GetAtt LogDeliveryQueue.QueueName
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryQueueName'
-
-  LogDeliveryDLQArn:
-    Description: ARN of the log delivery DLQ
-    Value: !GetAtt LogDeliveryDLQ.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryDLQArn'

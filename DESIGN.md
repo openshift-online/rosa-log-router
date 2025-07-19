@@ -169,11 +169,88 @@ The security model remains robust. The primary change is in the permissions requ
 
 ### **6.1. Infrastructure as Code Implementation**
 
-The multi-tenant logging architecture has been fully implemented using AWS CloudFormation with a nested stack approach, providing a complete Infrastructure as Code (IaC) solution. The implementation consists of three main components:
+The multi-tenant logging architecture has been fully implemented using AWS CloudFormation with a modular nested stack approach, providing a complete Infrastructure as Code (IaC) solution. The implementation uses a flexible, container-based architecture with three main deployment options:
 
-* **Main Template** (`main.yaml`): Orchestrates the entire deployment with parameter management and output aggregation
+* **Main Template** (`main.yaml`): Orchestrates the entire deployment with parameter management and conditional stack inclusion
 * **Core Infrastructure** (`core-infrastructure.yaml`): Deploys foundational resources including S3, DynamoDB, KMS, IAM roles, and native S3 event notifications
-* **Lambda Stack** (`lambda-stack.yaml`): Contains Lambda functions, SQS queues, and event source mappings for log processing
+* **SQS Stack** (`sqs-stack.yaml`): Optional SQS queue infrastructure for message processing
+* **Lambda Stack** (`lambda-stack.yaml`): Optional container-based Lambda functions using ECR images for log processing
+
+### **6.1.1. Modular Deployment Architecture**
+
+The CloudFormation implementation supports three deployment patterns to accommodate different processing requirements:
+
+#### **Core Infrastructure Only**
+```bash
+./cloudformation/deploy.sh -b templates-bucket
+```
+Deploys only S3, DynamoDB, SNS, and IAM resources. Suitable for external log processing systems.
+
+#### **Core + SQS Processing**
+```bash
+./cloudformation/deploy.sh -b templates-bucket --include-sqs
+```
+Adds SQS queue and DLQ for message buffering. Enables external applications to poll for log processing events.
+
+#### **Full Container-Based Processing**
+```bash
+./cloudformation/deploy.sh -b templates-bucket --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+```
+Complete serverless processing using container-based Lambda functions with ECR image deployment.
+
+### **6.1.2. Container-Based Lambda Architecture**
+
+The log processing component has been redesigned as a unified, container-based solution that supports multiple execution modes:
+
+#### **Unified Log Processor**
+The core processing logic is implemented in a single Python script (`container/log_processor.py`) that supports three execution modes:
+
+* **Lambda Runtime Mode** (`EXECUTION_MODE=lambda`): Handles AWS Lambda events for serverless processing
+* **SQS Polling Mode** (`EXECUTION_MODE=sqs`): Continuously polls SQS queue for external processing scenarios  
+* **Manual Input Mode** (`EXECUTION_MODE=manual`): Accepts JSON input via stdin for development and testing
+
+#### **Container Architecture**
+```dockerfile
+# Fedora 42 base with Python 3.13
+FROM registry.fedoraproject.org/fedora:42
+WORKDIR /app
+COPY requirements.txt log_processor.py entrypoint.sh ./
+RUN pip3 install -r requirements.txt && chmod +x entrypoint.sh
+USER logprocessor
+ENTRYPOINT ["/app/entrypoint.sh"]
+```
+
+#### **Multi-Mode Entrypoint**
+The container entrypoint (`container/entrypoint.sh`) dynamically selects execution mode based on the `EXECUTION_MODE` environment variable:
+
+```bash
+case "$EXECUTION_MODE" in
+    "lambda")  exec python3 -m awslambdaric log_processor.lambda_handler ;;
+    "sqs")     exec python3 log_processor.py --mode sqs ;;
+    "manual")  exec python3 log_processor.py --mode manual ;;
+esac
+```
+
+#### **ECR Integration**
+Container images are stored in Amazon Elastic Container Registry (ECR) and deployed to Lambda:
+
+```bash
+# Build and push to ECR
+podman build -f Containerfile -t log-processor:latest .
+aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
+podman tag log-processor:latest ECR_URI/log-processor:latest
+podman push ECR_URI/log-processor:latest
+
+# Deploy with CloudFormation
+./deploy.sh --include-lambda --ecr-image-uri ECR_URI/log-processor:latest
+```
+
+#### **Benefits of Container-Based Approach**
+* **Consistency**: Same codebase runs in Lambda, local development, and external processing
+* **Flexibility**: Support for multiple execution patterns without code duplication
+* **Development**: Full local testing capabilities with podman
+* **Maintenance**: Single container image for all deployment scenarios
+* **Scalability**: Container-based Lambda provides better cold start performance and resource management
 
 ### **6.2. Major Architectural Improvements (2025)**
 
@@ -276,15 +353,103 @@ The CloudFormation implementation includes several cost optimization features:
 - End-to-end testing confirmed for S3 → SNS → SQS → Lambda pipeline
 - Successfully deployed and tested on AWS account with full functionality
 
-### **6.6. Future Considerations**
+### **6.6. Local Development and Testing**
+
+The container-based architecture enables comprehensive local development and testing capabilities:
+
+#### **Local Development Environment Setup**
+```bash
+# Install dependencies
+cd container/
+pip3 install --user -r requirements.txt
+
+# Set environment variables  
+export AWS_PROFILE=YOUR_AWS_PROFILE
+export AWS_REGION=YOUR_AWS_REGION
+export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/role-name
+export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/queue-name
+```
+
+#### **Testing Execution Modes**
+
+**Direct Python Execution:**
+```bash
+# SQS polling mode
+python3 log_processor.py --mode sqs
+
+# Manual testing with sample S3 event
+echo '{"Message": "{\"Records\": [...]}"}' | python3 log_processor.py --mode manual
+```
+
+**Container Testing:**
+```bash
+# Build container
+podman build -f Containerfile -t log-processor:latest .
+
+# Test with AWS credentials
+podman run --rm \
+  -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e EXECUTION_MODE=sqs \
+  -v ~/.aws:/home/logprocessor/.aws:ro \
+  log-processor:latest
+
+# Test with environment variables
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile YOUR_AWS_PROFILE)
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile YOUR_AWS_PROFILE)
+podman run --rm \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e EXECUTION_MODE=manual \
+  log-processor:latest
+```
+
+### **6.7. Deployment Workflow**
+
+#### **Complete Deployment Process**
+1. **Build and Push Container:**
+   ```bash
+   cd container/
+   podman build -f Containerfile -t log-processor:latest .
+   aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
+   podman push ECR_URI/log-processor:latest
+   ```
+
+2. **Deploy Infrastructure:**
+   ```bash
+   cd cloudformation/
+   ./deploy.sh --include-sqs --include-lambda --ecr-image-uri ECR_URI/log-processor:latest
+   ```
+
+3. **Configure Vector Agents:**
+   ```bash
+   kubectl apply -f k8s/vector-config.yaml
+   kubectl apply -f k8s/vector-daemonset.yaml
+   ```
+
+#### **Environment-Specific Deployments**
+```bash
+# Development
+./deploy.sh -e development --include-sqs --ecr-image-uri ECR_URI
+
+# Staging with full Lambda processing
+./deploy.sh -e staging --include-sqs --include-lambda --ecr-image-uri ECR_URI
+
+# Production with enhanced monitoring
+./deploy.sh -e production --include-sqs --include-lambda --ecr-image-uri ECR_URI
+```
+
+### **6.8. Future Considerations**
 
 **Potential Enhancements:**
 - **Multi-Region Replication:** S3 Cross-Region Replication for disaster recovery
 - **Advanced Analytics:** Integration with AWS Glue for log analytics capabilities
 - **Cost Monitoring:** Enhanced cost allocation tagging and budgeting
 - **Security Scanning:** Automated security compliance checking
+- **Container Optimization:** Multi-stage builds and smaller base images for faster Lambda cold starts
+- **Batch Processing:** Enhanced batch processing for high-volume scenarios
 
-The CloudFormation implementation provides a robust, scalable, and maintainable foundation for the multi-tenant logging architecture, significantly improving upon the original design through the use of native AWS capabilities and Infrastructure as Code best practices.
+The CloudFormation implementation provides a robust, scalable, and maintainable foundation for the multi-tenant logging architecture, significantly improving upon the original design through the use of native AWS capabilities, container-based processing, and comprehensive Infrastructure as Code best practices.
 
 #### **Works cited**
 

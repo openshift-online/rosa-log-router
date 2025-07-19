@@ -4,13 +4,14 @@ This repository contains the implementation of a scalable, multi-tenant logging 
 
 ## Architecture Overview
 
-The solution implements a "Centralized Ingestion, Decentralized Delivery" model with the following key components:
+The solution implements a "Centralized Ingestion, Decentralized Delivery" model with a modern container-based processing architecture:
 
 - **Vector** log agents deployed as DaemonSets in Kubernetes clusters
 - **S3** for direct log storage with dynamic partitioning by tenant
 - **SNS/SQS** hub-and-spoke pattern for event-driven processing
-- **Lambda** function for cross-account log delivery
+- **Container-based Lambda** functions for cross-account log delivery using ECR images
 - **DynamoDB** for tenant configuration management
+- **Unified log processor** supporting Lambda, SQS polling, and manual execution modes
 
 ### AWS Architecture Diagram
 
@@ -149,19 +150,24 @@ graph TB
 ├── cloudformation/
 │   ├── main.yaml                          # Main CloudFormation orchestration template
 │   ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
-│   ├── lambda-stack.yaml                  # Lambda functions and event mappings
-│   ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, and alerting
+│   ├── sqs-stack.yaml                     # Optional SQS queue and DLQ
+│   ├── lambda-stack.yaml                  # Optional container-based Lambda functions
 │   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
-│   ├── deploy.sh                          # CloudFormation deployment script
+│   ├── deploy.sh                          # CloudFormation deployment script with modular options
 │   └── README.md                          # CloudFormation-specific documentation
+├── container/
+│   ├── Containerfile                      # Container definition for unified log processor
+│   ├── log_processor.py                   # Unified log processor (Lambda/SQS/manual modes)
+│   ├── entrypoint.sh                      # Multi-mode container entrypoint
+│   └── requirements.txt                   # Python dependencies
 ├── docs/
 │   └── README.md                          # This file
 ├── k8s/
 │   ├── vector-config.yaml                # Vector ConfigMap
 │   └── vector-daemonset.yaml             # Vector DaemonSet deployment
-├── lambda/
-│   ├── log_distributor.py                # Main Lambda function
-│   └── requirements.txt                  # Python dependencies
+├── .env.sample                           # Environment variable template
+├── .gitignore                            # Git ignore with security exclusions
+├── CLAUDE.md                             # Local development and usage guide
 └── DESIGN.md                             # Comprehensive architecture design
 ```
 
@@ -174,24 +180,45 @@ graph TB
 - kubectl configured for your Kubernetes clusters
 - Python 3.11+ (for Lambda development)
 
-### 1. Deploy Core Infrastructure
+### 1. Deploy Infrastructure
 
+The infrastructure supports three deployment patterns:
+
+#### **Core Infrastructure Only**
 ```bash
 cd cloudformation/
-
-# Deploy with minimal configuration
 ./deploy.sh -b your-cloudformation-templates-bucket
+```
 
+#### **Core + SQS for External Processing**
+```bash
+cd cloudformation/
+./deploy.sh -b your-cloudformation-templates-bucket --include-sqs
+```
+
+#### **Full Container-Based Lambda Processing**
+```bash
+# First, build and push container to ECR
+cd container/
+podman build -f Containerfile -t log-processor:latest .
+aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
+podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+
+# Deploy infrastructure with Lambda processing
+cd ../cloudformation/
+./deploy.sh -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+```
+
+#### **Environment-Specific Deployment**
+```bash
 # Deploy to staging environment
-./deploy.sh -e staging -b your-cloudformation-templates-bucket
+./deploy.sh -e staging -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_IMAGE_URI
 
-# Deploy with custom parameters
-./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
-
-# Deploy using environment variables
+# Deploy with custom parameters and environment variables
 export AWS_PROFILE=your-profile
-export AWS_REGION=us-east-2
-./deploy.sh -b your-cloudformation-templates-bucket
+export AWS_REGION=YOUR_AWS_REGION
+./deploy.sh -e production -p my-logging-project -b my-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_IMAGE_URI
 ```
 
 ### 2. Deploy Vector to Kubernetes
@@ -205,18 +232,82 @@ kubectl apply -f k8s/vector-config.yaml
 kubectl apply -f k8s/vector-daemonset.yaml
 ```
 
-### 3. Package and Deploy Lambda Function
+### 3. Local Development and Testing
 
+The container-based architecture enables comprehensive local development:
+
+#### **Direct Python Execution**
 ```bash
-cd lambda/
-pip install -r requirements.txt -t .
-zip -r log_distributor.zip .
-aws lambda update-function-code \
-  --function-name log-distributor \
-  --zip-file fileb://log_distributor.zip
+cd container/
+pip3 install --user -r requirements.txt
+
+# Set up environment variables (copy from .env.sample)
+export AWS_PROFILE=YOUR_AWS_PROFILE
+export AWS_REGION=YOUR_AWS_REGION
+export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/role-name
+export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/queue-name
+
+# Test SQS polling mode
+python3 log_processor.py --mode sqs
+
+# Test manual mode with sample data
+echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
 ```
 
-### 4. Onboard Customer Accounts
+#### **Container Testing**
+```bash
+# Build container
+cd container/
+podman build -f Containerfile -t log-processor:latest .
+
+# Test with AWS profile
+podman run --rm \
+  -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e EXECUTION_MODE=sqs \
+  -v ~/.aws:/home/logprocessor/.aws:ro \
+  log-processor:latest
+
+# Test with explicit credentials
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile YOUR_AWS_PROFILE)
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile YOUR_AWS_PROFILE)
+podman run --rm \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e EXECUTION_MODE=manual \
+  log-processor:latest
+```
+
+### 4. Container Registry Management
+
+#### **ECR Repository Setup**
+```bash
+# Create ECR repository if it doesn't exist
+aws ecr create-repository --repository-name log-processor --region YOUR_AWS_REGION
+
+# Get repository URI
+aws ecr describe-repositories --repository-names log-processor --region YOUR_AWS_REGION --query 'repositories[0].repositoryUri' --output text
+```
+
+#### **Container Lifecycle Management**
+```bash
+# Build and tag with version
+cd container/
+podman build -f Containerfile -t log-processor:v1.0.0 .
+podman tag log-processor:v1.0.0 log-processor:latest
+
+# Tag for ECR
+ECR_URI=$(aws ecr describe-repositories --repository-names log-processor --region YOUR_AWS_REGION --query 'repositories[0].repositoryUri' --output text)
+podman tag log-processor:latest $ECR_URI:latest
+podman tag log-processor:v1.0.0 $ECR_URI:v1.0.0
+
+# Push to ECR
+aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin $ECR_URI
+podman push $ECR_URI:latest
+podman push $ECR_URI:v1.0.0
+```
+
+### 5. Onboard Customer Accounts
 
 Provide customers with the CloudFormation template:
 
@@ -231,16 +322,17 @@ aws cloudformation create-stack \
 
 ## CloudFormation Infrastructure
 
-This project uses CloudFormation for infrastructure deployment with a nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
+This project uses CloudFormation for infrastructure deployment with a modular nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
 
 ### Recent Infrastructure Updates
 
-The CloudFormation templates have undergone a major architectural change:
-- **Removed Kinesis Data Firehose**: Vector agents now write directly to S3 for better cost efficiency
-- **Added CentralS3WriterRole**: New IAM role for secure cross-account S3 access from Vector
-- **Updated Vector Configuration**: Changed from aws_kinesis_firehose sink to aws_s3 sink
-- **Modified Lambda Function**: Updated to parse new S3 key format: `customer_id/cluster_id/application/pod_name/`
-- **Integrated S3 Events**: Connected S3 event notifications with existing SNS/SQS infrastructure
+The CloudFormation templates have undergone major architectural improvements:
+- **Container-Based Lambda**: Unified log processor using ECR container images with multi-mode execution
+- **Modular Deployment**: Optional SQS and Lambda stacks with `--include-sqs` and `--include-lambda` flags
+- **Native S3 Notifications**: Replaced custom Lambda functions with native AWS capabilities
+- **ECR Integration**: Container images stored in Amazon Elastic Container Registry for Lambda deployment
+- **Simplified Infrastructure**: Reduced complexity through container-based approach
+- **Enhanced Deployment**: Improved deployment script with conditional stack selection
 
 Previous fixes included:
 - **IAM Policy Fixes**: Corrected S3 bucket ARN format in IAM policies to use proper CloudFormation intrinsic functions
@@ -393,13 +485,21 @@ aws cloudwatch get-metric-statistics \
 ### Local Testing
 
 ```bash
-# Test Lambda function locally
-cd lambda/
-python -m pytest tests/
+# Test unified log processor locally (direct Python)
+cd container/
+python3 log_processor.py --mode manual
+
+# Test with container (SQS polling)
+podman build -f Containerfile -t log-processor:latest .
+podman run --rm -e EXECUTION_MODE=sqs -v ~/.aws:/home/logprocessor/.aws:ro log-processor:latest
 
 # Validate CloudFormation templates
 cd cloudformation/
 ./deploy.sh --validate-only -b your-templates-bucket
+
+# Test modular deployment options
+./deploy.sh --validate-only -b your-templates-bucket --include-sqs
+./deploy.sh --validate-only -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_URI
 ```
 
 ### Contributing

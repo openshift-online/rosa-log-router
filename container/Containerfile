@@ -1,0 +1,27 @@
+FROM registry.fedoraproject.org/fedora:42
+
+# Install Python and basic tools
+RUN dnf update -y && \
+    dnf install -y python3 python3-pip && \
+    dnf clean all
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY log_processor.py .
+COPY entrypoint.sh .
+
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
+
+# Create non-root user for security
+RUN useradd -r -s /bin/false logprocessor
+USER logprocessor
+
+# Set entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]

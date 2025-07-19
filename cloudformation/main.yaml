@@ -20,7 +20,23 @@ Parameters:
     Default: ""
     Description: OIDC issuer URL for the EKS cluster (without https://)
     
-  # Lambda Configuration
+  # Optional Stack Configuration
+  IncludeSQSStack:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Whether to deploy the SQS stack for log processing
+    
+  IncludeLambdaStack:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Whether to deploy the Lambda stack for container-based log processing
+    
+  ECRImageUri:
+    Type: String
+    Default: ""
+    Description: URI of the ECR container image for the log processor (required if IncludeLambdaStack is true)
     
   # S3 Configuration
   S3StandardIADays:
@@ -71,6 +87,9 @@ Parameters:
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
+  ShouldIncludeSQSStack: !Equals [!Ref IncludeSQSStack, "true"]
+  ShouldIncludeLambdaStack: !Equals [!Ref IncludeLambdaStack, "true"]
+  HasECRImageUri: !Not [!Equals [!Ref ECRImageUri, ""]]
 
 Resources:
   # Core Infrastructure Stack (S3, DynamoDB, SNS/SQS, IAM)
@@ -99,9 +118,31 @@ Resources:
         - Key: StackType
           Value: core-infrastructure
   
-  # Lambda Functions Stack
+  # SQS Stack (Optional)
+  SQSStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ShouldIncludeSQSStack
+    DependsOn: CoreInfrastructureStack
+    Properties:
+      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/sqs-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+        LogDeliveryTopicArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryTopicArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackType
+          Value: sqs-infrastructure
+  
+  # Lambda Functions Stack (Optional)
   LambdaStack:
     Type: AWS::CloudFormation::Stack
+    Condition: ShouldIncludeLambdaStack
     DependsOn: CoreInfrastructureStack
     Properties:
       TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/lambda-stack.yaml'
@@ -110,7 +151,9 @@ Resources:
         ProjectName: !Ref ProjectName
         LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
-        LogDeliveryTopicArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryTopicArn
+        SQSQueueArn: !If [ShouldIncludeSQSStack, !GetAtt SQSStack.Outputs.LogDeliveryQueueArn, ""]
+        ECRImageUri: !Ref ECRImageUri
+        CentralLogDistributionRoleArn: !GetAtt CoreInfrastructureStack.Outputs.CentralLogDistributionRoleArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -136,14 +179,31 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-TenantConfigTableName'
   
-  # Lambda Outputs
+  # SQS Outputs (Optional)
+  LogDeliveryQueueArn:
+    Condition: ShouldIncludeSQSStack
+    Description: ARN of the log delivery SQS queue
+    Value: !GetAtt SQSStack.Outputs.LogDeliveryQueueArn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
+  
+  LogDeliveryQueueUrl:
+    Condition: ShouldIncludeSQSStack
+    Description: URL of the log delivery SQS queue
+    Value: !GetAtt SQSStack.Outputs.LogDeliveryQueueUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueUrl'
+      
+  # Lambda Outputs (Optional)
   LogDistributorFunctionName:
+    Condition: ShouldIncludeLambdaStack
     Description: Name of the log distributor Lambda function
     Value: !GetAtt LambdaStack.Outputs.LogDistributorFunctionName
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorFunctionName'
   
   LogDistributorFunctionArn:
+    Condition: ShouldIncludeLambdaStack
     Description: ARN of the log distributor Lambda function
     Value: !GetAtt LambdaStack.Outputs.LogDistributorFunctionArn
     Export:
@@ -169,12 +229,6 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LogDeliveryTopicArn'
   
-  # SQS Outputs (from Lambda stack)
-  LogDeliveryQueueArn:
-    Description: ARN of the log delivery SQS queue
-    Value: !GetAtt LambdaStack.Outputs.LogDeliveryQueueArn
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
   
   # Stack Information
   StackVersion:
