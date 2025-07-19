@@ -7,8 +7,6 @@ import json
 import urllib.parse
 import gzip
 import boto3
-import pandas as pd
-import pyarrow.parquet as pq
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 import logging
@@ -167,43 +165,43 @@ def download_and_process_log_file(bucket_name: str, object_key: str) -> List[Dic
 def process_parquet_file(file_content: bytes) -> List[Dict[str, Any]]:
     """
     Process Parquet file content and extract log events
+    Note: Parquet support removed to eliminate pandas dependency
     """
-    try:
-        # Read Parquet data using pandas
-        df = pd.read_parquet(io.BytesIO(file_content))
-        
-        # Convert to list of dictionaries
-        log_events = []
-        for _, row in df.iterrows():
-            event = {
-                'timestamp': int(pd.to_datetime(row['timestamp']).timestamp() * 1000),
-                'message': str(row['message'])
-            }
-            log_events.append(event)
-        
-        logger.info(f"Processed {len(log_events)} log events from Parquet file")
-        return log_events
-        
-    except Exception as e:
-        logger.error(f"Failed to process Parquet file: {str(e)}")
-        raise
+    raise NotImplementedError("Parquet processing not supported - pandas dependency removed")
 
 def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
     """
     Process JSON file content and extract log events
+    Handles both Vector's JSON array format and line-delimited JSON
     """
     try:
         log_events = []
+        content = file_content.decode('utf-8')
         
-        # Process line-delimited JSON
-        for line in file_content.decode('utf-8').strip().split('\n'):
-            if line:
-                log_record = json.loads(line)
-                event = {
-                    'timestamp': int(pd.to_datetime(log_record['timestamp']).timestamp() * 1000),
-                    'message': log_record['message']
-                }
-                log_events.append(event)
+        # Try parsing as JSON array first (Vector format)
+        try:
+            data = json.loads(content)
+            if isinstance(data, list):
+                for log_record in data:
+                    event = convert_log_record_to_event(log_record)
+                    if event:
+                        log_events.append(event)
+            else:
+                # Single JSON object
+                event = convert_log_record_to_event(data)
+                if event:
+                    log_events.append(event)
+        except json.JSONDecodeError:
+            # Try line-delimited JSON
+            for line in content.strip().split('\n'):
+                if line:
+                    try:
+                        log_record = json.loads(line)
+                        event = convert_log_record_to_event(log_record)
+                        if event:
+                            log_events.append(event)
+                    except json.JSONDecodeError:
+                        continue
         
         logger.info(f"Processed {len(log_events)} log events from JSON file")
         return log_events
@@ -211,6 +209,38 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Failed to process JSON file: {str(e)}")
         raise
+
+def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Convert log record to CloudWatch Logs event format
+    """
+    try:
+        if isinstance(log_record, dict):
+            timestamp = log_record.get('timestamp')
+            if timestamp:
+                if isinstance(timestamp, str):
+                    try:
+                        # Handle ISO format timestamps
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        timestamp_ms = int(dt.timestamp() * 1000)
+                    except ValueError:
+                        # Fallback to current time
+                        timestamp_ms = int(datetime.now().timestamp() * 1000)
+                else:
+                    # Handle numeric timestamps
+                    timestamp_ms = int(timestamp * 1000) if timestamp < 1e12 else int(timestamp)
+            else:
+                timestamp_ms = int(datetime.now().timestamp() * 1000)
+            
+            message = log_record.get('message', str(log_record))
+            
+            return {
+                'timestamp': timestamp_ms,
+                'message': message
+            }
+    except Exception as e:
+        logger.warning(f"Failed to convert log record: {str(e)}")
+        return None
 
 def deliver_logs_to_customer(
     log_events: List[Dict[str, Any]], 

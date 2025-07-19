@@ -127,15 +127,105 @@ Resources:
               """
               try:
                   logger.info("Processing log distribution request")
-                  # Placeholder implementation
+                  
                   for record in event.get('Records', []):
-                      logger.info(f"Processing record: {record.get('messageId', 'unknown')}")
+                      try:
+                          # Parse S3 event from SQS message
+                          message_body = json.loads(record['body'])
+                          if 'Message' in message_body:
+                              s3_event = json.loads(message_body['Message'])
+                          else:
+                              s3_event = message_body
+                          
+                          # Process S3 records
+                          for s3_record in s3_event.get('Records', []):
+                              bucket = s3_record['s3']['bucket']['name']
+                              key = s3_record['s3']['object']['key']
+                              logger.info(f"Processing S3 object: s3://{bucket}/{key}")
+                              
+                              # Extract tenant info from key path
+                              path_parts = key.split('/')
+                              if len(path_parts) >= 4:
+                                  customer_id = path_parts[0]
+                                  cluster_id = path_parts[1]
+                                  application = path_parts[2]
+                                  pod_name = path_parts[3]
+                                  
+                                  # Get and decompress log file from S3
+                                  s3_client = boto3.client('s3')
+                                  obj = s3_client.get_object(Bucket=bucket, Key=key)
+                                  
+                                  import gzip
+                                  if key.endswith('.gz'):
+                                      content = gzip.decompress(obj['Body'].read()).decode('utf-8')
+                                  else:
+                                      content = obj['Body'].read().decode('utf-8')
+                                  
+                                  # Parse JSON logs - handle both arrays and ndjson
+                                  log_events = []
+                                  try:
+                                      # Try parsing as JSON array first (Vector format)
+                                      data = json.loads(content)
+                                      if isinstance(data, list):
+                                          for log_record in data:
+                                              event = convert_log_record_to_event(log_record)
+                                              if event:
+                                                  log_events.append(event)
+                                      else:
+                                          # Single JSON object
+                                          event = convert_log_record_to_event(data)
+                                          if event:
+                                              log_events.append(event)
+                                  except json.JSONDecodeError:
+                                      # Try line-delimited JSON
+                                      for line in content.strip().split('\n'):
+                                          if line:
+                                              try:
+                                                  log_record = json.loads(line)
+                                                  event = convert_log_record_to_event(log_record)
+                                                  if event:
+                                                      log_events.append(event)
+                                              except json.JSONDecodeError:
+                                                  continue
+                                  
+                                  logger.info(f"Parsed {len(log_events)} log events for {customer_id}")
+                              
+                      except Exception as e:
+                          logger.error(f"Error processing record {record.get('messageId', 'unknown')}: {e}")
+                          continue
                   
                   return {'statusCode': 200, 'processed': len(event.get('Records', []))}
                   
               except Exception as e:
                   logger.error(f"Error processing logs: {e}")
                   raise
+          
+          def convert_log_record_to_event(log_record):
+              """Convert log record to CloudWatch Logs event format"""
+              try:
+                  if isinstance(log_record, dict):
+                      timestamp = log_record.get('timestamp')
+                      if timestamp:
+                          if isinstance(timestamp, str):
+                              from datetime import datetime
+                              try:
+                                  dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                  timestamp_ms = int(dt.timestamp() * 1000)
+                              except ValueError:
+                                  timestamp_ms = int(datetime.now().timestamp() * 1000)
+                          else:
+                              timestamp_ms = int(timestamp * 1000) if timestamp < 1e12 else int(timestamp)
+                      else:
+                          timestamp_ms = int(datetime.now().timestamp() * 1000)
+                      
+                      message = log_record.get('message', str(log_record))
+                      
+                      return {
+                          'timestamp': timestamp_ms,
+                          'message': message
+                      }
+              except Exception:
+                  return None
       Environment:
         Variables:
           TENANT_CONFIG_TABLE: !Ref TenantConfigTableName
