@@ -190,7 +190,7 @@ cd cloudformation/
 
 # Deploy using environment variables
 export AWS_PROFILE=your-profile
-export AWS_REGION=us-east-2
+export AWS_REGION=YOUR_AWS_REGION
 ./deploy.sh -b your-cloudformation-templates-bucket
 ```
 

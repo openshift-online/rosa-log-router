@@ -79,7 +79,7 @@ def sqs_polling_mode():
                 QueueUrl=SQS_QUEUE_URL,
                 MaxNumberOfMessages=10,
                 WaitTimeSeconds=20,  # Long polling
-                VisibilityTimeoutSeconds=300
+                VisibilityTimeout=300
             )
             
             messages = response.get('Messages', [])

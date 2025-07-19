@@ -10,32 +10,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Container Management
+### Local Development
+
+#### Prerequisites
+- Python 3.13+ with pip
+- Podman for containerized testing
+- AWS CLI configured with your AWS profile
+- Access to deployed CloudFormation stack with SQS queue
+
+#### Direct Python Execution
+
+First, install dependencies locally:
 ```bash
-# Build container image with podman
+cd container/
+pip3 install --user -r requirements.txt
+```
+
+**SQS Polling Mode** (polls live queue for messages):
+```bash
+cd container/
+export AWS_PROFILE=YOUR_AWS_PROFILE
+export AWS_REGION=YOUR_AWS_REGION
+export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue
+
+python3 log_processor.py --mode sqs
+```
+
+**Manual Mode** (test with sample S3 event):
+```bash
+cd container/
+export AWS_PROFILE=YOUR_AWS_PROFILE
+export AWS_REGION=YOUR_AWS_REGION
+export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+
+# Test with sample S3 event
+echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
+```
+
+#### Container-based Execution
+
+Build the container:
+```bash
 cd container/
 podman build -f Containerfile -t log-processor:latest .
+```
 
-# Run locally for SQS polling (requires AWS credentials and SQS_QUEUE_URL)
+**Option 1: AWS Profile with Volume Mount**
+```bash
 podman run --rm \
-  -e AWS_PROFILE=scuppett-dev \
-  -e AWS_REGION=us-east-2 \
-  -e SQS_QUEUE_URL=https://sqs.us-east-2.amazonaws.com/ACCOUNT/QUEUE-NAME \
-  -e TENANT_CONFIG_TABLE=tenant-configurations \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::ACCOUNT:role/ROLE-NAME \
+  -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e AWS_REGION=YOUR_AWS_REGION \
+  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
+  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
   -e EXECUTION_MODE=sqs \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest
+```
 
-# Run locally for manual testing (feed JSON via stdin)
-echo '{"Message": "{\"Records\": [...]}}"}' | podman run --rm -i \
+**Option 2: AWS Credentials via Environment Variables**
+```bash
+# Extract credentials (do not save these in files!)
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile YOUR_AWS_PROFILE)
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile YOUR_AWS_PROFILE)
+
+# Run container with explicit credentials
+podman run --rm \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_REGION=YOUR_AWS_REGION \
+  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
+  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e EXECUTION_MODE=sqs \
+  log-processor:latest
+```
+
+**Manual Testing with Container**:
+```bash
+echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | podman run --rm -i \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_REGION=YOUR_AWS_REGION \
+  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
   -e EXECUTION_MODE=manual \
   log-processor:latest
+```
 
+#### Security Notes
+- **Never commit AWS credentials to any files**
+- Use environment variables for temporary credential passthrough
+- Volume mount ~/.aws for local development only
+- The example credentials extraction commands above are for local development only
+
+### Container Management
+```bash
 # Tag and push to ECR (for Lambda deployment)
-aws ecr get-login-password --region us-east-2 | podman login --username AWS --password-stdin ACCOUNT.dkr.ecr.us-east-2.amazonaws.com
-podman tag log-processor:latest ACCOUNT.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
-podman push ACCOUNT.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
+aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
+podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 ```
 
 ### Infrastructure Management
@@ -52,7 +129,7 @@ kubectl apply -f k8s/vector-daemonset.yaml
 ./cloudformation/deploy.sh --include-sqs
 
 # Deploy with both SQS and Lambda container-based processing
-./cloudformation/deploy.sh --include-sqs --include-lambda --ecr-image-uri ACCOUNT.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
+./cloudformation/deploy.sh --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 ```
 
 ### Customer Onboarding
@@ -73,8 +150,8 @@ echo '{"Message": "{\"Records\": [...]}"}' | podman run --rm -i log-processor:la
 
 # Test container against live SQS queue
 podman run --rm \
-  -e AWS_PROFILE=scuppett-dev \
-  -e SQS_QUEUE_URL=https://sqs.us-east-2.amazonaws.com/ACCOUNT/QUEUE-NAME \
+  -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/QUEUE-NAME \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest --mode sqs
 
@@ -85,7 +162,7 @@ kubectl logs -n logging daemonset/vector-logs
 
 # Check SQS queue metrics
 aws sqs get-queue-attributes \
-  --queue-url https://sqs.us-east-2.amazonaws.com/ACCOUNT/QUEUE-NAME \
+  --queue-url https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/QUEUE-NAME \
   --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible
 ```
 
