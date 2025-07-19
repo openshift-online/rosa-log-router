@@ -26,19 +26,6 @@ Parameters:
     Description: List of Kubernetes cluster names that will send logs
     
   # Lambda Configuration
-  LambdaReservedConcurrency:
-    Type: Number
-    Default: 100
-    MinValue: 1
-    MaxValue: 1000
-    Description: Reserved concurrency for the log distributor Lambda function
-    
-  LambdaMaxConcurrency:
-    Type: Number
-    Default: 50
-    MinValue: 1
-    MaxValue: 1000
-    Description: Maximum concurrency for Lambda event source mapping
     
   # S3 Configuration
   S3StandardIADays:
@@ -76,11 +63,6 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Enable S3 server-side encryption
-    
-  CostCenter:
-    Type: String
-    Default: ""
-    Description: Cost center for billing allocation
 
   TemplateBucket:
     Type: String
@@ -88,7 +70,6 @@ Parameters:
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
-  HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
 
 Resources:
   # Core Infrastructure Stack (S3, DynamoDB, SNS/SQS, IAM)
@@ -107,7 +88,6 @@ Resources:
         S3LogRetentionDays: !Ref S3LogRetentionDays
         EnableS3IntelligentTiering: !Ref EnableS3IntelligentTiering
         EnableS3Encryption: !Ref EnableS3Encryption
-        CostCenter: !Ref CostCenter
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -127,12 +107,9 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
-        LambdaReservedConcurrency: !Ref LambdaReservedConcurrency
-        LambdaMaxConcurrency: !Ref LambdaMaxConcurrency
         LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
         LogDeliveryQueueArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryQueueArn
-        CostCenter: !Ref CostCenter
       Tags:
         - Key: Project
           Value: !Ref ProjectName

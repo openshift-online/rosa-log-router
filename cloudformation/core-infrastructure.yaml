@@ -7,66 +7,60 @@ Parameters:
     Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
-    
+
   ProjectName:
     Type: String
     Default: multi-tenant-logging
     Description: Name of the project for resource naming
-    
+
   EksOidcIssuer:
     Type: String
     Default: ""
     Description: OIDC issuer URL for the EKS cluster (without https://)
-    
+
   ClusterNames:
     Type: CommaDelimitedList
     Default: "prod-cluster-1,prod-cluster-2"
     Description: List of Kubernetes cluster names that will send logs
-    
+
   S3StandardIADays:
     Type: Number
     Default: 30
     MinValue: 1
     Description: Days after which to transition S3 objects to Standard-IA
-    
+
   S3GlacierDays:
     Type: Number
     Default: 90
     MinValue: 1
     Description: Days after which to transition S3 objects to Glacier
-    
+
   S3DeepArchiveDays:
     Type: Number
     Default: 365
     MinValue: 1
     Description: Days after which to transition S3 objects to Deep Archive
-    
+
   S3LogRetentionDays:
     Type: Number
     Default: 2555
     MinValue: 1
     Description: Number of days to retain logs in S3
-    
+
   EnableS3IntelligentTiering:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Enable S3 Intelligent Tiering for cost optimization
-    
+
   EnableS3Encryption:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Enable S3 server-side encryption
-    
-  CostCenter:
-    Type: String
-    Default: ""
-    Description: Cost center for billing allocation
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
-  HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
   IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
   IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
 
@@ -76,7 +70,7 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt RandomSuffixFunction.Arn
-      
+
   RandomSuffixFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -114,7 +108,7 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-          
+
   RandomSuffixFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -234,8 +228,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # SNS topic policy to allow S3 to publish messages
   LogDeliveryTopicPolicy:
@@ -264,7 +256,7 @@ Resources:
     Properties:
       QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-queue'
       MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 900    # 15 minutes
+      VisibilityTimeout: 900    # 15 minutes
       ReceiveMessageWaitTimeSeconds: 20 # Long polling
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt LogDeliveryDLQ.Arn
@@ -276,8 +268,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # Dead Letter Queue for failed messages
   LogDeliveryDLQ:
@@ -292,8 +282,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # SQS queue policy
   LogDeliveryQueuePolicy:
@@ -322,21 +310,21 @@ Resources:
       Protocol: sqs
       Endpoint: !GetAtt LogDeliveryQueue.Arn
       FilterPolicy:
-        eventSource: 
+        eventSource:
           - "aws:s3"
         eventName:
           - "ObjectCreated:Put"
           - "ObjectCreated:Post"
           - "ObjectCreated:CompleteMultipartUpload"
 
-  # S3 Bucket Notification Configuration  
+  # S3 Bucket Notification Configuration
   S3BucketNotification:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt S3NotificationFunction.Arn
       BucketName: !Ref CentralLoggingBucket
       TopicArn: !Ref LogDeliveryTopic
-      
+
   S3NotificationFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -541,7 +529,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringLike:
-                'aws:userid': !If 
+                'aws:userid': !If
                   - HasEksOidcIssuer
                   - !Sub '${VectorRole.RoleId}:*'
                   - 'AIDAI*'  # Allow any IAM user/role in the account if no Vector role
@@ -554,7 +542,7 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:PutObjectAcl
-                Resource: 
+                Resource:
                   - !Sub '${CentralLoggingBucket.Arn}/*'
               - Effect: Allow
                 Action:

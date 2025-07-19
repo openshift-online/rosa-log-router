@@ -13,21 +13,6 @@ Parameters:
     Default: multi-tenant-logging
     Description: Name of the project for resource naming
     
-  LambdaReservedConcurrency:
-    Type: Number
-    Default: 100
-    MinValue: 1
-    MaxValue: 1000
-    Description: Reserved concurrency for the log distributor Lambda function
-    
-  LambdaMaxConcurrency:
-    Type: Number
-    Default: 50
-    MinValue: 1
-    MaxValue: 1000
-    Description: Maximum concurrency for Lambda event source mapping
-    
-    
   LogDistributorRoleArn:
     Type: String
     Description: ARN of the log distributor Lambda IAM role
@@ -39,14 +24,6 @@ Parameters:
   LogDeliveryQueueArn:
     Type: String
     Description: ARN of the log delivery SQS queue
-    
-  CostCenter:
-    Type: String
-    Default: ""
-    Description: Cost center for billing allocation
-
-Conditions:
-  HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
 
 Resources:
   # CloudWatch Log Group for Lambda functions
@@ -104,7 +81,8 @@ Resources:
           TENANT_CONFIG_TABLE: !Ref TenantConfigTableName
           MAX_BATCH_SIZE: "1000"
           RETRY_ATTEMPTS: "3"
-      ReservedConcurrencyLimit: !Ref LambdaReservedConcurrency
+      Timeout: 120
+      MemorySize: 512
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-log-distributor'
@@ -114,8 +92,6 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # Event Source Mapping for SQS to Lambda
   LogDeliveryEventSourceMapping:
@@ -125,7 +101,6 @@ Resources:
       FunctionName: !Ref LogDistributorFunction
       BatchSize: 10
       MaximumBatchingWindowInSeconds: 5
-      MaximumConcurrency: !Ref LambdaMaxConcurrency
 
 
 Outputs:
