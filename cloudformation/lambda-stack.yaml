@@ -21,11 +21,72 @@ Parameters:
     Type: String
     Description: Name of the tenant configuration DynamoDB table
     
-  LogDeliveryQueueArn:
+  LogDeliveryTopicArn:
     Type: String
-    Description: ARN of the log delivery SQS queue
+    Description: ARN of the log delivery SNS topic
 
 Resources:
+  # SQS queue for log delivery processing
+  LogDeliveryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-queue'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeout: 900    # 15 minutes
+      ReceiveMessageWaitTimeSeconds: 20 # Long polling
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LogDeliveryDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Dead Letter Queue for failed messages
+  LogDeliveryDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # SQS queue policy
+  LogDeliveryQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref LogDeliveryQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSNSMessages
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt LogDeliveryQueue.Arn
+            Condition:
+              ArnEquals:
+                'aws:SourceArn': !Ref LogDeliveryTopicArn
+
+  # SNS subscription: SNS topic to SQS queue
+  LogDeliveryQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LogDeliveryTopicArn
+      Protocol: sqs
+      Endpoint: !GetAtt LogDeliveryQueue.Arn
+      # No filter policy - S3 notifications don't use message attributes
+
   # CloudWatch Log Group for Lambda functions
   LogDistributorLogGroup:
     Type: AWS::Logs::LogGroup
@@ -40,7 +101,6 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Dead Letter Queue for failed Lambda invocations
 
   # Main Lambda function for log distribution
   LogDistributorFunction:
@@ -97,7 +157,7 @@ Resources:
   LogDeliveryEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
-      EventSourceArn: !Ref LogDeliveryQueueArn
+      EventSourceArn: !GetAtt LogDeliveryQueue.Arn
       FunctionName: !Ref LogDistributorFunction
       BatchSize: 10
       MaximumBatchingWindowInSeconds: 5
@@ -115,3 +175,21 @@ Outputs:
     Value: !GetAtt LogDistributorFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorFunctionArn'
+
+  LogDeliveryQueueArn:
+    Description: ARN of the log delivery SQS queue
+    Value: !GetAtt LogDeliveryQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
+
+  LogDeliveryQueueName:
+    Description: Name of the log delivery SQS queue
+    Value: !GetAtt LogDeliveryQueue.QueueName
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueName'
+
+  LogDeliveryDLQArn:
+    Description: ARN of the log delivery DLQ
+    Value: !GetAtt LogDeliveryDLQ.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryDLQArn'

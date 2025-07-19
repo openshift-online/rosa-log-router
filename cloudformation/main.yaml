@@ -103,7 +103,7 @@ Resources:
         ProjectName: !Ref ProjectName
         LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
-        LogDeliveryQueueArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryQueueArn
+        LogDeliveryTopicArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryTopicArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -155,16 +155,17 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
   
-  # SNS/SQS Outputs
+  # SNS Outputs
   LogDeliveryTopicArn:
     Description: ARN of the log delivery SNS topic
     Value: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryTopicArn
     Export:
       Name: !Sub '${AWS::StackName}-LogDeliveryTopicArn'
   
+  # SQS Outputs (from Lambda stack)
   LogDeliveryQueueArn:
     Description: ARN of the log delivery SQS queue
-    Value: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryQueueArn
+    Value: !GetAtt LambdaStack.Outputs.LogDeliveryQueueArn
     Export:
       Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
   
