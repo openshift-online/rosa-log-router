@@ -6,12 +6,12 @@
 set -e  # Exit on any error
 
 # Default values
-ENVIRONMENT="production"
+ENVIRONMENT="development"
 PROJECT_NAME="multi-tenant-logging"
-REGION="us-east-1"
+REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
 TEMPLATE_BUCKET=""
-PROFILE=""
+PROFILE="${AWS_PROFILE:-}"
 DRY_RUN=false
 VALIDATE_ONLY=false
 
@@ -47,7 +47,7 @@ Usage: $0 [OPTIONS]
 Deploy the multi-tenant logging infrastructure using CloudFormation.
 
 OPTIONS:
-    -e, --environment ENV       Environment name (production, staging, development). Default: production
+    -e, --environment ENV       Environment name (production, staging, development). Default: development
     -p, --project-name NAME     Project name. Default: multi-tenant-logging
     -r, --region REGION         AWS region. Default: us-east-1
     -s, --stack-name NAME       CloudFormation stack name. Default: PROJECT_NAME-ENVIRONMENT
@@ -136,6 +136,11 @@ if [[ ! "$ENVIRONMENT" =~ ^(production|staging|development)$ ]]; then
     exit 1
 fi
 
+# Update stack name if not explicitly provided
+if [[ "$STACK_NAME" == "multi-tenant-logging-development" ]]; then
+    STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
+fi
+
 # Set AWS CLI profile if specified
 if [[ -n "$PROFILE" ]]; then
     export AWS_PROFILE="$PROFILE"
@@ -154,15 +159,14 @@ check_aws_cli() {
         exit 1
     fi
     
-    local account_id=$(aws sts get-caller-identity --query Account --output text)
-    local current_region=$(aws configure get region)
+    local account_id=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
     print_status "AWS Account: $account_id"
-    print_status "Current region: ${current_region:-$REGION}"
+    print_status "Current region: $REGION"
 }
 
 # Function to check if S3 bucket exists
 check_template_bucket() {
-    if ! aws s3api head-bucket --bucket "$TEMPLATE_BUCKET" 2>/dev/null; then
+    if ! aws s3api head-bucket --bucket "$TEMPLATE_BUCKET" --region "$REGION" 2>/dev/null; then
         print_error "S3 bucket '$TEMPLATE_BUCKET' does not exist or is not accessible."
         print_status "Creating S3 bucket '$TEMPLATE_BUCKET'..."
         
@@ -186,7 +190,7 @@ check_template_bucket() {
 # Function to upload templates to S3
 upload_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("core-infrastructure.yaml" "kinesis-stack.yaml" "lambda-stack.yaml" "monitoring-stack.yaml")
+    local templates=("core-infrastructure.yaml" "lambda-stack.yaml")
     
     print_status "Uploading nested templates to S3..."
     
@@ -209,7 +213,7 @@ upload_templates() {
 # Function to validate templates
 validate_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("main.yaml" "core-infrastructure.yaml" "kinesis-stack.yaml" "lambda-stack.yaml" "monitoring-stack.yaml")
+    local templates=("main.yaml" "core-infrastructure.yaml" "lambda-stack.yaml")
     
     print_status "Validating CloudFormation templates..."
     
@@ -275,10 +279,28 @@ deploy_stack() {
         print_status "Creating new stack: $STACK_NAME"
     fi
     
+    # Generate random suffix for unique resource names
+    local random_suffix
+    if command -v openssl &> /dev/null; then
+        random_suffix=$(openssl rand -hex 4)
+    else
+        # Fallback method using /dev/urandom
+        random_suffix=$(head -c 1000 /dev/urandom | tr -dc 'a-f0-9' | head -c 8)
+    fi
+    
+    if [[ -z "$random_suffix" || ${#random_suffix} -ne 8 ]]; then
+        # Fallback to timestamp-based suffix if random generation fails
+        random_suffix=$(date +%s | tail -c 8)
+    fi
+    
+    print_status "Generated random suffix: $random_suffix"
+    
     # Prepare parameters
     local parameters=(
         "Environment=$ENVIRONMENT"
         "ProjectName=$PROJECT_NAME"
+        "TemplateBucket=$TEMPLATE_BUCKET"
+        "RandomSuffix=$random_suffix"
     )
     
     # Add optional parameters if not default
@@ -368,10 +390,8 @@ AWS Profile:    ${PROFILE:-default}
 
 Templates:
 - main.yaml (main template)
-- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM)
-- kinesis-stack.yaml (Firehose, Glue catalog)
-- lambda-stack.yaml (Lambda functions)
-- monitoring-stack.yaml (CloudWatch, SNS/SQS)
+- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS)
+- lambda-stack.yaml (Lambda functions, SQS)
 
 ========================================
 
@@ -404,8 +424,8 @@ main() {
         print_success "Deployment completed successfully!"
         
         # Display useful information
-        print_status "CloudWatch Dashboard: https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#dashboards:name=${PROJECT_NAME}-${ENVIRONMENT}-overview"
         print_status "CloudFormation Console: https://${REGION}.console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks/stackinfo?stackId=${STACK_NAME}"
+        print_status "Lambda Function: https://${REGION}.console.aws.amazon.com/lambda/home?region=${REGION}#/functions/${PROJECT_NAME}-${ENVIRONMENT}-log-distributor"
     else
         print_error "Deployment failed!"
         exit 1

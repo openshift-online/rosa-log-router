@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a multi-tenant logging pipeline infrastructure for AWS that implements a "Centralized Ingestion, Decentralized Delivery" architecture. The system collects logs from Kubernetes/OpenShift clusters using Vector agents, processes them through AWS services, and delivers them to individual customer AWS accounts.
+**This is a PROOF OF CONCEPT (POC) project** for a multi-tenant logging pipeline infrastructure on AWS that implements a "Centralized Ingestion, Decentralized Delivery" architecture. The system collects logs from Kubernetes/OpenShift clusters using Vector agents, writes them directly to S3, and delivers them to individual customer AWS accounts.
+
+**POC Status**: This project is focused on demonstrating core functionality with minimal complexity. Advanced monitoring, alerting, and optimization features should be added incrementally after the core pipeline is validated.
 
 ## Development Commands
 
@@ -57,8 +59,15 @@ aws cloudwatch get-metric-statistics \
   --period 3600 \
   --statistics Sum
 
-# Check Firehose status
-aws firehose describe-delivery-stream --delivery-stream-name central-logging-stream
+# Check S3 bucket metrics
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/S3 \
+  --metric-name NumberOfObjects \
+  --dimensions Name=BucketName,Value=multi-tenant-logging-production-central \
+  --start-time 2024-01-01T00:00:00Z \
+  --end-time 2024-01-01T23:59:59Z \
+  --period 3600 \
+  --statistics Average
 ```
 
 ## Architecture Overview
@@ -66,31 +75,32 @@ aws firehose describe-delivery-stream --delivery-stream-name central-logging-str
 The system consists of 5 main stages:
 
 1. **Collection**: Vector agents deployed as DaemonSets collect logs from Kubernetes pods and enrich them with tenant metadata
-2. **Ingestion**: Kinesis Data Firehose provides centralized, scalable ingestion with dynamic partitioning
-3. **Staging**: S3 serves as a staging area with lifecycle policies for cost optimization
-4. **Notification**: SNS/SQS hub-and-spoke pattern for event-driven processing
+2. **Direct Storage**: Vector writes logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
+3. **Notification**: S3 event notifications trigger SNS/SQS hub-and-spoke pattern for event-driven processing
+4. **Processing**: Lambda function processes S3 events from SQS queue
 5. **Delivery**: Lambda function assumes cross-account roles to deliver logs to customer CloudWatch Logs
 
 ## Key Components
 
 ### Vector Configuration (`k8s/vector-config.yaml`)
 - Collects logs from `/var/log/pods/**/*.log`
-- Enriches with tenant metadata from pod labels (`customer-tenant-id`, `cluster-id`, `environment`)
+- Enriches with tenant metadata from pod annotations (`customer-id`, `cluster-id`, `environment`, `application`)
 - Filters out system logs and unknown tenants
-- Structures data for Firehose dynamic partitioning
+- Writes directly to S3 with dynamic key prefixing
 - Uses disk-based buffering for reliability
+- Batch settings: 10MB / 5 minutes
 
 ### Lambda Function (`lambda/log_distributor.py`)
 - Processes SQS messages containing S3 events
-- Extracts tenant information from S3 object keys
+- Extracts tenant information from S3 object keys (customer_id/cluster_id/application/pod_name)
 - Assumes cross-account roles using ABAC (Attribute-Based Access Control)
-- Handles both Parquet and JSON log formats
+- Handles gzip-compressed JSON log formats
 - Delivers logs to customer CloudWatch Logs in batches
 
 ### CloudFormation Infrastructure (`cloudformation/`)
 - Customer-deployed logging infrastructure with single template
 - Comprehensive monitoring with CloudWatch dashboards and alarms
-- Cost optimization features (S3 lifecycle, Parquet conversion, intelligent tiering)
+- Cost optimization features (S3 lifecycle, GZIP compression, intelligent tiering)
 - Security best practices (encryption, least privilege IAM)
 
 ## Security Model
@@ -112,15 +122,16 @@ The system uses a double-hop Attribute-Based Access Control (ABAC) architecture 
 - `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the central log distribution role for double-hop access
 
 ### Vector ConfigMap
-- `AWS_REGION`: AWS region for Firehose stream
-- `KINESIS_STREAM_NAME`: Name of the Firehose delivery stream
+- `AWS_REGION`: AWS region for S3 bucket
+- `S3_BUCKET_NAME`: Name of the central S3 bucket
+- `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role
 - `CLUSTER_ID`: Cluster identifier for log metadata
 
 ## Cost Optimization
 
 The architecture prioritizes cost efficiency:
-- Firehose buffer: 128MB/15 minutes for optimal batching
-- Parquet format conversion reduces S3 storage costs by 80-90%
+- Direct S3 writes eliminate Firehose costs (~$50/TB saved)
+- GZIP compression reduces storage costs
 - S3 lifecycle policies with tiered storage
 - Lambda batch processing (10 SQS messages per invocation)
 - Intelligent tiering for infrequently accessed data
@@ -128,9 +139,9 @@ The architecture prioritizes cost efficiency:
 ## Common Issues and Solutions
 
 ### Vector Not Sending Logs
-- Check IAM role permissions for Firehose access
-- Verify Kubernetes RBAC configuration
-- Ensure pod labels include required tenant metadata
+- Check IAM role permissions for S3 access
+- Verify S3WriterRole trust policy configuration
+- Ensure pod annotations include required tenant metadata
 
 ### Lambda Function Errors
 - Check CloudWatch Logs: `/aws/lambda/log-distributor`
@@ -138,7 +149,7 @@ The architecture prioritizes cost efficiency:
 - Check cross-account role trust policies and session tags
 
 ### High Costs
-- Review Firehose buffer settings (increase for better batching)
+- Review Vector batch settings (increase for better batching)
 - Verify S3 lifecycle policies are active
 - Monitor CloudWatch billing alerts
 

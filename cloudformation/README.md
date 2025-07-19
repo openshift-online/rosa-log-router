@@ -7,10 +7,31 @@ This directory contains CloudFormation templates for deploying the multi-tenant 
 The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" architecture using a nested CloudFormation stack approach:
 
 1. **Main Stack** (`main.yaml`) - Orchestrates nested stacks with parameter passing
-2. **Core Infrastructure** (`core-infrastructure.yaml`) - S3, DynamoDB, KMS, and IAM resources
-3. **Kinesis Stack** (`kinesis-stack.yaml`) - Firehose delivery stream and Glue catalog
-4. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions for log distribution
-5. **Monitoring Stack** (`monitoring-stack.yaml`) - CloudWatch, SNS/SQS, and alerting
+2. **Core Infrastructure** (`core-infrastructure.yaml`) - S3, DynamoDB, KMS, IAM, and native S3 notifications
+3. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions, SQS queues, and event mappings
+
+### Recent Updates (January 2025)
+
+**Major Architectural Improvements:**
+- **Native S3 Notifications** - Replaced custom Lambda functions with native `AWS::S3::Bucket NotificationConfiguration`
+- **Eliminated Circular Dependencies** - Deterministic bucket naming with deploy script parameter generation
+- **Simplified Infrastructure** - Reduced from 3 to 1 Lambda function, removed 159 lines of custom code
+- **Python 3.13 Upgrade** - All Lambda functions upgraded to latest Python runtime
+- **Enhanced Deployment** - Improved deploy script with better validation and error handling
+
+**Previous Major Changes:**
+- **Removed Kinesis Data Firehose** - Vector agents now write directly to S3
+- **Added CentralS3WriterRole** - Secure cross-account S3 access from Vector
+- **Updated Vector Configuration** - Using aws_s3 sink instead of aws_kinesis_firehose
+- **Modified Lambda Processing** - Parsing S3 key format: `customer_id/cluster_id/application/pod_name/`
+- **Integrated S3 Events** - S3 event notifications with SNS/SQS infrastructure
+
+**Infrastructure Quality Improvements:**
+- Fixed IAM policy S3 ARN format errors (using `.Arn` attribute instead of bucket names)
+- Updated nested stack template URLs to use legacy S3 format required by CloudFormation
+- Removed invalid `AWS::DynamoDB::Item` resources from upstream changes
+- Fixed DynamoDB SSE configuration to include required `SSEType` parameter
+- Updated deployment script to properly honor `AWS_PROFILE` and `AWS_REGION` environment variables
 
 ## Quick Start
 
@@ -34,6 +55,11 @@ cd cloudformation/
 
 # Deploy with custom parameters
 ./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
+
+# Deploy using environment variables for AWS configuration
+export AWS_PROFILE=your-profile
+export AWS_REGION=us-east-2
+./deploy.sh -b your-cloudformation-templates-bucket
 ```
 
 ### Validate Templates Only
@@ -51,12 +77,10 @@ cd cloudformation/
 ```
 cloudformation/
 ├── main.yaml                          # Main orchestration template
-├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
-├── kinesis-stack.yaml                 # Firehose and Glue catalog
-├── lambda-stack.yaml                  # Lambda functions and event mappings
-├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, alerting
+├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM, native S3 notifications
+├── lambda-stack.yaml                  # Lambda functions, SQS queues, and event mappings
 ├── customer-log-distribution-role.yaml # Customer account template
-├── deploy.sh                          # Deployment script
+├── deploy.sh                          # Enhanced deployment script with random suffix generation
 └── README.md                          # This file
 ```
 
@@ -64,17 +88,15 @@ cloudformation/
 
 ### Main Template Parameters
 
-| Parameter | Description | Default | Required |
-|-----------|-------------|---------|----------|
-| Environment | Environment name | production | Yes |
-| ProjectName | Project name for resource naming | multi-tenant-logging | Yes |
-| EksOidcIssuer | OIDC issuer URL for EKS cluster | "" | No |
-| LambdaReservedConcurrency | Reserved concurrency for Lambda | 100 | No |
-| FirehoseBufferSizeMB | Firehose buffer size in MB | 128 | No |
-| AlertEmailEndpoints | Email addresses for alerts | "" | No |
-| EnableAnalytics | Enable analytics pipeline | false | No |
-| EnableS3Encryption | Enable S3 encryption | true | No |
-| CostCenter | Cost center for billing | "" | No |
+| Parameter                 | Description                     | Default              | Required |
+|---------------------------|---------------------------------|----------------------|----------|
+| Environment               | Environment name                | development          | Yes |
+| ProjectName               | Project name for resource naming | multi-tenant-logging | Yes |
+| TemplateBucket            | S3 bucket for nested templates | N/A                  | Yes |
+| RandomSuffix              | Random suffix for unique naming | Generated by script  | Yes |
+| EksOidcIssuer             | OIDC issuer URL for EKS cluster | ""                   | No |
+| EnableS3Encryption        | Enable S3 encryption            | true                 | No |
+| EnableS3IntelligentTiering| Enable S3 intelligent tiering   | true                 | No |
 
 ### Environment-Specific Parameters
 
@@ -86,7 +108,6 @@ Create parameter files for different environments:
   "Environment": "production",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 200,
-  "FirehoseBufferSizeMB": 128,
   "AlertEmailEndpoints": "ops@company.com,alerts@company.com",
   "EnableDetailedMonitoring": "true",
   "EnableEnhancedMonitoring": "true",
@@ -100,7 +121,6 @@ Create parameter files for different environments:
   "Environment": "staging",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 50,
-  "FirehoseBufferSizeMB": 64,
   "AlertEmailEndpoints": "dev-team@company.com",
   "EnableDetailedMonitoring": "false",
   "CostCenter": "development"
@@ -147,14 +167,14 @@ OPTIONS:
 
 ### Main Stack Outputs
 
-| Output | Description |
-|--------|-------------|
-| CentralLoggingBucketName | S3 bucket for central logging |
-| TenantConfigTableName | DynamoDB table for tenant configs |
-| FirehoseDeliveryStreamName | Kinesis Firehose stream name |
-| LogDistributorFunctionName | Lambda function name |
-| CloudWatchDashboardURL | CloudWatch dashboard URL |
-| VectorRoleArn | IAM role ARN for Vector |
+| Output                     | Description                       |
+|----------------------------|-----------------------------------|
+| CentralLoggingBucketName   | S3 bucket for central logging     |
+| TenantConfigTableName      | DynamoDB table for tenant configs |
+| LogDistributorFunctionName | Lambda function name              |
+| CentralS3WriterRoleArn     | IAM role ARN for S3 writes        |
+| CloudWatchDashboardURL     | CloudWatch dashboard URL          |
+| VectorRoleArn              | IAM role ARN for Vector           |
 
 ### Using Outputs
 
@@ -176,7 +196,7 @@ aws cloudformation describe-stacks \
 ### CloudWatch Dashboard
 
 The deployment creates a comprehensive dashboard showing:
-- Firehose delivery metrics
+- S3 storage metrics
 - Lambda function performance
 - SQS queue metrics
 - DynamoDB performance
@@ -188,10 +208,9 @@ Access URL: `https://console.aws.amazon.com/cloudwatch/home#dashboards:name=mult
 
 Automatically configured alarms for:
 - Lambda function errors and throttles
-- Firehose delivery failures
 - SQS queue depth and message age
 - DynamoDB throttling
-- Cost anomalies
+- Budget threshold alerts
 
 ### SNS Notifications
 
@@ -213,8 +232,8 @@ aws sns subscribe \
 
 The infrastructure creates minimal IAM roles with least privilege:
 
-- **FirehoseRole**: Allows Firehose to write to S3 and access Glue catalog
-- **VectorRole**: Allows Vector to put records to Firehose
+- **CentralS3WriterRole**: Allows Vector to write logs directly to S3
+- **VectorRole**: Allows Vector to assume the CentralS3WriterRole
 - **LogDistributorRole**: Allows Lambda to read from SQS, DynamoDB, and assume cross-account roles
 - **DLQProcessorRole**: Allows DLQ processing Lambda to send alerts
 
@@ -223,7 +242,6 @@ The infrastructure creates minimal IAM roles with least privilege:
 - **S3**: Server-side encryption with KMS
 - **DynamoDB**: Encryption at rest
 - **SQS/SNS**: Encryption with AWS managed keys
-- **Firehose**: Encryption in transit and at rest
 
 ### Cross-Account Access
 
@@ -260,11 +278,11 @@ Automatic transitions:
 - Glacier → Deep Archive (365 days)
 - Deletion (7 years)
 
-### Firehose Optimization
+### S3 Direct Write Optimization
 
-- Parquet format conversion (80-90% storage savings)
-- Dynamic partitioning for efficient querying
-- Optimized buffer settings (128MB/15 minutes)
+- Gzip compression for storage savings
+- Dynamic partitioning by customer_id/cluster_id/application/pod_name
+- Optimized batch settings (10MB/5 minutes)
 
 ### Lambda Optimization
 
@@ -299,6 +317,22 @@ Automatic transitions:
      --action-names cloudformation:CreateStack \
      --resource-arns "*"
    ```
+
+4. **IAM Policy ARN Format Errors**
+   - Error: `Resource handler returned message: "Resource multi-tenant-logging-production-central-* must be in ARN format"`
+   - Solution: Use `!Sub '${BucketName.Arn}/*'` instead of `!Sub '${BucketName}/*'` in IAM policies
+
+5. **Nested Stack Template URL Errors**
+   - Error: `TemplateURL must be a supported URL`
+   - Solution: Use legacy S3 URL format: `https://s3.amazonaws.com/bucket/path` instead of `https://bucket.s3.region.amazonaws.com/path`
+
+6. **Invalid Resource Type Errors**
+   - Error: `Invalid template resource property 'AWS::DynamoDB::Item'`
+   - Solution: Remove AWS::DynamoDB::Item resources - use Lambda or AWS CLI to populate DynamoDB tables
+
+7. **DynamoDB SSE Configuration Errors**
+   - Error: `One or more parameter values were invalid: SSEType is required`
+   - Solution: Include `SSEType: KMS` when using `KMSMasterKeyId` in SSE configuration
 
 ### Debugging Commands
 

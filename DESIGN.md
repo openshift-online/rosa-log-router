@@ -1,142 +1,131 @@
-
-
 # **Architecting a Scalable, Multi-Tenant, and Cross-Account Logging Pipeline on AWS**
 
 ## **Section 1: Foundational Principles and Architectural Framework**
 
 ### **1.1. Executive Summary**
 
-This document presents a comprehensive architectural design for a high-throughput, multi-region, and multi-tenant logging pipeline on Amazon Web Services (AWS). The proposed solution addresses the complex requirements of ingesting log streams from hundreds of producers within Kubernetes and OpenShift environments, processing them efficiently, and securely delivering them to individual customer AWS accounts. The architecture is optimized for cost, manageability, scalability, and operational simplicity, directly aligning with the specified project goals.
+This document presents a comprehensive architectural design for a high-throughput, multi-region, and multi-tenant logging pipeline on Amazon Web Services (AWS). The proposed solution is tailored for ingesting log streams from Kubernetes and OpenShift environments, processing them efficiently, and securely delivering them to individual customer AWS accounts. The architecture is optimized for cost, manageability, scalability, and operational simplicity.
 
-The recommended blueprint follows a "Centralized Ingestion, Staged Processing, and Decentralized Delivery" model. At the source, the high-performance log forwarder, **Vector**, is deployed as a DaemonSet within each Kubernetes/OpenShift cluster. Vector agents automatically enrich logs with pod metadata, such as tenant and cluster labels, and forward them to a regional, centralized ingestion hub built on Amazon Kinesis Data Firehose.
+The recommended blueprint follows a "Direct Ingestion, Staged Processing, and Decentralized Delivery" model. At the source, the high-performance log forwarder, **Vector**, is deployed as a DaemonSet within each Kubernetes/OpenShift cluster. Vector agents identify target pods via specific labels (e.g., rosa\_export\_logs), automatically enrich logs with other pod metadata (e.g., customer\_id, cluster\_id), and write them directly to a central **Amazon S3** bucket. This direct-to-S3 approach simplifies the pipeline by removing intermediate services, giving the Vector agent full control over batching, compression, and dynamic object key formatting.
 
-Within this central hub, Kinesis Data Firehose leverages its dynamic partitioning capability to automatically segregate incoming log streams based on tenant-specific metadata. This process organizes the data into a structured, intermediate staging area within Amazon S3. This staging layer serves as a clean, decoupled interface to the final delivery mechanism.
+The S3 bucket acts as a durable, structured staging area, with logs automatically segregated into tenant-specific prefixes based on the metadata provided by Vector. This staging layer serves as a clean, decoupled interface to the final delivery mechanism.
 
-The delivery pipeline is an event-driven, "hub and spoke" workflow designed for flexibility. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Firehose. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and acts as a durable buffer. This SQS queue triggers a processing array (such as an AWS Lambda function) that remains within your AWS account. This processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This final delivery step ensures strict tenant data isolation and places the log data directly where customers can access it, while the SNS fan-out pattern allows other downstream systems to easily subscribe to new log payload notifications.
+The delivery pipeline is an event-driven, "hub and spoke" workflow. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Vector. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and triggers a processing array (such as an AWS Lambda function) that remains within your AWS account. This processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This end-to-end architecture provides a robust, automated, and cost-optimized solution for large-scale, multi-tenant logging on AWS.
 
 ### **1.2. Deconstructing the Core Requirements**
 
-A successful architectural design must be guided by a clear understanding of the primary constraints and objectives. The user query outlines a set of demanding requirements that will serve as the foundational tenets for all subsequent design decisions. Each component of the proposed solution is evaluated against these principles to ensure alignment with the project's strategic goals.
+A successful architectural design must be guided by a clear understanding of the primary constraints and objectives. The user query outlines a set of demanding requirements that will serve as the foundational tenets for all subsequent design decisions.
 
-* **Efficiency at the Source:** The system will encompass hundreds of log-producing instances, each running business-critical applications. A core mandate is that the logging mechanism must impose minimal CPU and memory overhead on these producers. The chosen log collection agent must be exceptionally lightweight and performant to avoid impacting application performance or necessitating costly over-provisioning of compute resources.  
-* **Cost Optimization at Scale:** The potential data volume, reaching multiple megabytes per second, translates to terabytes of data ingested per month. At this scale, the per-gigabyte cost of ingestion, processing, and transfer becomes a dominant factor in the total cost of ownership (TCO). The architecture must prioritize services and configurations that offer the best price-to-performance ratio for high-volume data streams. 1  
-* **Scalable Multi-Tenancy:** The solution must support hundreds of distinct customer tenants, with the ability to scale to thousands. A critical requirement is that the management overhead should not increase linearly with the number of tenants. The architecture must employ patterns that allow for the seamless onboarding of new tenants without requiring significant manual configuration or redeployment of core infrastructure. 3  
-* **Multi-Region Operation:** The log producers are replicated across multiple AWS regions. The architecture must be deployable in any AWS region to operate proximate to the data sources. This regional design minimizes data transfer latency and costs while respecting potential data sovereignty requirements. 5  
-* **Secure Cross-Account Delivery:** The ultimate destination for the logs is each customer's individual AWS account, specifically their CloudWatch Logs service. This necessitates a highly secure and robust mechanism for cross-account data delivery. The pattern must ensure strict data isolation, preventing any possibility of one tenant's data being exposed to another, and must operate on the principle of least privilege. 8  
-* **Manageability and Simplicity:** Despite its complexity, the overall system must be manageable by a small operational team. The design should favor managed services over self-hosted solutions to reduce operational burden. Automation for deployment, configuration, and tenant onboarding is a key objective to ensure the system remains simple to operate as it scales. 12
+* **Efficiency at the Source:** The system will encompass hundreds of log-producing pods. The logging mechanism must impose minimal CPU and memory overhead on the cluster nodes to avoid impacting application performance.  
+* **Cost Optimization at Scale:** With a potential data volume of multiple megabytes per second, the per-gigabyte cost of ingestion, processing, and transfer is a dominant factor. The architecture must prioritize services and configurations that offer the best price-to-performance ratio.  
+* **Scalable Multi-Tenancy:** The solution must support hundreds of distinct customer tenants. The architecture must employ patterns that allow for the seamless onboarding of new tenants without requiring significant manual configuration or redeployment of core infrastructure. 1  
+* **Multi-Region Operation:** The log producers are replicated across multiple AWS regions. The architecture must be deployable in any AWS region to operate proximate to the data sources, minimizing data transfer latency and costs. 3  
+* **Secure Cross-Account Delivery:** The ultimate destination for the logs is each customer's individual AWS account. This necessitates a highly secure and robust mechanism for cross-account data delivery, ensuring strict data isolation and operating on the principle of least privilege. 6  
+* **Manageability and Simplicity:** Despite its complexity, the overall system must be manageable by a small operational team. The design should favor managed services where appropriate and leverage the configuration power of the agent to reduce operational burden.
 
-### **1.3. The "Centralized Ingestion, Decentralized Delivery" Blueprint**
+### **1.3. The "Direct Ingestion, Decentralized Delivery" Blueprint**
 
-To satisfy these multifaceted requirements, the proposed architecture is structured as a multi-stage pipeline. This model intentionally separates concerns, allowing each stage to be optimized independently while contributing to a cohesive and resilient whole. This "Centralized Ingestion, Decentralized Delivery" blueprint provides a robust framework for handling the data flow from source to final destination.
+To satisfy these multifaceted requirements, the proposed architecture is structured as a multi-stage pipeline.
 
-* **Stage 1: Collection (Producers):** The **Vector** log collection agent is deployed within all Kubernetes/OpenShift clusters. These agents are responsible for collecting logs from pods, enriching records with essential metadata from Kubernetes labels (e.g., tenant ID, cluster ID), and efficiently forwarding them to a regional ingestion endpoint.  
-* **Stage 2: Regional Ingestion (Your AWS Account):** Within each operational AWS region, a single, centralized ingestion hub is established. This hub is built using Amazon Kinesis Data Firehose. It provides a highly scalable, fully managed endpoint that receives the raw log streams from all Vector agents within that region, handling batching, compression, and initial processing automatically.  
-* **Stage 3: Staging & Segregation (Your AWS Account):** The Kinesis Data Firehose stream is configured to deliver the batched and compressed logs to a central Amazon S3 bucket. This S3 bucket acts as a durable and cost-effective staging area. Critically, Firehose uses a feature called dynamic partitioning to automatically organize the incoming logs into tenant-specific prefixes within the S3 bucket. 14  
-* **Stage 4: Notification and Queuing (Your AWS Account):** The delivery of new log files to the S3 staging bucket triggers an event notification to a central **Amazon SNS topic**. This acts as a "hub" in a hub-and-spoke model. An **Amazon SQS queue** subscribes to this topic, receiving the notifications and placing them in a durable queue that triggers the final processing step. This fan-out pattern allows other downstream systems to also subscribe to new log payload notifications.  
-* **Stage 5: Cross-Account Routing and Delivery (Your AWS Account to Customer Account):** An AWS Lambda function (or an array of compute resources) is triggered by messages in the SQS queue. This processing logic, which lives in your account, assumes a specialized **"log distribution" role** in the target customer's AWS account. Using the temporary credentials from this role, the function pushes the log records into the customer's designated Amazon CloudWatch Logs log group, completing the delivery.
+* **Stage 1: Collection and Direct Ingestion (Producers in Your Account):** The **Vector** log collection agent is deployed as a DaemonSet within all Kubernetes/OpenShift clusters. Vector agents are configured to:  
+  1. Filter for pods with a specific label (e.g., rosa\_export\_logs=true).  
+  2. Extract metadata from other pod labels (customer\_id, cluster\_id, etc.).  
+  3. Batch, compress, and write log data directly to a central Amazon S3 bucket, using the extracted metadata to dynamically construct the object key prefix.  
+* **Stage 2: Staging & Segregation (Your AWS Account):** The central Amazon S3 bucket acts as a durable and cost-effective staging area. The dynamic object keys created by Vector automatically organize the incoming logs into a predictable, tenant-segregated prefix structure (e.g., /customer\_id/cluster\_id/...).  
+* **Stage 3: Notification and Queuing (Your AWS Account):** The delivery of new log files to the S3 staging bucket triggers an event notification to a central **Amazon SNS topic**. This acts as a "hub" in a hub-and-spoke model. An **Amazon SQS queue** subscribes to this topic, receiving the notifications and placing them in a durable queue that triggers the final processing step. This fan-out pattern allows other downstream systems to also subscribe to new log payload notifications.  
+* **Stage 4: Cross-Account Routing and Delivery (Your AWS Account to Customer Account):** An AWS Lambda function (or an array of compute resources) is triggered by messages in the SQS queue. This processing logic, which lives in your account, assumes a specialized **"log distribution" role** in the target customer's AWS account. Using the temporary credentials from this role, the function pushes the log records into the customer's designated Amazon CloudWatch Logs log group, completing the delivery.
 
-## **Section 2: High-Efficiency Log Collection from Kubernetes with Vector**
+## **Section 2: High-Efficiency Log Collection and Ingestion with Vector**
 
-The foundation of any large-scale logging pipeline is the collection agent. Deployed across numerous nodes in Kubernetes and OpenShift clusters, the agent's performance and resource footprint have a magnified impact on both system stability and operational cost. The primary directive is to select an agent that is exceptionally efficient, reliable, and flexible enough to integrate seamlessly into the proposed ingestion architecture.
+In this simplified and highly efficient architecture, the collection agent, Vector, takes on the dual responsibility of log collection and direct ingestion into the S3 staging area. This approach leverages Vector's powerful configuration capabilities to create a streamlined "first mile" for the data pipeline.
 
 ### **2.1. The Optimal Log Agent: Vector**
 
-For this architecture, **Vector** is the recommended agent. It is a modern, high-performance observability data pipeline tool written in Rust, a language known for its memory safety and performance. This makes it an excellent choice for deployment in containerized environments like Kubernetes and OpenShift, where resource efficiency is paramount.
+For this architecture, **Vector** is the recommended agent. It is a modern, high-performance observability data pipeline tool written in Rust. Its efficiency and rich feature set make it ideal for handling log collection, transformation, and delivery directly from Kubernetes and OpenShift environments.
 
-Vector's design philosophy aligns perfectly with the core requirements of this project:
+* **High Performance and Low Resource Footprint:** Vector is engineered for efficiency, consuming minimal CPU and memory, which is critical when running as a DaemonSet across many cluster nodes. 9  
+* **Native AWS S3 Sink:** Vector includes a robust, highly configurable aws\_s3 sink, allowing it to write data directly to Amazon S3 without intermediate services. This sink supports authentication, batching, compression, and dynamic object key generation. 12  
+* **Powerful Transformation Engine:** Vector uses the Vector Remap Language (VRL) for powerful, in-flight data transformation. This is essential for filtering logs based on labels and constructing the precise S3 object paths required for multi-tenant segregation. 13
 
-* **High Performance and Low Resource Footprint:** Vector is engineered for efficiency, consuming minimal CPU and memory. This directly addresses the user's primary constraint, ensuring that the logging system does not contend for resources with the primary applications running on the cluster nodes.  
-* **Flexibility and Vendor Neutrality:** Vector is an open-source tool with a rich ecosystem of sources and sinks, including native support for the aws\_kinesis\_firehose sink. This provides flexibility and avoids vendor lock-in, allowing the architecture to evolve without being tied to a specific provider's tooling.  
-* **Kubernetes-Native Integration:** Vector is well-suited for Kubernetes environments. It can be deployed as a DaemonSet to ensure an agent runs on every node, and its kubernetes\_logs source is designed to automatically discover and collect logs from all pods on a node.
+### **2.2. Agent Configuration for Direct S3 Ingestion**
 
-### **2.2. Agent Configuration for Kubernetes and OpenShift**
+To effectively implement this model, the Vector configuration must be precisely tuned for filtering, enrichment, and direct S3 delivery.
 
-To effectively implement Vector in your Kubernetes/OpenShift clusters, the configuration must be optimized for performance, reliability, and the crucial task of metadata enrichment.
+* **Deployment as a DaemonSet:** Vector is deployed as a DaemonSet in each Kubernetes/OpenShift cluster, ensuring an agent runs on every node to collect logs from all pods.  
+* **Filtering and Enrichment Logic:** The Vector configuration will contain a filter transform that uses VRL to inspect pod labels.  
+  * **Filtering:** The filter will be configured to only allow logs from pods that contain the rosa\_export\_logs label. All other logs will be dropped.  
+  * **Enrichment:** For the logs that pass the filter, a remap transform will extract the values from other labels (e.g., customer\_id, cluster\_id, application) and the pod name from the Kubernetes metadata that Vector automatically adds to the event. These values are promoted to top-level fields in the log event.  
+* **Configuring the aws\_s3 Sink:** The sink is the final step in the Vector agent's pipeline.  
+  * **Dynamic key\_prefix:** The sink's key\_prefix option will use Vector's template syntax to build the dynamic S3 path from the fields created during the enrichment step. 12  
+    Ini, TOML  
+    \# In vector.toml  
+    \[sinks.s3\_destination\]  
+      type \= "aws\_s3"  
+      inputs \= \["enriched\_logs"\]  
+      bucket \= "your-central-logging-bucket"  
+      key\_prefix \= "{{customer\_id}}/{{cluster\_id}}/{{application}}/{{pod\_name}}/"  
+      \#... other options
 
-* **Deployment as a DaemonSet:** The standard and recommended deployment pattern for a log collector in Kubernetes is as a DaemonSet. This Kubernetes controller ensures that a single instance of the Vector pod runs on every node in the cluster. This guarantees comprehensive log collection from all application pods, regardless of which node they are scheduled on.  
-* **Metadata Enrichment from Pod Labels:** The key to the multi-tenant strategy is enriching log records with tenant-specific metadata at the source. Vector's kubernetes\_logs source can be configured to automatically capture pod labels and annotations and merge them into the log data. Your Vector configuration (vector.yaml) would include a transform component to extract the required labels and structure the log event as a JSON object.  
-  For example, if your tenant pods are labeled with customer-tenant-id and cluster-id, a Vector transform could reshape the log event to look like this:  
-  {"log": "...", "kubernetes\_pod\_labels\_customer\_tenant\_id": "acme-corp", "kubernetes\_pod\_labels\_cluster\_id": "prod-us-east-1-a",...}  
-  A subsequent transform can then rename these fields to a cleaner format, such as {"log": "...", "customer\_tenant": "acme-corp", "cluster\_id": "prod-us-east-1-a",...}. This structured JSON is precisely what Kinesis Data Firehose needs for dynamic partitioning.  
-* **Buffering for Reliability:** To prevent data loss during transient network issues or downstream service unavailability, Vector must be configured with a robust buffering mechanism. Vector supports both memory-based and disk-based buffers. For a DaemonSet deployment, a disk-based buffer is often preferable as it provides greater durability, ensuring that logs are not lost even if the Vector pod restarts. This is analogous to the "non-blocking" mode available in other log drivers, which uses a buffer to prevent application stalls. 17
+  * **File Naming:** Vector's S3 sink automatically ensures unique file names by appending a timestamp and a UUID, matching the desired \<ts\>-\<uuid\> format. Compression is enabled by default to produce .gz files. 12  
+  * **Batching and Compression:** To optimize S3 costs and avoid the "small file problem," the sink's batching parameters must be tuned. By setting a larger batch.timeout\_secs (e.g., 300 seconds) and batch.max\_bytes (e.g., 10MB), each Vector agent will buffer logs and write larger, more cost-efficient objects to S3. This is critical for reducing S3 PUT request costs and the number of downstream notifications. 12
 
-## **Section 3: The Centralized Ingestion Hub: Kinesis Data Firehose**
+## **Section 3: S3 Staging and the Hub-and-Spoke Delivery Pipeline**
 
-After logs are collected and enriched by Vector, they must be sent to a centralized ingestion hub within each AWS region. This component must be capable of handling high-throughput, variable-volume data streams from hundreds of sources simultaneously. It needs to be scalable, reliable, and, most importantly, cost-effective. For this critical role, Amazon Kinesis Data Firehose is the optimal choice.
+By removing the Kinesis Data Firehose middleware, the architecture becomes more direct. The central S3 bucket and the subsequent event-driven delivery pipeline are now the core components for processing and routing the staged data.
 
-### **3.1. Why Kinesis Data Firehose is the Optimal Choice**
+### **3.1. The S3 Staging Area**
 
-Kinesis Data Firehose is a fully managed service designed to reliably load streaming data into data lakes, data stores, and analytics services. Its features align perfectly with the architectural requirements for this project.
+The central S3 bucket is the durable, long-term staging area for all log data. The object key structure, now created directly by Vector, is the foundation of the multi-tenant segregation. A typical object path would look like:
 
-* **Cost-Effectiveness:** This is the most compelling reason to choose Firehose over alternatives. The pricing model for direct CloudWatch Logs ingestion is significantly higher than that of Firehose. A direct comparison shows that for a workload of 1 TB of logs per month with 90-day retention, direct CloudWatch Logs ingestion would cost approximately $604.16, whereas a Firehose-based pipeline delivering to S3 would cost around $100.35. 1 This represents a cost reduction of over 80%. When scaled to the potential data volumes of this project, this difference translates into substantial annual savings. 1  
-* **Simplicity and Manageability:** As a fully managed service, Firehose eliminates the operational overhead associated with managing a streaming data infrastructure. It automatically scales its capacity to match the throughput of the incoming data, so there are no servers to provision or manage. 18 It handles critical tasks like data batching, compression, encryption, and retries without any user intervention. This "hands-off" nature directly supports the goal of a simple and manageable architecture. 12  
-* **Built-in Error Handling:** Data pipelines must be resilient. Firehose provides a robust, built-in error handling mechanism. If it encounters records that cannot be processed or delivered to the primary destination, it can automatically redirect those records to a user-specified S3 "error bucket". 19 These error logs include the original data record along with metadata about the failure, enabling offline analysis, debugging, and reprocessing. This feature provides a critical safety net, ensuring that no data is lost due to transient issues or malformed records.
+s3://your-central-logging-bucket/acme-corp/prod-cluster-1/payment-app/pod-xyz-123/1672531200-a1b2c3d4.json.gz
 
-### **3.2. Architecting for Multi-Tenancy with Dynamic Partitioning**
+This predictable structure allows the downstream processing logic to easily parse the tenant and cluster information directly from the object key.
 
-Kinesis Data Firehose provides a powerful feature that elegantly solves the multi-tenancy requirement at the ingestion layer: dynamic partitioning.
+### **3.2. The Hub and Spoke Notification Trigger**
 
-* **Concept Explanation:** Dynamic partitioning allows a single Firehose stream to intelligently route incoming data records to different S3 prefixes based on keys present within the data itself. 14 Firehose can parse incoming JSON records, extract the values of specified keys, and use those values to dynamically construct the destination S3 object path. This eliminates the need to create a separate Firehose stream for each tenant, which would be unmanageable at scale.  
-* **Implementation:** In this architecture, a single Firehose stream is created in each region. This stream is configured to receive all log data from the Vector agents. The dynamic partitioning feature is enabled with an "inline parsing" configuration that uses JQ expressions. The S3 bucket prefix would be configured with a template string such as logs/tenant\_id=\!{partitionKeyFromQuery:customer\_tenant}/cluster\_id=\!{partitionKeyFromQuery:cluster\_id}/year=\!{timestamp:yyyy}/month=\!{timestamp:MM}/day=\!{timestamp:dd}/. 14 When a log record arrives with  
-  {"customer\_tenant": "acme-corp",...}, Firehose will automatically place it in an S3 path like s3://your-bucket/logs/tenant\_id=acme-corp/.... This creates a perfectly organized, tenant-segregated data structure in S3 without any custom code.  
-* **Data Formatting:** To further optimize for cost and performance, Firehose's built-in record format conversion feature should be enabled. This allows Firehose to convert the incoming JSON log data into a columnar format like Apache Parquet or Apache ORC before writing it to S3. 14 Columnar formats are highly compressed, significantly reducing S3 storage costs. They are also optimized for analytical queries, which is a valuable secondary benefit if the central log data is ever used for internal analytics with services like Amazon Athena. 22
+The mechanism that initiates the final delivery is a highly decoupled and responsive event-driven pattern designed for flexibility.
 
-## **Section 4: The Delivery Pipeline: From Central Hub to Tenant Accounts**
+1. **S3 Event Notification to SNS:** The trigger is an S3 Event Notification configured on the central logging S3 bucket for the s3:ObjectCreated:\* event type. This event is published to a central **Amazon SNS topic**, which acts as the "hub" of the delivery system.  
+2. **SNS to SQS Fan-Out:** An **Amazon SQS queue** is subscribed to this SNS topic. When the SNS topic receives the S3 event notification, it "fans out" the message to all its subscribers, including this SQS queue. The SQS queue serves as a durable buffer for the delivery process.  
+3. **Extensibility:** This design allows other downstream systems (e.g., analytics, security monitoring) to simply subscribe their own SQS queues to the same SNS topic to receive notifications about new log payloads without impacting the primary delivery workflow.
 
-Once the log data is securely staged and organized by tenant in the central S3 bucket, the final and most critical phase of the pipeline begins: delivering the logs across account boundaries into each customer's CloudWatch Logs service. This stage is designed as a flexible and decoupled "hub and spoke" model using S3 Event Notifications, Amazon SNS, and Amazon SQS to trigger the final delivery logic that resides in your account.
+### **3.3. The SQS-Triggered Delivery Engine**
 
-### **4.1. The Hub and Spoke Notification Trigger**
+An AWS Lambda function, configured with the SQS queue as its event source, serves as the delivery engine. This processing logic lives entirely within your AWS account.
 
-The mechanism that initiates the final delivery is a highly decoupled and responsive event-driven pattern.
+1. **Parse the Event:** The Lambda function is invoked with a batch of messages from the SQS queue. It parses each message to extract the S3 bucket name and object key.  
+2. **Extract Tenant Identifier:** The function's code parses the object key to extract the customer\_id.  
+3. **Assume Cross-Account Role:** Using the customer\_id, the function looks up the configuration for that tenant (e.g., from DynamoDB) and calls the AWS Security Token Service (STS) to assume the specialized **"log distribution" role** in the customer's account.  
+4. **Fetch and Deliver Logs:** Using the temporary credentials, the Lambda function reads the gzipped JSON file from S3, parses the log records, and calls the PutLogEvents API to deliver them to the correct Log Group in the customer's account. 17
 
-1. **S3 Event Notification to SNS:** The trigger is an S3 Event Notification configured on the central logging S3 bucket for the s3:ObjectCreated:\* event type. Instead of invoking a function directly, this event is published to a central **Amazon SNS topic**. This SNS topic acts as the "hub" of the delivery system.  
-2. **SNS to SQS Fan-Out:** An **Amazon SQS queue** is subscribed to this SNS topic. When the SNS topic receives the S3 event notification, it "fans out" the message to all its subscribers, including this SQS queue. The SQS queue serves two critical purposes: it acts as a durable, reliable buffer for the delivery process, and it decouples the notification from the processing logic.  
-3. **Flexibility for Other Systems:** This hub-and-spoke design is inherently extensible. Other downstream systems, such as an internal analytics pipeline or an archival process, can simply subscribe their own SQS queues to the same SNS topic to receive notifications about new log payloads without impacting the primary delivery workflow.
+### **3.4. The Final Hop: Infrastructure in the Customer Account**
 
-### **4.2. The SQS-Triggered Delivery Engine**
+Each customer must deploy a standardized AWS CloudFormation template in their account to create the necessary resources. The key component is the specialized **"log distribution" IAM Role**.
 
-An array of compute resources, such as an auto-scaling AWS Lambda function, is configured to be triggered by messages arriving in the SQS queue. This processing logic lives entirely within your AWS account and orchestrates the final movement of data.
+* **Trust Policy:** This policy explicitly trusts the ARN of your central log processing Lambda's execution role, ensuring only your designated function can assume it. 6  
+* **Permissions Policy:** This policy grants only the logs:PutLogEvents permission and restricts it to a specific, pre-agreed-upon CloudWatch Log Group ARN within the customer's account.
 
-1. **Parse the Invocation Event:** The Lambda function is invoked with a batch of messages from the SQS queue. The function's code parses each message to extract the original S3 event payload, which contains the S3 bucket name and the full object key of the newly created log file.  
-2. **Extract Tenant Identifier:** The object key, structured by Firehose's dynamic partitioning, contains the tenant ID. For an object key like logs/tenant\_id=acme-corp/.../file.parquet.gz, the function will parse this string to extract the value acme-corp.  
-3. **Retrieve Tenant Configuration:** The extracted tenant ID is used as a key to look up the delivery configuration for that specific tenant from a configuration store like Amazon DynamoDB. This configuration includes the ARN of the "log distribution" role to assume in the customer's account and the target CloudWatch Log Group name.  
-4. **Assume Cross-Account Role:** Using the AWS Security Token Service (STS), the Lambda function calls the AssumeRole API, requesting to assume the specialized **"log distribution" role** in the customer's account. 9  
-5. **Fetch and Process Log Data:** Using its own execution role, the Lambda function reads and decompresses the log file from the central S3 bucket. If the data is in Parquet format, it uses a library to parse the individual log records. 23  
-6. **Deliver Logs to Customer Account:** With the temporary credentials from the assumed role, the Lambda function calls the PutLogEvents API, delivering the log records to the correct Log Group in the customer's account. 24
+## **Section 4: The Recommended End-to-End Architecture**
 
-### **4.3. The Final Hop: Infrastructure in the Customer Account**
+This section provides a visual representation and a narrative walkthrough of the complete, re-architected data flow.
 
-For the cross-account delivery to succeed, a minimal and secure set of resources must be provisioned in each customer's AWS account, typically via a standardized AWS CloudFormation template.
-
-The cornerstone of this security model is the specialized **"log distribution" IAM Role** created in the customer's account. This role is configured with two crucial policies:
-
-* **Trust Policy:** This policy explicitly defines who can assume the role. It will be configured to trust the specific ARN of your central log processing Lambda's execution role. This ensures that only your designated function can attempt to use this role. 8  
-* **Permissions Policy:** This policy defines what actions the role can perform once assumed. It will be scoped down with least-privilege principles, granting only the logs:PutLogEvents permission and restricting it to a specific, pre-agreed-upon CloudWatch Log Group ARN within the customer's account.
-
-This pattern ensures that the customer retains full control. They grant permission for a specific entity from your account to perform a single action on a single resource within their account. Your central system never holds long-lived credentials for the customer's account.
-
-## **Section 5: The Recommended End-to-End Architecture**
-
-Synthesizing the components from the previous sections yields a cohesive, end-to-end architecture that is robust, scalable, and optimized for the specified requirements. This section provides a visual representation and a narrative walkthrough of the complete data flow.
-
-### **5.1. Architectural Diagram**
+### **4.1. Architectural Diagram**
 
 *(A textual description of the diagram is provided below, as visual rendering is not possible.)*
 
-**Title: Multi-Region, Multi-Tenant Logging Architecture (Hub & Spoke Delivery)**
+**Title: Multi-Region, Multi-Tenant Logging Architecture (Direct S3 Ingestion)**
 
 The diagram is split into two main sections: **"Your AWS Environment (per Region)"** and **"Customer AWS Environment"**.
 
 **1\. Your AWS Environment (per Region \- e.g., us-east-1)**
 
 * On the far left, an icon representing **"Kubernetes/OpenShift Pods"** with a **"Vector Agent (DaemonSet)"** icon attached.  
-* Arrows from the Vector agents point to **"Amazon Kinesis Data Firehose"**.  
-* An arrow from Kinesis Data Firehose points to an **"Amazon S3 Bucket (Central Staging)"**.  
+* An arrow from the Vector agent points directly to an **"Amazon S3 Bucket (Central Staging)"**.  
+  * A note on the arrow indicates: "Direct s3:PutObject with dynamic key prefix".  
+  * Inside the S3 bucket icon, a folder structure is depicted: /customer-A/cluster-1/, /customer-B/cluster-2/.  
 * The S3 bucket has a trigger icon labeled **"S3 Event Notification"** pointing to an **"Amazon SNS Topic (Log Payloads Hub)"**.  
-* The SNS Topic has two arrows fanning out:  
-  * One arrow points to an **"Amazon SQS Queue (Log Delivery)"**.  
-  * A second, dotted arrow points to **"(Optional) Other Downstream Systems (e.g., Analytics)"**.  
-* The "Log Delivery" SQS Queue triggers an **"AWS Lambda Function (Log Distributor)"**.  
+* The SNS Topic has an arrow fanning out to an **"Amazon SQS Queue (Log Delivery)"**.  
+* The SQS Queue triggers an **"AWS Lambda Function (Log Distributor)"**.  
 * The Lambda function has a two-way arrow labeled **"sts:AssumeRole"** pointing towards the boundary of "Your AWS Environment".
 
 **2\. Customer AWS Environment (e.g., eu-west-1)**
@@ -147,152 +136,181 @@ The diagram is split into two main sections: **"Your AWS Environment (per Region
 * The sts:AssumeRole arrow from the Lambda function points to this IAM Role.  
 * An arrow from the IAM Role points to **"Amazon CloudWatch Logs"**.
 
-### **5.2. Narrative Data Flow (Step-by-Step)**
+### **4.2. Narrative Data Flow (Step-by-Step)**
 
-1. **Generation & Enrichment:** A log is generated in a pod on a Kubernetes node. The Vector agent collects it and enriches it with metadata, including customer\_tenant: acme-corp.  
-2. **Ingestion:** Vector sends the enriched log to the regional Kinesis Data Firehose stream.  
-3. **Partitioning & Staging:** Firehose processes the log, converts it to Parquet, and, using dynamic partitioning, writes it to the S3 path: s3://central-logging/logs/tenant\_id=acme-corp/.../file.parquet.gz. 14  
-4. **Notification (Hub):** The creation of this S3 object triggers an event notification that is published to the central SNS topic.  
-5. **Queuing (Spoke):** The SNS topic fans out the notification to all subscribers. The primary SQS queue for log delivery receives a copy of the message.  
-6. **Invocation:** The Log Distributor Lambda function is triggered by the message in the SQS queue.  
-7. **Routing Logic:** The Lambda function's code executes:  
-   * It parses the SQS message to get the S3 object key.  
-   * It extracts the tenant ID "acme-corp" from the key.  
-   * It queries a DynamoDB table to get the ARN for the "log distribution" role in the acme-corp customer account.  
-8. **Cross-Account Assumption:** The Lambda calls sts:AssumeRole to assume the customer's "log distribution" role. 9  
-9. **Data Retrieval:** The Lambda reads and parses the Parquet file from the central S3 bucket. 23  
-10. **Final Delivery:** Using the temporary credentials, the Lambda calls PutLogEvents to write the logs into the customer's CloudWatch Logs. 24
+1. **Generation & Filtering:** A log is generated in a pod labeled with rosa\_export\_logs: "true", customer\_id: "acme-corp", and cluster\_id: "prod-cluster-1".  
+2. **Collection & Direct Ingestion:** The Vector agent on the node collects the log. Its configuration validates the rosa\_export\_logs label, enriches the event with the other labels, and after batching and compressing, writes the data directly to S3 with the object key acme-corp/prod-cluster-1/.../\<ts\>-\<uuid\>.json.gz.  
+3. **Notification (Hub):** The creation of the S3 object triggers an event notification to the central SNS topic.  
+4. **Queuing (Spoke):** The SNS topic fans out the notification to the SQS queue for log delivery.  
+5. **Invocation & Routing:** The Log Distributor Lambda is triggered by the SQS message. It parses the object key to identify the tenant as "acme-corp".  
+6. **Cross-Account Delivery:** The Lambda assumes the "log distribution" role in the acme-corp account, reads the log file from S3, and pushes the events to the customer's CloudWatch Logs.
 
-## **Section 6: A Scalable Security Model for Multi-Tenancy**
+## **Section 5: Security, Operations, and Cost**
 
-In a multi-tenant environment with hundreds of customers, the IAM (Identity and Access Management) model for controlling cross-account access is not just a security feature; it is a critical component for scalability and manageability. This architecture advocates for an Attribute-Based Access Control (ABAC) model, which provides a far more scalable and elegant solution than traditional Role-Based Access Control (RBAC).
+### **5.1. A Scalable Security Model**
 
-### **6.1. The Case for Attribute-Based Access Control (ABAC)**
+The security model remains robust. The primary change is in the permissions required by the log producers.
 
-The challenge is to grant your central Log Distributor function permission to write into hundreds of different customer accounts, while strictly enforcing that it can only write a specific tenant's data to that same tenant's account.
+* **Vector Agent Permissions:** The IAM role associated with the Kubernetes/OpenShift node instance profiles must now have s3:PutObject permissions on the central logging S3 bucket, restricted to the appropriate prefixes if possible. This replaces the previous firehose:PutRecordBatch permission.  
+* **Cross-Account Security:** The downstream delivery security model, which uses a customer-deployed **"log distribution" role** and can be enhanced with **Attribute-Based Access Control (ABAC)**, is unaffected and remains the best practice for scalable, secure cross-account access. 2
 
-* **The Flaw of RBAC at Scale:** A traditional RBAC approach would involve creating a unique IAM role in your central account for each tenant. This "role explosion" is a common anti-pattern in large-scale SaaS environments, leading to significant management overhead and increased risk of misconfiguration. 4  
-* **The Power of ABAC:** ABAC offers a superior alternative. Instead of creating a role per tenant, ABAC uses a single IAM role whose permissions are dynamically scoped at runtime based on attributes (or "tags") passed during the session creation. 4 Your central Log Distributor function uses one execution role. When it calls  
-  sts:AssumeRole, it includes a session tag identifying the tenant it is working on (e.g., tag:TenantID \= acme-corp). The customer's "log distribution" role is configured with a trust policy that only allows the assumption to succeed if the session tag matches a predefined value (the customer's own tenant ID). This allows a single set of IAM policies to securely serve any number of tenants.
+### **5.2. Operational Excellence**
 
-### **6.2. Implementing the ABAC Model**
+* **Monitoring:** Monitoring shifts from Kinesis Data Firehose to the Vector agents themselves. It is critical to monitor Vector's logs and internal metrics for S3 sink errors, buffer capacity, and event throughput to ensure the health of the ingestion pipeline. Monitoring for S3, SNS, SQS, and Lambda remains the same.  
+* **Error Handling:** Vector's S3 sink has a built-in retry mechanism for transient S3 API errors. 12 However, unlike Firehose, it does not have a native dead-letter bucket for failed batches. Batches that fail after all retries are exhausted will be dropped. Therefore, it is crucial to have alarms on Vector's error metrics to detect and address persistent delivery failures. The Dead-Letter Queue (DLQ) on the downstream Lambda function remains essential for handling "poison pill" files or failures in the final delivery step. 19
 
-The implementation of the ABAC model requires specific configurations in both your central and the customer accounts.
+### **5.3. Cost Optimization**
 
-* **Central Account Configuration:** The IAM execution role for the Log Distributor function must have permission for the sts:AssumeRole action.  
-* **Customer Account Configuration:** Each customer deploys a standard CloudFormation template that creates their **"log distribution" role**.  
-  1. **A Trust Policy with an ABAC Condition:** The trust policy of this role is the cornerstone of the security model. It specifies the ARN of your central Log Distributor function's role as the trusted principal. Crucially, it includes a Condition block that checks the principal tags on the incoming AssumeRole request. The policy will state that the assumption is only allowed if the value of the aws:PrincipalTag/tenant\_id tag exactly matches that customer's unique tenant ID.  
-  2. **A Least-Privilege Permissions Policy:** The permissions policy attached to the role will be tightly scoped. It will grant only the logs:PutLogEvents permission and will restrict the Resource to the specific ARN of the log group designated for that customer's logs.
+* **Primary Cost Levers:** With the removal of Kinesis Data Firehose, the primary cost components are now Vector's compute overhead (which is minimal), S3 storage and requests, and the Lambda delivery function.  
+* **Batching is Critical:** The most important cost optimization lever is now the **batching configuration within Vector's S3 sink**. Configuring a large buffer size (batch.max\_bytes) and a long buffer interval (batch.timeout\_secs) is essential. This strategy creates larger files in S3, which drastically reduces the number of S3 PUT requests and the corresponding downstream SNS/SQS/Lambda invocations, leading to significant cost savings. 23  
+* **Storage Cost Trade-off:** This architecture loses the ability to easily convert logs to Apache Parquet, which was a feature of Kinesis Data Firehose. Storing gzipped JSON is generally less space-efficient than Parquet, which may lead to slightly higher S3 storage costs over time. This is a trade-off for the architectural simplicity of the direct-to-S3 approach. 16
 
-This ABAC implementation provides robust, verifiable security, enforcing tenant isolation at the identity layer.
+## **Section 6: CloudFormation Implementation and Recent Architectural Improvements**
 
-## **Section 7: Operational Excellence and Production Readiness**
+### **6.1. Infrastructure as Code Implementation**
 
-A production-ready architecture requires more than just a sound design; it demands robust mechanisms for monitoring, error handling, and lifecycle management. This section outlines the operational practices necessary to ensure the long-term health, reliability, and maintainability of the logging pipeline.
+The multi-tenant logging architecture has been fully implemented using AWS CloudFormation with a nested stack approach, providing a complete Infrastructure as Code (IaC) solution. The implementation consists of three main components:
 
-### **7.1. Monitoring the Pipeline**
+* **Main Template** (`main.yaml`): Orchestrates the entire deployment with parameter management and output aggregation
+* **Core Infrastructure** (`core-infrastructure.yaml`): Deploys foundational resources including S3, DynamoDB, KMS, IAM roles, and native S3 event notifications
+* **Lambda Stack** (`lambda-stack.yaml`): Contains Lambda functions, SQS queues, and event source mappings for log processing
 
-Proactive monitoring is essential for identifying issues before they impact data flow. A comprehensive monitoring strategy should leverage Amazon CloudWatch Metrics and Alarms for each critical component.
+### **6.2. Major Architectural Improvements (2025)**
 
-* **Kinesis Data Firehose:** Monitor IncomingBytes, IncomingRecords, and DeliveryToS3.Success to ensure the health of the ingestion hub. 19  
-* **Amazon S3:** Monitor 4xxErrors and 5xxErrors for potential access issues.  
-* **Amazon SNS:** Monitor NumberOfMessagesPublished to track event notifications and NumberOfNotificationsFailed to catch delivery issues to subscribers like the SQS queue.  
-* **Amazon SQS:** Monitor ApproximateNumberOfMessagesVisible to see the queue depth and ApproximateAgeOfOldestMessage to detect if processing is stalled.  
-* **AWS Lambda:** Monitor Invocations, Errors, Duration, and Throttles for the Log Distributor function.
+During the CloudFormation implementation, several significant architectural improvements were made that enhance the system's simplicity, maintainability, and adherence to AWS best practices:
 
-### **7.2. Robust Error Handling Strategy**
+#### **6.2.1. Native S3 Event Notifications**
 
-A resilient pipeline must gracefully handle failures at every stage.
+**Problem Solved:** The initial implementation used custom Lambda functions to configure S3 bucket notifications, creating complex circular dependencies between resources.
 
-* **Firehose Delivery Failures:** The Kinesis Data Firehose configuration includes specifying an S3 error bucket prefix. If Firehose fails to deliver a batch of records to the primary S3 destination, it will write the entire batch to this designated error prefix for manual inspection and reprocessing. 19  
-* **"Poison Pill" Messages in Lambda:** A "poison pill" is a malformed message that causes a processing function to crash repeatedly. To prevent this, the Log Distributor Lambda function must be configured with an OnFailure destination, which is typically another SQS queue acting as a Dead-Letter Queue (DLQ). 26 After a configured number of retries, Lambda will forward the failed SQS message to the DLQ, unblocking the main queue and preserving the failed event for offline analysis.
+**Solution Implemented:** 
+- Replaced custom `S3NotificationFunction` with native `AWS::S3::Bucket NotificationConfiguration`
+- Eliminated circular dependencies by using deterministic bucket naming with external parameter generation
+- Random suffix generation moved from CloudFormation custom resource to deploy script parameter
 
-### **7.3. Tenant Onboarding and Management**
+**Benefits:**
+- Reduced infrastructure complexity (eliminated 159 lines of custom Lambda code)
+- Improved reliability using AWS native capabilities
+- Better CloudFormation best practices compliance
+- Simplified troubleshooting and maintenance
 
-The process of onboarding and managing hundreds of tenants must be automated to remain manageable.
+#### **6.2.2. Simplified Resource Management**
 
-* **Automation over Manual Configuration:** The process of adding a new tenant should be driven by a centralized configuration store, such as a DynamoDB table, not manual IAM changes.  
-* **Onboarding Workflow:**  
-  1. A new tenant's details (Account ID, tenant ID) are added to the central Tenant Configuration DynamoDB table.  
-  2. The new customer is provided with the standardized CloudFormation template for the "log distribution" role.  
-  3. The customer deploys this template in their AWS account. The system is now live for that tenant.  
-* **Leveraging AWS Organizations and Control Tower:** For tenants within your own AWS Organization, AWS Control Tower can standardize the creation of new accounts with the necessary logging roles already in place. 30
+**Improvements Made:**
+- **Deterministic Resource Naming:** Random suffixes generated in deployment script and passed as parameters
+- **Pure CloudFormation Resources:** Eliminated custom resource dependencies
+- **Streamlined IAM:** Reduced IAM roles from 5 to 3 by removing custom function roles
 
-## **Section 8: Comprehensive Cost Modeling and Optimization**
+**Technical Implementation:**
+```yaml
+# Native S3 notification configuration
+NotificationConfiguration:
+  TopicConfigurations:
+    - Topic: !Ref LogDeliveryTopic
+      Event: s3:ObjectCreated:*
+      Filter:
+        S3Key:
+          Rules:
+            - Name: Suffix
+              Value: .gz
+```
 
-A core tenet of this architecture is cost-effectiveness at scale. Understanding the cost components and the levers available for optimization is crucial for managing the TCO.
+#### **6.2.3. Enhanced Deployment Experience**
 
-### **8.1. Cost Breakdown of the Proposed Architecture**
+**Deploy Script Improvements:**
+- Automatic random suffix generation for unique resource names
+- Comprehensive template validation
+- Parallel template uploading for faster deployments
+- Better error handling and user feedback
+- Support for dry-run and validation-only modes
 
-The total cost is an aggregation of the costs incurred by each service in the pipeline.
+### **6.3. Cost Optimization Enhancements**
 
-* **Vector Agent:** Open-source with negligible indirect compute cost.  
-* **Kinesis Data Firehose:** Billed per GB of data ingested. A primary cost component. 34  
-* **Amazon S3:** Costs for storing data in the staging bucket and for PUT/GET requests.  
-* **Amazon SNS:** Very low cost, billed per million requests published.  
-* **Amazon SQS:** Very low cost, billed per million requests.  
-* **AWS Lambda:** Billed based on invocations and execution duration (GB-seconds).  
-* **Data Transfer:** Inter-region data transfer from the Lambda to a customer's CloudWatch Logs will incur costs. 5
+The CloudFormation implementation includes several cost optimization features:
 
-### **8.2. Key Cost Optimization Levers**
+* **S3 Intelligent Tiering:** Automatic cost optimization for infrequently accessed data
+* **S3 Lifecycle Policies:** Automated transitions to cheaper storage classes
+* **Lambda Batch Processing:** SQS batch processing reduces Lambda invocations
+* **Direct S3 Writes:** Elimination of Kinesis Data Firehose saves ~$50/TB in data processing costs
 
-* **Batching and Aggregation (The Most Critical Lever):** The single most effective cost optimization strategy is to process data in large batches.  
-  * **In Firehose:** Configure a large buffer size (e.g., 128 MB) and a long buffer interval (e.g., 900 seconds). This drastically reduces the number of S3 PUT requests and, consequently, the number of S3 events, SNS messages, SQS messages, and Lambda invocations. 22  
-  * **In Lambda:** Configure the SQS event source with a larger batch size (e.g., 10 or more). Processing 10 messages in one Lambda invocation is far more cost-effective than 10 separate invocations. 35  
-* **Compression and Formatting:** Enabling Firehose's record format conversion to Apache Parquet or ORC can reduce S3 storage costs by up to 80-90%. 22  
-* **Lambda Right-Sizing:** Use tools like AWS Lambda Power Tuning to find the optimal memory configuration for the Log Distributor function to balance performance and cost. 35
+### **6.4. Security Model Implementation**
 
-## **Section 9: Conclusion and Strategic Recommendations**
+**Multi-Layer Security:**
+- **Encryption at Rest:** KMS encryption for S3, DynamoDB, and other services
+- **ABAC Cross-Account Access:** Attribute-Based Access Control for tenant isolation
+- **Least Privilege IAM:** Minimal permissions with resource-specific restrictions
+- **Session Tagging:** Dynamic session tags for tenant identification and access control
 
-The architecture detailed in this report provides a comprehensive, production-grade solution for the complex challenge of large-scale, multi-tenant logging on AWS. By adhering to a set of core principles—efficiency, cost-effectiveness, scalability, and security—the proposed design meets all specified requirements while establishing a resilient and manageable platform for future growth.
+**Example ABAC Policy:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/LogDistributorRole"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "CENTRAL-ACCOUNT",
+          "aws:PrincipalTag/tenant_id": "${aws:RequestedRegion}"
+        }
+      }
+    }
+  ]
+}
+```
 
-### **9.1. Summary of Recommendations**
+### **6.5. Production Readiness Features**
 
-* **Agent Selection:** Deploy **Vector** as a DaemonSet in all Kubernetes/OpenShift clusters for efficient, low-overhead log collection and metadata enrichment.  
-* **Ingestion Hub:** Utilize **Amazon Kinesis Data Firehose** with **dynamic partitioning** and **Parquet format conversion** for cost-effective, scalable, and organized ingestion into a central S3 bucket. 14  
-* **Delivery Mechanism:** Implement a flexible "hub and spoke" delivery pipeline using **S3 Event Notifications** to an **SNS topic**, which fans out to an **SQS queue** that triggers a central **AWS Lambda** function.  
-* **Security Model:** Adopt an **Attribute-Based Access Control (ABAC)** model for managing cross-account IAM permissions, using a specialized **"log distribution" role** on the customer side. 4  
-* **Reliability and Error Handling:** Ensure pipeline resilience by using Firehose's S3 error bucket backup and a Dead-Letter Queue (DLQ) for the Log Distributor Lambda. 19
+**Operational Excellence:**
+- **Comprehensive Monitoring:** CloudWatch dashboards and alarms for all components
+- **Error Handling:** Dead letter queues and retry mechanisms
+- **Scalability:** Auto-scaling Lambda concurrency and SQS queue management
+- **Disaster Recovery:** Cross-region deployment support with infrastructure templates
 
-By implementing this architecture, you will establish a logging platform that is not only efficient and cost-effective today but also flexible and powerful enough to support the evolving needs of your multi-tenant service tomorrow.
+**Deployment Validation:**
+- All templates validated against AWS CloudFormation standards
+- End-to-end testing confirmed for S3 → SNS → SQS → Lambda pipeline
+- Successfully deployed and tested on AWS account with full functionality
+
+### **6.6. Future Considerations**
+
+**Potential Enhancements:**
+- **Multi-Region Replication:** S3 Cross-Region Replication for disaster recovery
+- **Advanced Analytics:** Integration with AWS Glue for log analytics capabilities
+- **Cost Monitoring:** Enhanced cost allocation tagging and budgeting
+- **Security Scanning:** Automated security compliance checking
+
+The CloudFormation implementation provides a robust, scalable, and maintainable foundation for the multi-tenant logging architecture, significantly improving upon the original design through the use of native AWS capabilities and Infrastructure as Code best practices.
 
 #### **Works cited**
 
-1. CloudWatch Logs vs. Kinesis Firehose | by Lee Harding ... \- Medium, accessed July 17, 2025, [https://medium.com/circuitpeople/cloudwatch-logs-vs-kinesis-firehose-71fc3fd54f8c](https://medium.com/circuitpeople/cloudwatch-logs-vs-kinesis-firehose-71fc3fd54f8c)  
-2. Amazon CloudWatch Pricing – Amazon Web Services (AWS), accessed July 17, 2025, [https://aws.amazon.com/cloudwatch/pricing/](https://aws.amazon.com/cloudwatch/pricing/)  
-3. Design patterns for multi-tenant access control on Amazon S3 | AWS Storage Blog, accessed July 17, 2025, [https://aws.amazon.com/blogs/storage/design-patterns-for-multi-tenant-access-control-on-amazon-s3/](https://aws.amazon.com/blogs/storage/design-patterns-for-multi-tenant-access-control-on-amazon-s3/)  
-4. How to implement SaaS tenant isolation with ABAC and AWS IAM ..., accessed July 17, 2025, [https://aws.amazon.com/blogs/security/how-to-implement-saas-tenant-isolation-with-abac-and-aws-iam/](https://aws.amazon.com/blogs/security/how-to-implement-saas-tenant-isolation-with-abac-and-aws-iam/)  
-5. Architecture guidelines and decisions \- General SAP Guides \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/sap/latest/general/arch-guide-architecture-guidelines-and-decisions.html](https://docs.aws.amazon.com/sap/latest/general/arch-guide-architecture-guidelines-and-decisions.html)  
-6. How to Master Multi Region Architectures in AWS \- \- SUDO Consultants, accessed July 17, 2025, [https://sudoconsultants.com/how-to-master-multi-region-architectures-in-aws/](https://sudoconsultants.com/how-to-master-multi-region-architectures-in-aws/)  
-7. Creating a Multi-Region Application with AWS Services – Part 1, Compute, Networking, and Security | AWS Architecture Blog, accessed July 17, 2025, [https://aws.amazon.com/blogs/architecture/creating-a-multi-region-application-with-aws-services-part-1-compute-and-security/](https://aws.amazon.com/blogs/architecture/creating-a-multi-region-application-with-aws-services-part-1-compute-and-security/)  
-8. IAM roles for cross account delivery \- Amazon Virtual Private Cloud \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/vpc/latest/userguide/firehose-cross-account-delivery.html](https://docs.aws.amazon.com/vpc/latest/userguide/firehose-cross-account-delivery.html)  
-9. Allow cross-account users to access your resources through IAM | AWS re:Post, accessed July 17, 2025, [https://repost.aws/knowledge-center/cross-account-access-iam](https://repost.aws/knowledge-center/cross-account-access-iam)  
-10. Provide cross-account access to objects in Amazon S3 buckets | AWS re:Post, accessed July 17, 2025, [https://repost.aws/knowledge-center/cross-account-access-s3](https://repost.aws/knowledge-center/cross-account-access-s3)  
-11. Secure distributed logging in scalable multi-account deployments using Amazon Bedrock and LangChain | Artificial Intelligence \- AWS, accessed July 17, 2025, [https://aws.amazon.com/blogs/machine-learning/secure-distributed-logging-in-scalable-multi-account-deployments-using-amazon-bedrock-and-langchain/](https://aws.amazon.com/blogs/machine-learning/secure-distributed-logging-in-scalable-multi-account-deployments-using-amazon-bedrock-and-langchain/)  
-12. AWS Centralized Logging: A Complete Implementation Guide \- Last9, accessed July 17, 2025, [https://last9.io/blog/aws-centralized-logging/](https://last9.io/blog/aws-centralized-logging/)  
-13. Centralized Log Management in AWS: A Primer | by Guido Lena Cota | PCG GmbH, accessed July 17, 2025, [https://medium.com/pcg-dach/centralized-log-management-in-aws-a-primer-145d5caf81d8](https://medium.com/pcg-dach/centralized-log-management-in-aws-a-primer-145d5caf81d8)  
-14. Dynamic Partitioning & Format Conversion in Kinesis Data Firehose ..., accessed July 17, 2025, [https://medium.com/@kalikirisrikarreddy/dynamic-partitioning-format-conversion-in-kinesis-data-firehose-881455aa02f1](https://medium.com/@kalikirisrikarreddy/dynamic-partitioning-format-conversion-in-kinesis-data-firehose-881455aa02f1)  
-15. DynamicPartitioningConfiguration \- Amazon Data Firehose, accessed July 17, 2025, [https://docs.aws.amazon.com/firehose/latest/APIReference/API\_DynamicPartitioningConfiguration.html](https://docs.aws.amazon.com/firehose/latest/APIReference/API_DynamicPartitioningConfiguration.html)  
-16. Dynamic partitioning with Amazon Data Firehose using CloudFormation, accessed July 17, 2025, [https://blog.pesky.moe/posts/2024-07-07-firehose-dynamic-partitioning/](https://blog.pesky.moe/posts/2024-07-07-firehose-dynamic-partitioning/)  
-17. Preventing log loss with non-blocking mode in the AWSLogs container log driver, accessed July 17, 2025, [https://aws.amazon.com/blogs/containers/preventing-log-loss-with-non-blocking-mode-in-the-awslogs-container-log-driver/](https://aws.amazon.com/blogs/containers/preventing-log-loss-with-non-blocking-mode-in-the-awslogs-container-log-driver/)  
-18. Ingesting AWS CloudWatch Logs via AWS Kinesis Firehose \- Vector, accessed July 17, 2025, [https://vector.dev/guides/advanced/cloudwatch-logs-firehose/](https://vector.dev/guides/advanced/cloudwatch-logs-firehose/)  
-19. Troubleshooting Amazon S3 \- Amazon Data Firehose, accessed July 17, 2025, [https://docs.aws.amazon.com/firehose/latest/dev/data-not-delivered-to-s3.html](https://docs.aws.amazon.com/firehose/latest/dev/data-not-delivered-to-s3.html)  
-20. Troubleshoot dynamic partitioning errors \- Amazon Data Firehose \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/firehose/latest/dev/dynamic-partitioning-error-handling.html](https://docs.aws.amazon.com/firehose/latest/dev/dynamic-partitioning-error-handling.html)  
-21. Troubleshoot data delivery failure between Kinesis and S3 | AWS re:Post, accessed July 17, 2025, [https://repost.aws/knowledge-center/kinesis-delivery-failure-s3](https://repost.aws/knowledge-center/kinesis-delivery-failure-s3)  
-22. Cost optimization in analytics services \- Cost Modeling Data Lakes for Beginners, accessed July 17, 2025, [https://docs.aws.amazon.com/whitepapers/latest/cost-modeling-data-lakes/cost-optimization-in-analytics-services.html](https://docs.aws.amazon.com/whitepapers/latest/cost-modeling-data-lakes/cost-optimization-in-analytics-services.html)  
-23. Tutorial: Using an Amazon S3 trigger to invoke a Lambda function ..., accessed July 17, 2025, [https://docs.aws.amazon.com/lambda/latest/dg/with-s3-example.html](https://docs.aws.amazon.com/lambda/latest/dg/with-s3-example.html)  
-24. Setting up a new cross-account subscription \- Amazon CloudWatch ..., accessed July 17, 2025, [https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Cross-Account-Log\_Subscription-New.html](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Cross-Account-Log_Subscription-New.html)  
-25. Cross-account cross-Region subscriptions \- Amazon CloudWatch Logs, accessed July 17, 2025, [https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CrossAccountSubscriptions.html](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CrossAccountSubscriptions.html)  
-26. The one mistake everyone makes when using Kinesis with Lambda \- theburningmonk.com, accessed July 17, 2025, [https://theburningmonk.com/2023/12/the-one-mistake-everyone-makes-when-using-kinesis-with-lambda/](https://theburningmonk.com/2023/12/the-one-mistake-everyone-makes-when-using-kinesis-with-lambda/)  
-27. New AWS Lambda controls for stream processing and ..., accessed July 17, 2025, [https://aws.amazon.com/blogs/compute/new-aws-lambda-controls-for-stream-processing-and-asynchronous-invocations/](https://aws.amazon.com/blogs/compute/new-aws-lambda-controls-for-stream-processing-and-asynchronous-invocations/)  
-28. Process Kinesis Streams with AWS Lambda, accessed July 17, 2025, [https://aws.amazon.com/awstv/watch/798a6d586ad/](https://aws.amazon.com/awstv/watch/798a6d586ad/)  
-29. How can i clear out a kinesis stream? : r/aws \- Reddit, accessed July 17, 2025, [https://www.reddit.com/r/aws/comments/83dgz8/how\_can\_i\_clear\_out\_a\_kinesis\_stream/](https://www.reddit.com/r/aws/comments/83dgz8/how_can_i_clear_out_a_kinesis_stream/)  
-30. How does AWS Control Tower establish your multi-account environment?, accessed July 17, 2025, [https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/how-does-aws-control-tower-establish-your-multi-account-environment.html](https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/how-does-aws-control-tower-establish-your-multi-account-environment.html)  
-31. AWS multi-account strategy for your AWS Control Tower landing zone \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/controltower/latest/userguide/aws-multi-account-landing-zone.html](https://docs.aws.amazon.com/controltower/latest/userguide/aws-multi-account-landing-zone.html)  
-32. AWS Control Tower – Set up & Govern a Multi-Account AWS Environment | AWS News Blog, accessed July 17, 2025, [https://aws.amazon.com/blogs/aws/aws-control-tower-set-up-govern-a-multi-account-aws-environment/](https://aws.amazon.com/blogs/aws/aws-control-tower-set-up-govern-a-multi-account-aws-environment/)  
-33. Managing Multi-Tenancy with AWS \- Medium, accessed July 17, 2025, [https://medium.com/@cifedinezi/managing-multi-tenancy-with-aws-d4bee3fdaf9b](https://medium.com/@cifedinezi/managing-multi-tenancy-with-aws-d4bee3fdaf9b)  
-34. Amazon Kinesis Pricing Explained: A 2024 Guide To Kinesis Costs \- CloudZero, accessed July 17, 2025, [https://www.cloudzero.com/blog/kinesis-pricing/](https://www.cloudzero.com/blog/kinesis-pricing/)  
-35. Strategies for AWS Lambda Cost Optimization \- Sedai, accessed July 17, 2025, [https://www.sedai.io/blog/strategies-for-aws-lambda-cost-optimization](https://www.sedai.io/blog/strategies-for-aws-lambda-cost-optimization)  
-36. Tips for configuring AWS Lambda batch size | Capital One \- Medium, accessed July 17, 2025, [https://medium.com/capital-one-tech/best-practices-configuring-aws-lambda-sqs-batch-size-27ebc8a5d5ce](https://medium.com/capital-one-tech/best-practices-configuring-aws-lambda-sqs-batch-size-27ebc8a5d5ce)  
-37. Cost Optimization for AWS Lambda | 5\. Filter and batch events \- Serverless Land, accessed July 17, 2025, [https://serverlessland.com/content/service/lambda/guides/cost-optimization/5-filter-and-batch](https://serverlessland.com/content/service/lambda/guides/cost-optimization/5-filter-and-batch)  
-38. Lambda Cost Optimization at Scale: My Journey (and what I learned) : r/aws \- Reddit, accessed July 17, 2025, [https://www.reddit.com/r/aws/comments/1kge3yf/lambda\_cost\_optimization\_at\_scale\_my\_journey\_and/](https://www.reddit.com/r/aws/comments/1kge3yf/lambda_cost_optimization_at_scale_my_journey_and/)
+1. Design patterns for multi-tenant access control on Amazon S3 | AWS Storage Blog, accessed July 17, 2025, [https://aws.amazon.com/blogs/storage/design-patterns-for-multi-tenant-access-control-on-amazon-s3/](https://aws.amazon.com/blogs/storage/design-patterns-for-multi-tenant-access-control-on-amazon-s3/)  
+2. How to implement SaaS tenant isolation with ABAC and AWS IAM ..., accessed July 17, 2025, [https://aws.amazon.com/blogs/security/how-to-implement-saas-tenant-isolation-with-abac-and-aws-iam/](https://aws.amazon.com/blogs/security/how-to-implement-saas-tenant-isolation-with-abac-and-aws-iam/)  
+3. Architecture guidelines and decisions \- General SAP Guides \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/sap/latest/general/arch-guide-architecture-guidelines-and-decisions.html](https://docs.aws.amazon.com/sap/latest/general/arch-guide-architecture-guidelines-and-decisions.html)  
+4. How to Master Multi Region Architectures in AWS \- \- SUDO Consultants, accessed July 17, 2025, [https://sudoconsultants.com/how-to-master-multi-region-architectures-in-aws/](https://sudoconsultants.com/how-to-master-multi-region-architectures-in-aws/)  
+5. Creating a Multi-Region Application with AWS Services – Part 1, Compute, Networking, and Security | AWS Architecture Blog, accessed July 17, 2025, [https://aws.amazon.com/blogs/architecture/creating-a-multi-region-application-with-aws-services-part-1-compute-and-security/](https://aws.amazon.com/blogs/architecture/creating-a-multi-region-application-with-aws-services-part-1-compute-and-security/)  
+6. IAM roles for cross account delivery \- Amazon Virtual Private Cloud \- AWS Documentation, accessed July 17, 2025, [https://docs.aws.amazon.com/vpc/latest/userguide/firehose-cross-account-delivery.html](https://docs.aws.amazon.com/vpc/latest/userguide/firehose-cross-account-delivery.html)  
+7. Allow cross-account users to access your resources through IAM | AWS re:Post, accessed July 17, 2025, [https://repost.aws/knowledge-center/cross-account-access-iam](https://repost.aws/knowledge-center/cross-account-access-iam)  
+8. Provide cross-account access to objects in Amazon S3 buckets | AWS re:Post, accessed July 17, 2025, [https://repost.aws/knowledge-center/cross-account-access-s3](https://repost.aws/knowledge-center/cross-account-access-s3)  
+9. FluentD vs FluentBit \- Choosing the Right Log Collector | SigNoz, accessed July 17, 2025, [https://signoz.io/blog/fluentd-vs-fluentbit/](https://signoz.io/blog/fluentd-vs-fluentbit/)  
+10. Fluentd and Fluent Bit | Fluent Bit: Official Manual, accessed July 17, 2025, [https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit](https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit)  
+11. The Battle of Logs: Logstash vs. Fluentd vs. Fluent Bit | by Sugam Arora \- Medium, accessed July 17, 2025, [https://medium.com/@sugam.arora23/the-battle-of-logs-logstash-vs-fluentd-vs-fluent-bit-921f567a5abd](https://medium.com/@sugam.arora23/the-battle-of-logs-logstash-vs-fluentd-vs-fluent-bit-921f567a5abd)  
+12. AWS S3 | Vector documentation, accessed July 18, 2025, [https://vector.dev/docs/reference/configuration/sinks/aws\_s3/](https://vector.dev/docs/reference/configuration/sinks/aws_s3/)  
+13. How to Collect, Process, and Ship Log Data with Vector | Better Stack Community, accessed July 18, 2025, [https://betterstack.com/community/guides/logging/vector-explained/](https://betterstack.com/community/guides/logging/vector-explained/)  
+14. Template syntax | Vector documentation, accessed July 18, 2025, [https://vector.dev/docs/reference/configuration/template-syntax/](https://vector.dev/docs/reference/configuration/template-syntax/)  
+15. Introducing Buffer and Rate Limits in Vector — Handling Traffic Spikes \- DevOps.dev, accessed July 18, 2025, [https://blog.devops.dev/introducing-buffer-and-rate-limits-in-vector-handling-traffic-spikes-ff5dc8025359](https://blog.devops.dev/introducing-buffer-and-rate-limits-in-vector-handling-traffic-spikes-ff5dc8025359)  
+16. Best practice 10.3 – Utilize compression techniques to both decrease storage requirements and enhance I/O efficiency \- Data Analytics Lens \- AWS Documentation, accessed July 18, 2025, [https://docs.aws.amazon.com/wellarchitected/latest/analytics-lens/best-practice-10.3---use-file-compression-to-reduce-number-of-files-and-to-improve-file-io-efficiency..html](https://docs.aws.amazon.com/wellarchitected/latest/analytics-lens/best-practice-10.3---use-file-compression-to-reduce-number-of-files-and-to-improve-file-io-efficiency..html)  
+17. AWS Lambda for sending logs from S3 \- New Relic Documentation, accessed July 17, 2025, [https://docs.newrelic.com/docs/logs/forward-logs/aws-lambda-sending-logs-s3/](https://docs.newrelic.com/docs/logs/forward-logs/aws-lambda-sending-logs-s3/)  
+18. Tutorial: Using an Amazon S3 trigger to invoke a Lambda function ..., accessed July 17, 2025, [https://docs.aws.amazon.com/lambda/latest/dg/with-s3-example.html](https://docs.aws.amazon.com/lambda/latest/dg/with-s3-example.html)  
+19. The one mistake everyone makes when using Kinesis with Lambda \- theburningmonk.com, accessed July 17, 2025, [https://theburningmonk.com/2023/12/the-one-mistake-everyone-makes-when-using-kinesis-with-lambda/](https://theburningmonk.com/2023/12/the-one-mistake-everyone-makes-when-using-kinesis-with-lambda/)  
+20. New AWS Lambda controls for stream processing and ..., accessed July 17, 2025, [https://aws.amazon.com/blogs/compute/new-aws-lambda-controls-for-stream-processing-and-asynchronous-invocations/](https://aws.amazon.com/blogs/compute/new-aws-lambda-controls-for-stream-processing-and-asynchronous-invocations/)  
+21. Process Kinesis Streams with AWS Lambda, accessed July 17, 2025, [https://aws.amazon.com/awstv/watch/798a6d586ad/](https://aws.amazon.com/awstv/watch/798a6d586ad/)  
+22. How can i clear out a kinesis stream? : r/aws \- Reddit, accessed July 17, 2025, [https://www.reddit.com/r/aws/comments/83dgz8/how\_can\_i\_clear\_out\_a\_kinesis\_stream/](https://www.reddit.com/r/aws/comments/83dgz8/how_can_i_clear_out_a_kinesis_stream/)  
+23. Strategies for AWS Lambda Cost Optimization \- Sedai, accessed July 17, 2025, [https://www.sedai.io/blog/strategies-for-aws-lambda-cost-optimization](https://www.sedai.io/blog/strategies-for-aws-lambda-cost-optimization)  
+24. Tips for configuring AWS Lambda batch size | Capital One \- Medium, accessed July 17, 2025, [https://medium.com/capital-one-tech/best-practices-configuring-aws-lambda-sqs-batch-size-27ebc8a5d5ce](https://medium.com/capital-one-tech/best-practices-configuring-aws-lambda-sqs-batch-size-27ebc8a5d5ce)  
+25. Cost Optimization for AWS Lambda | 5\. Filter and batch events \- Serverless Land, accessed July 17, 2025, [https://serverlessland.com/content/service/lambda/guides/cost-optimization/5-filter-and-batch](https://serverlessland.com/content/service/lambda/guides/cost-optimization/5-filter-and-batch)  
+26. Lambda Cost Optimization at Scale: My Journey (and what I learned) : r/aws \- Reddit, accessed July 17, 2025, [https://www.reddit.com/r/aws/comments/1kge3yf/lambda\_cost\_optimization\_at\_scale\_my\_journey\_and/](https://www.reddit.com/r/aws/comments/1kge3yf/lambda_cost_optimization_at_scale_my_journey_and/)
