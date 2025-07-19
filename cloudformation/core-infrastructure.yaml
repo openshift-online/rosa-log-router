@@ -314,12 +314,6 @@ Resources:
             Principal:
               AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: sts:AssumeRole
-            Condition:
-              StringLike:
-                'aws:userid': !If
-                  - HasEksOidcIssuer
-                  - !Sub '${VectorRole.RoleId}:*'
-                  - 'AIDAI*'  # Allow any IAM user/role in the account if no Vector role
       Policies:
         - PolicyName: S3WriterPolicy
           PolicyDocument:
