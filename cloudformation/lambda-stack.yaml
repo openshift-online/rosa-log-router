@@ -27,35 +27,18 @@ Parameters:
     MaxValue: 1000
     Description: Maximum concurrency for Lambda event source mapping
     
-  EnableXRayTracing:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable AWS X-Ray tracing
-    
-  EnableLambdaInsights:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable CloudWatch Lambda Insights
-    
-  EnableDLQProcessor:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable DLQ processor Lambda function
     
   LogDistributorRoleArn:
     Type: String
     Description: ARN of the log distributor Lambda IAM role
     
-  DLQProcessorRoleArn:
-    Type: String
-    Description: ARN of the DLQ processor Lambda IAM role
-    
   TenantConfigTableName:
     Type: String
     Description: Name of the tenant configuration DynamoDB table
+    
+  LogDeliveryQueueArn:
+    Type: String
+    Description: ARN of the log delivery SQS queue
     
   CostCenter:
     Type: String
@@ -64,9 +47,6 @@ Parameters:
 
 Conditions:
   HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
-  IsXRayTracingEnabled: !Equals [!Ref EnableXRayTracing, "true"]
-  IsLambdaInsightsEnabled: !Equals [!Ref EnableLambdaInsights, "true"]
-  IsDLQProcessorEnabled: !Equals [!Ref EnableDLQProcessor, "true"]
 
 Resources:
   # CloudWatch Log Group for Lambda functions
@@ -84,23 +64,6 @@ Resources:
           Value: cloudformation
 
   # Dead Letter Queue for failed Lambda invocations
-  LambdaDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub '${ProjectName}-${Environment}-lambda-dlq'
-      MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 300
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-lambda-dlq'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
   # Main Lambda function for log distribution
   LogDistributorFunction:
@@ -142,38 +105,9 @@ Resources:
           MAX_BATCH_SIZE: "1000"
           RETRY_ATTEMPTS: "3"
       ReservedConcurrencyLimit: !Ref LambdaReservedConcurrency
-      DeadLetterQueue:
-        TargetArn: !GetAtt LambdaDLQ.Arn
-      TracingConfig:
-        Mode: !If [IsXRayTracingEnabled, Active, PassThrough]
-      Layers:
-        - !If [IsLambdaInsightsEnabled, !Ref LambdaInsightsLayer, !Ref 'AWS::NoValue']
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-log-distributor'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-        - Key: CostCenter
-          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
-
-  # SQS Queue for log delivery events
-  LogDeliveryQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery'
-      MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 900  # 15 minutes (6x Lambda timeout)
-      ReceiveMessageWaitTimeSeconds: 20  # Enable long polling
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
-        maxReceiveCount: 3
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-log-delivery'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -187,210 +121,12 @@ Resources:
   LogDeliveryEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
-      EventSourceArn: !GetAtt LogDeliveryQueue.Arn
+      EventSourceArn: !Ref LogDeliveryQueueArn
       FunctionName: !Ref LogDistributorFunction
       BatchSize: 10
       MaximumBatchingWindowInSeconds: 5
       MaximumConcurrency: !Ref LambdaMaxConcurrency
 
-  # Lambda Alias for production traffic
-  LogDistributorAlias:
-    Type: AWS::Lambda::Alias
-    Properties:
-      FunctionName: !Ref LogDistributorFunction
-      FunctionVersion: $LATEST
-      Name: live
-
-  # DLQ Processor Lambda (conditional)
-  DLQProcessorFunction:
-    Type: AWS::Lambda::Function
-    Condition: IsDLQProcessorEnabled
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${Environment}-dlq-processor'
-      Runtime: python3.11
-      Handler: index.lambda_handler
-      Role: !Ref DLQProcessorRoleArn
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          import os
-          import logging
-
-          logger = logging.getLogger()
-          logger.setLevel(logging.INFO)
-
-          def lambda_handler(event, context):
-              """
-              Lambda function to process failed log distribution messages
-              """
-              try:
-                  logger.info("Processing DLQ messages")
-                  for record in event.get('Records', []):
-                      logger.warning(f"Failed message: {record.get('body', 'unknown')}")
-                  
-                  return {'statusCode': 200}
-                  
-              except Exception as e:
-                  logger.error(f"DLQ processor failed: {e}")
-                  raise
-      Environment:
-        Variables:
-          ALERT_SNS_TOPIC: !Ref AlertsTopic
-      TracingConfig:
-        Mode: !If [IsXRayTracingEnabled, Active, PassThrough]
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-dlq-processor'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # Event Source Mapping for DLQ to Lambda
-  DLQEventSourceMapping:
-    Type: AWS::Lambda::EventSourceMapping
-    Condition: IsDLQProcessorEnabled
-    Properties:
-      EventSourceArn: !GetAtt LambdaDLQ.Arn
-      FunctionName: !Ref DLQProcessorFunction
-      BatchSize: 5
-
-  # SNS Topic for alerts
-  AlertsTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub '${ProjectName}-${Environment}-alerts'
-      DisplayName: 'Multi-tenant Logging Alerts'
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-alerts'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # CloudWatch Alarms
-  LambdaErrorsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${ProjectName}-${Environment}-lambda-errors'
-      AlarmDescription: 'Alarm when Lambda function errors exceed threshold'
-      MetricName: Errors
-      Namespace: AWS/Lambda
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 5
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref LogDistributorFunction
-      AlarmActions:
-        - !Ref AlertsTopic
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  LambdaDurationAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${ProjectName}-${Environment}-lambda-duration'
-      AlarmDescription: 'Alarm when Lambda function duration is high'
-      MetricName: Duration
-      Namespace: AWS/Lambda
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 3
-      Threshold: 120000  # 2 minutes in milliseconds
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref LogDistributorFunction
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  LambdaThrottlesAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${ProjectName}-${Environment}-lambda-throttles'
-      AlarmDescription: 'Alarm when Lambda function is throttled'
-      MetricName: Throttles
-      Namespace: AWS/Lambda
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref LogDistributorFunction
-      AlarmActions:
-        - !Ref AlertsTopic
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # Lambda Insights Layer (conditional)
-  LambdaInsightsLayer:
-    Type: AWS::Lambda::LayerVersion
-    Condition: IsLambdaInsightsEnabled
-    Properties:
-      LayerName: !Sub '${ProjectName}-${Environment}-lambda-insights'
-      Description: 'CloudWatch Lambda Insights layer'
-      Content:
-        S3Bucket: !Sub 'lambda-insights-${AWS::Region}'
-        S3Key: 'lambda-insights-1.0.119.0.zip'
-
-  # Lambda Destination for successful invocations
-  LogDistributorEventInvokeConfig:
-    Type: AWS::Lambda::EventInvokeConfig
-    Properties:
-      FunctionName: !Ref LogDistributorFunction
-      Qualifier: $LATEST
-      MaximumRetryAttempts: 2
-      MaximumEventAge: 3600
-      DestinationConfig:
-        OnSuccess:
-          Destination: !Ref LogDeliverySuccessTopic
-        OnFailure:
-          Destination: !GetAtt LambdaDLQ.Arn
-
-  # SNS Topic for successful log deliveries
-  LogDeliverySuccessTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub '${ProjectName}-${Environment}-log-delivery-success'
-      DisplayName: 'Log Delivery Success Notifications'
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-log-delivery-success'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
 
 Outputs:
   LogDistributorFunctionName:
@@ -404,51 +140,3 @@ Outputs:
     Value: !GetAtt LogDistributorFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorFunctionArn'
-
-  DLQProcessorFunctionName:
-    Description: Name of the DLQ processor Lambda function
-    Value: !If [IsDLQProcessorEnabled, !Ref DLQProcessorFunction, '']
-    Export:
-      Name: !Sub '${AWS::StackName}-DLQProcessorFunctionName'
-
-  DLQProcessorFunctionArn:
-    Description: ARN of the DLQ processor Lambda function
-    Value: !If [IsDLQProcessorEnabled, !GetAtt DLQProcessorFunction.Arn, '']
-    Export:
-      Name: !Sub '${AWS::StackName}-DLQProcessorFunctionArn'
-
-  LogDeliveryQueueName:
-    Description: Name of the log delivery SQS queue
-    Value: !Ref LogDeliveryQueue
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryQueueName'
-
-  LogDeliveryQueueArn:
-    Description: ARN of the log delivery SQS queue
-    Value: !GetAtt LogDeliveryQueue.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
-
-  LambdaDLQName:
-    Description: Name of the Lambda DLQ
-    Value: !Ref LambdaDLQ
-    Export:
-      Name: !Sub '${AWS::StackName}-LambdaDLQName'
-
-  LambdaDLQArn:
-    Description: ARN of the Lambda DLQ
-    Value: !GetAtt LambdaDLQ.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-LambdaDLQArn'
-
-  AlertsTopicArn:
-    Description: ARN of the alerts SNS topic
-    Value: !Ref AlertsTopic
-    Export:
-      Name: !Sub '${AWS::StackName}-AlertsTopicArn'
-
-  LogDeliverySuccessTopicArn:
-    Description: ARN of the log delivery success SNS topic
-    Value: !Ref LogDeliverySuccessTopic
-    Export:
-      Name: !Sub '${AWS::StackName}-LogDeliverySuccessTopicArn'

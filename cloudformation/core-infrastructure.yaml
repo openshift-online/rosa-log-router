@@ -59,32 +59,16 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: Enable S3 server-side encryption
     
-  EnableCrossRegionReplication:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Enable cross-region replication for S3 buckets
-    
-  BackupRegion:
-    Type: String
-    Default: us-west-2
-    Description: AWS region for backup/replication
-    
   CostCenter:
     Type: String
     Default: ""
     Description: Cost center for billing allocation
-    
-  LogDeliveryHubTopicArn:
-    Type: String
-    Description: ARN of the log delivery hub SNS topic (from monitoring stack)
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
   HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
   IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
   IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
-  IsCrossRegionReplicationEnabled: !Equals [!Ref EnableCrossRegionReplication, "true"]
 
 Resources:
   # Random suffix for unique bucket names
@@ -144,9 +128,10 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  # KMS Key for encryption
+  # KMS Key for encryption (conditional)
   LoggingKMSKey:
     Type: AWS::KMS::Key
+    Condition: IsS3EncryptionEnabled
     Properties:
       Description: KMS key for multi-tenant logging encryption
       KeyPolicy:
@@ -162,14 +147,6 @@ Resources:
             Effect: Allow
             Principal:
               Service: s3.amazonaws.com
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey
-            Resource: '*'
-          - Sid: Allow use of the key for Firehose
-            Effect: Allow
-            Principal:
-              Service: firehose.amazonaws.com
             Action:
               - kms:Decrypt
               - kms:GenerateDataKey
@@ -195,6 +172,7 @@ Resources:
 
   LoggingKMSKeyAlias:
     Type: AWS::KMS::Alias
+    Condition: IsS3EncryptionEnabled
     Properties:
       AliasName: !Sub 'alias/${ProjectName}-${Environment}-logging'
       TargetKeyId: !Ref LoggingKMSKey
@@ -243,48 +221,121 @@ Resources:
           Value: cloudformation
 
   # Backup S3 Bucket
-  BackupBucket:
-    Type: AWS::S3::Bucket
+
+  # SNS topic for log delivery notifications
+  LogDeliveryTopic:
+    Type: AWS::SNS::Topic
     Properties:
-      BucketName: !Sub '${ProjectName}-${Environment}-backup-${RandomSuffix.RandomSuffix}'
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: !If [IsS3EncryptionEnabled, 'aws:kms', 'AES256']
-              KMSMasterKeyID: !If [IsS3EncryptionEnabled, !Ref LoggingKMSKey, !Ref 'AWS::NoValue']
-            BucketKeyEnabled: !If [IsS3EncryptionEnabled, true, false]
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      LifecycleConfiguration:
-        Rules:
-          - Id: BackupRetention
-            Status: Enabled
-            Transitions:
-              - TransitionInDays: 7
-                StorageClass: GLACIER
-              - TransitionInDays: 97
-                StorageClass: DEEP_ARCHIVE
-            ExpirationInDays: 365
+      TopicName: !Sub '${ProjectName}-${Environment}-log-delivery'
       Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-backup'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
+        - Key: CostCenter
+          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
 
-  # S3 Bucket Notification Configuration
+  # SNS topic policy to allow S3 to publish messages
+  LogDeliveryTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref LogDeliveryTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3Publish
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: SNS:Publish
+            Resource: !Ref LogDeliveryTopic
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+              ArnEquals:
+                'aws:SourceArn': !GetAtt CentralLoggingBucket.Arn
+
+  # SQS queue for log delivery processing
+  LogDeliveryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-queue'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 900    # 15 minutes
+      ReceiveMessageWaitTimeSeconds: 20 # Long polling
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LogDeliveryDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: CostCenter
+          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
+
+  # Dead Letter Queue for failed messages
+  LogDeliveryDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${Environment}-log-delivery-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: CostCenter
+          Value: !If [HasCostCenter, !Ref CostCenter, !Ref 'AWS::NoValue']
+
+  # SQS queue policy
+  LogDeliveryQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref LogDeliveryQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSNSMessages
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt LogDeliveryQueue.Arn
+            Condition:
+              ArnEquals:
+                'aws:SourceArn': !Ref LogDeliveryTopic
+
+  # SNS subscription: SNS topic to SQS queue
+  LogDeliveryQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LogDeliveryTopic
+      Protocol: sqs
+      Endpoint: !GetAtt LogDeliveryQueue.Arn
+      FilterPolicy:
+        eventSource: 
+          - "aws:s3"
+        eventName:
+          - "ObjectCreated:Put"
+          - "ObjectCreated:Post"
+          - "ObjectCreated:CompleteMultipartUpload"
+
+  # S3 Bucket Notification Configuration  
   S3BucketNotification:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt S3NotificationFunction.Arn
       BucketName: !Ref CentralLoggingBucket
-      TopicArn: !Ref LogDeliveryHubTopicArn
+      TopicArn: !Ref LogDeliveryTopic
       
   S3NotificationFunction:
     Type: AWS::Lambda::Function
@@ -608,11 +659,6 @@ Resources:
                 Resource: !GetAtt TenantConfigTable.Arn
               - Effect: Allow
                 Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: !Sub '${BackupBucket.Arn}/*'
-              - Effect: Allow
-                Action:
                   - sns:Publish
                 Resource: !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-*'
               - Effect: Allow
@@ -640,12 +686,6 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-CentralLoggingBucketName'
 
-  BackupBucketName:
-    Description: Name of the backup S3 bucket
-    Value: !Ref BackupBucket
-    Export:
-      Name: !Sub '${AWS::StackName}-BackupBucketName'
-
   TenantConfigTableName:
     Description: Name of the tenant configuration DynamoDB table
     Value: !Ref TenantConfigTable
@@ -658,15 +698,41 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-TenantConfigTableArn'
 
+  # SNS/SQS Outputs
+  LogDeliveryTopicArn:
+    Description: ARN of the log delivery SNS topic
+    Value: !Ref LogDeliveryTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryTopicArn'
+
+  LogDeliveryQueueArn:
+    Description: ARN of the log delivery SQS queue
+    Value: !GetAtt LogDeliveryQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
+
+  LogDeliveryQueueName:
+    Description: Name of the log delivery SQS queue
+    Value: !GetAtt LogDeliveryQueue.QueueName
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueName'
+
+  LogDeliveryDLQArn:
+    Description: ARN of the log delivery DLQ
+    Value: !GetAtt LogDeliveryDLQ.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryDLQArn'
+
+  # KMS Outputs (conditional)
   KMSKeyId:
     Description: KMS key ID for encryption
-    Value: !Ref LoggingKMSKey
+    Value: !If [IsS3EncryptionEnabled, !Ref LoggingKMSKey, '']
     Export:
       Name: !Sub '${AWS::StackName}-KMSKeyId'
 
   KMSKeyArn:
     Description: KMS key ARN for encryption
-    Value: !GetAtt LoggingKMSKey.Arn
+    Value: !If [IsS3EncryptionEnabled, !GetAtt LoggingKMSKey.Arn, '']
     Export:
       Name: !Sub '${AWS::StackName}-KMSKeyArn'
 

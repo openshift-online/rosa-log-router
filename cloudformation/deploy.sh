@@ -190,7 +190,7 @@ check_template_bucket() {
 # Function to upload templates to S3
 upload_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("core-infrastructure.yaml" "lambda-stack.yaml" "monitoring-stack.yaml")
+    local templates=("core-infrastructure.yaml" "lambda-stack.yaml")
     
     print_status "Uploading nested templates to S3..."
     
@@ -213,7 +213,7 @@ upload_templates() {
 # Function to validate templates
 validate_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("main.yaml" "core-infrastructure.yaml" "lambda-stack.yaml" "monitoring-stack.yaml")
+    local templates=("main.yaml" "core-infrastructure.yaml" "lambda-stack.yaml")
     
     print_status "Validating CloudFormation templates..."
     
@@ -373,9 +373,8 @@ AWS Profile:    ${PROFILE:-default}
 
 Templates:
 - main.yaml (main template)
-- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM)
+- core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS/SQS)
 - lambda-stack.yaml (Lambda functions)
-- monitoring-stack.yaml (CloudWatch, SNS/SQS)
 
 ========================================
 

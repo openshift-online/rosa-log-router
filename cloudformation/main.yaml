@@ -65,25 +65,6 @@ Parameters:
     MinValue: 1
     Description: Number of days to retain logs in S3
     
-  # Monitoring Configuration
-  AlertEmailEndpoints:
-    Type: CommaDelimitedList
-    Default: ""
-    Description: List of email addresses for alerts
-    
-  # Feature Flags
-  EnableAnalytics:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Enable analytics processing pipeline
-    
-  EnableDetailedMonitoring:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable detailed CloudWatch monitoring
-    
   EnableS3IntelligentTiering:
     Type: String
     Default: "true"
@@ -96,54 +77,6 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: Enable S3 server-side encryption
     
-  EnableCrossRegionReplication:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Enable cross-region replication for S3 buckets
-    
-  BackupRegion:
-    Type: String
-    Default: us-west-2
-    Description: AWS region for backup/replication
-    
-  EnableXRayTracing:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable AWS X-Ray tracing
-    
-  EnableEnhancedMonitoring:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable enhanced monitoring and custom metrics
-    
-  EnableLogSampling:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Enable log sampling for cost optimization
-    
-  LogSamplingRate:
-    Type: Number
-    Default: 1.0
-    MinValue: 0.0
-    MaxValue: 1.0
-    Description: Sampling rate for logs (0.0 to 1.0)
-    
-  EnableDLQProcessor:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable DLQ processor Lambda function
-    
-  EnableLambdaInsights:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable CloudWatch Lambda Insights
-    
   CostCenter:
     Type: String
     Default: ""
@@ -154,22 +87,11 @@ Parameters:
     Description: S3 bucket containing the nested CloudFormation templates
 
 Conditions:
-  HasAlertEmails: !Not [!Equals [!Join ["", !Ref AlertEmailEndpoints], ""]]
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
   HasCostCenter: !Not [!Equals [!Ref CostCenter, ""]]
-  IsAnalyticsEnabled: !Equals [!Ref EnableAnalytics, "true"]
-  IsDetailedMonitoringEnabled: !Equals [!Ref EnableDetailedMonitoring, "true"]
-  IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
-  IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
-  IsCrossRegionReplicationEnabled: !Equals [!Ref EnableCrossRegionReplication, "true"]
-  IsXRayTracingEnabled: !Equals [!Ref EnableXRayTracing, "true"]
-  IsEnhancedMonitoringEnabled: !Equals [!Ref EnableEnhancedMonitoring, "true"]
-  IsLogSamplingEnabled: !Equals [!Ref EnableLogSampling, "true"]
-  IsDLQProcessorEnabled: !Equals [!Ref EnableDLQProcessor, "true"]
-  IsLambdaInsightsEnabled: !Equals [!Ref EnableLambdaInsights, "true"]
 
 Resources:
-  # Core Infrastructure Stack
+  # Core Infrastructure Stack (S3, DynamoDB, SNS/SQS, IAM)
   CoreInfrastructureStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -185,10 +107,7 @@ Resources:
         S3LogRetentionDays: !Ref S3LogRetentionDays
         EnableS3IntelligentTiering: !Ref EnableS3IntelligentTiering
         EnableS3Encryption: !Ref EnableS3Encryption
-        EnableCrossRegionReplication: !Ref EnableCrossRegionReplication
-        BackupRegion: !Ref BackupRegion
         CostCenter: !Ref CostCenter
-        LogDeliveryHubTopicArn: !GetAtt MonitoringStack.Outputs.LogDeliveryHubTopicArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -210,12 +129,9 @@ Resources:
         ProjectName: !Ref ProjectName
         LambdaReservedConcurrency: !Ref LambdaReservedConcurrency
         LambdaMaxConcurrency: !Ref LambdaMaxConcurrency
-        EnableXRayTracing: !Ref EnableXRayTracing
-        EnableLambdaInsights: !Ref EnableLambdaInsights
-        EnableDLQProcessor: !Ref EnableDLQProcessor
         LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
-        DLQProcessorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.DLQProcessorRoleArn
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
+        LogDeliveryQueueArn: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryQueueArn
         CostCenter: !Ref CostCenter
       Tags:
         - Key: Project
@@ -227,32 +143,6 @@ Resources:
         - Key: StackType
           Value: lambda-functions
   
-  # Monitoring and Alerting Stack
-  MonitoringStack:
-    Type: AWS::CloudFormation::Stack
-    DependsOn: [CoreInfrastructureStack, LambdaStack]
-    Properties:
-      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/monitoring-stack.yaml'
-      Parameters:
-        Environment: !Ref Environment
-        ProjectName: !Ref ProjectName
-        EnableDetailedMonitoring: !Ref EnableDetailedMonitoring
-        EnableEnhancedMonitoring: !Ref EnableEnhancedMonitoring
-        AlertEmailEndpoints: !Join [",", !Ref AlertEmailEndpoints]
-        LogDistributorFunctionName: !GetAtt LambdaStack.Outputs.LogDistributorFunctionName
-        DLQProcessorFunctionName: !GetAtt LambdaStack.Outputs.DLQProcessorFunctionName
-        CentralLoggingBucketName: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
-        TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
-        CostCenter: !Ref CostCenter
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-        - Key: StackType
-          Value: monitoring-alerting
   
 Outputs:
   # Core Infrastructure Outputs
@@ -262,23 +152,11 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-CentralLoggingBucketName'
   
-  BackupBucketName:
-    Description: Name of the backup S3 bucket
-    Value: !GetAtt CoreInfrastructureStack.Outputs.BackupBucketName
-    Export:
-      Name: !Sub '${AWS::StackName}-BackupBucketName'
-  
   TenantConfigTableName:
     Description: Name of the tenant configuration DynamoDB table
     Value: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
     Export:
       Name: !Sub '${AWS::StackName}-TenantConfigTableName'
-  
-  KMSKeyId:
-    Description: KMS key ID for encryption
-    Value: !GetAtt CoreInfrastructureStack.Outputs.KMSKeyId
-    Export:
-      Name: !Sub '${AWS::StackName}-KMSKeyId'
   
   # Lambda Outputs
   LogDistributorFunctionName:
@@ -293,13 +171,6 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorFunctionArn'
   
-  # Monitoring Outputs
-  CloudWatchDashboardURL:
-    Description: URL of the CloudWatch dashboard
-    Value: !GetAtt MonitoringStack.Outputs.CloudWatchDashboardURL
-    Export:
-      Name: !Sub '${AWS::StackName}-CloudWatchDashboardURL'
-  
   # IAM Role Outputs
   VectorRoleArn:
     Description: ARN of the Vector service account role
@@ -313,15 +184,22 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
   
+  # SNS/SQS Outputs
+  LogDeliveryTopicArn:
+    Description: ARN of the log delivery SNS topic
+    Value: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryTopicArn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryTopicArn'
+  
+  LogDeliveryQueueArn:
+    Description: ARN of the log delivery SQS queue
+    Value: !GetAtt CoreInfrastructureStack.Outputs.LogDeliveryQueueArn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogDeliveryQueueArn'
+  
   # Stack Information
   StackVersion:
-    Description: Version of this CloudFormation stack
-    Value: "1.0.0"
+    Description: Version of this CloudFormation stack (POC)
+    Value: "1.0.0-poc"
     Export:
       Name: !Sub '${AWS::StackName}-StackVersion'
-  
-  DeploymentTimestamp:
-    Description: Deployment timestamp
-    Value: !Sub '${AWS::AccountId}-${AWS::Region}-${AWS::StackId}'
-    Export:
-      Name: !Sub '${AWS::StackName}-DeploymentTimestamp'
