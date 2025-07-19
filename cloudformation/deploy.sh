@@ -14,6 +14,9 @@ TEMPLATE_BUCKET=""
 PROFILE="${AWS_PROFILE:-}"
 DRY_RUN=false
 VALIDATE_ONLY=false
+INCLUDE_SQS=false
+INCLUDE_LAMBDA=false
+ECR_IMAGE_URI=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,25 +56,31 @@ OPTIONS:
     -s, --stack-name NAME       CloudFormation stack name. Default: PROJECT_NAME-ENVIRONMENT
     -b, --template-bucket NAME  S3 bucket for storing nested templates (required)
     --profile PROFILE           AWS CLI profile to use
+    --include-sqs               Include SQS stack for log processing
+    --include-lambda            Include Lambda stack for container-based processing
+    --ecr-image-uri URI         ECR container image URI (required if --include-lambda)
     --dry-run                   Show what would be deployed without actually deploying
     --validate-only             Only validate templates without deploying
     -h, --help                  Display this help message
 
 EXAMPLES:
-    # Deploy to production with default settings
+    # Deploy core infrastructure only
     $0 -b my-cloudformation-templates-bucket
 
-    # Deploy to staging environment
-    $0 -e staging -b my-templates-bucket
+    # Deploy core + SQS for external processing
+    $0 -b my-templates-bucket --include-sqs
+
+    # Deploy core + SQS + Lambda container processing
+    $0 -b my-templates-bucket --include-sqs --include-lambda --ecr-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
+
+    # Deploy to staging environment with SQS
+    $0 -e staging -b my-templates-bucket --include-sqs
 
     # Validate templates only
     $0 -b my-templates-bucket --validate-only
 
-    # Dry run to see what would be deployed
-    $0 -b my-templates-bucket --dry-run
-
     # Deploy with specific AWS profile
-    $0 -b my-templates-bucket --profile my-aws-profile
+    $0 -b my-templates-bucket --profile my-aws-profile --include-sqs
 
 EOF
 }
@@ -101,6 +110,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --profile)
             PROFILE="$2"
+            shift 2
+            ;;
+        --include-sqs)
+            INCLUDE_SQS=true
+            shift
+            ;;
+        --include-lambda)
+            INCLUDE_LAMBDA=true
+            shift
+            ;;
+        --ecr-image-uri)
+            ECR_IMAGE_URI="$2"
             shift 2
             ;;
         --dry-run)
@@ -134,6 +155,18 @@ fi
 if [[ ! "$ENVIRONMENT" =~ ^(production|staging|development)$ ]]; then
     print_error "Environment must be one of: production, staging, development"
     exit 1
+fi
+
+# Validate Lambda requirements
+if [[ "$INCLUDE_LAMBDA" == true && -z "$ECR_IMAGE_URI" ]]; then
+    print_error "ECR image URI is required when --include-lambda is specified. Use --ecr-image-uri option."
+    exit 1
+fi
+
+# Auto-enable SQS if Lambda is enabled
+if [[ "$INCLUDE_LAMBDA" == true ]]; then
+    INCLUDE_SQS=true
+    print_status "Auto-enabling SQS stack since Lambda stack requires it."
 fi
 
 # Update stack name if not explicitly provided
@@ -190,7 +223,17 @@ check_template_bucket() {
 # Function to upload templates to S3
 upload_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("core-infrastructure.yaml" "lambda-stack.yaml")
+    local templates=("core-infrastructure.yaml")
+    
+    # Add SQS stack if requested
+    if [[ "$INCLUDE_SQS" == true ]]; then
+        templates+=("sqs-stack.yaml")
+    fi
+    
+    # Add Lambda stack if requested
+    if [[ "$INCLUDE_LAMBDA" == true ]]; then
+        templates+=("lambda-stack.yaml")
+    fi
     
     print_status "Uploading nested templates to S3..."
     
@@ -213,7 +256,17 @@ upload_templates() {
 # Function to validate templates
 validate_templates() {
     local template_dir="$(dirname "$0")"
-    local templates=("main.yaml" "core-infrastructure.yaml" "lambda-stack.yaml")
+    local templates=("main.yaml" "core-infrastructure.yaml")
+    
+    # Add SQS stack if requested
+    if [[ "$INCLUDE_SQS" == true ]]; then
+        templates+=("sqs-stack.yaml")
+    fi
+    
+    # Add Lambda stack if requested
+    if [[ "$INCLUDE_LAMBDA" == true ]]; then
+        templates+=("lambda-stack.yaml")
+    fi
     
     print_status "Validating CloudFormation templates..."
     
@@ -296,12 +349,68 @@ deploy_stack() {
     print_status "Generated random suffix: $random_suffix"
     
     # Prepare parameters
-    local parameters=(
-        "Environment=$ENVIRONMENT"
-        "ProjectName=$PROJECT_NAME"
-        "TemplateBucket=$TEMPLATE_BUCKET"
-        "RandomSuffix=$random_suffix"
-    )
+    local parameters=()
+    
+    # For updates, read existing parameters and preserve their values
+    if [[ "$operation" == "update" ]]; then
+        print_status "Reading existing stack parameters..."
+        local existing_params=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Parameters' --output json 2>/dev/null || echo '[]')
+        
+        # Extract existing parameter values
+        local random_suffix_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="RandomSuffix") | .ParameterValue // empty')
+        local eks_oidc_issuer=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EksOidcIssuer") | .ParameterValue // empty')
+        local enable_s3_encryption=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EnableS3Encryption") | .ParameterValue // "true"')
+        local s3_log_retention_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3LogRetentionDays") | .ParameterValue // "2555"')
+        local s3_deep_archive_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3DeepArchiveDays") | .ParameterValue // "365"')
+        local enable_s3_intelligent_tiering=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EnableS3IntelligentTiering") | .ParameterValue // "true"')
+        local s3_standard_ia_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3StandardIADays") | .ParameterValue // "30"')
+        local s3_glacier_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3GlacierDays") | .ParameterValue // "90"')
+        
+        # Use existing RandomSuffix if it exists, otherwise generate new one
+        if [[ -n "$random_suffix_existing" ]]; then
+            random_suffix="$random_suffix_existing"
+        fi
+        
+        # Set all parameters with preserved or new values
+        parameters=(
+            "Environment=$ENVIRONMENT"
+            "ProjectName=$PROJECT_NAME"
+            "TemplateBucket=$TEMPLATE_BUCKET"
+            "RandomSuffix=$random_suffix"
+            "IncludeSQSStack=$INCLUDE_SQS"
+            "IncludeLambdaStack=$INCLUDE_LAMBDA"
+            "EksOidcIssuer=$eks_oidc_issuer"
+            "EnableS3Encryption=$enable_s3_encryption"
+            "S3LogRetentionDays=$s3_log_retention_days"
+            "S3DeepArchiveDays=$s3_deep_archive_days"
+            "EnableS3IntelligentTiering=$enable_s3_intelligent_tiering"
+            "S3StandardIADays=$s3_standard_ia_days"
+            "S3GlacierDays=$s3_glacier_days"
+        )
+        
+        # Add ECR image URI if Lambda is enabled
+        if [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
+            parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+        fi
+        
+        print_status "Using existing RandomSuffix: $random_suffix"
+        
+    else
+        # For create operations, use all parameters with defaults/specified values
+        parameters=(
+            "Environment=$ENVIRONMENT"
+            "ProjectName=$PROJECT_NAME"
+            "TemplateBucket=$TEMPLATE_BUCKET"
+            "RandomSuffix=$random_suffix"
+            "IncludeSQSStack=$INCLUDE_SQS"
+            "IncludeLambdaStack=$INCLUDE_LAMBDA"
+        )
+        
+        # Add ECR image URI if Lambda is enabled
+        if [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
+            parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+        fi
+    fi
     
     # Add optional parameters if not default
     local param_file="$template_dir/parameters-${ENVIRONMENT}.json"
@@ -391,7 +500,13 @@ AWS Profile:    ${PROFILE:-default}
 Templates:
 - main.yaml (main template)
 - core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS)
-- lambda-stack.yaml (Lambda functions, SQS)
+$(if [[ "$INCLUDE_SQS" == true ]]; then echo "- sqs-stack.yaml (SQS queue and DLQ)"; fi)
+$(if [[ "$INCLUDE_LAMBDA" == true ]]; then echo "- lambda-stack.yaml (Container-based Lambda functions)"; fi)
+
+Configuration:
+- Include SQS Stack: $INCLUDE_SQS
+- Include Lambda Stack: $INCLUDE_LAMBDA
+$(if [[ -n "$ECR_IMAGE_URI" ]]; then echo "- ECR Image URI: $ECR_IMAGE_URI"; fi)
 
 ========================================
 

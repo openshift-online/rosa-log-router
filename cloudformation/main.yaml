@@ -143,9 +143,7 @@ Resources:
   LambdaStack:
     Type: AWS::CloudFormation::Stack
     Condition: ShouldIncludeLambdaStack
-    DependsOn: 
-      - CoreInfrastructureStack
-      - !If [ShouldIncludeSQSStack, !Ref SQSStack, !Ref "AWS::NoValue"]
+    DependsOn: CoreInfrastructureStack
     Properties:
       TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/lambda-stack.yaml'
       Parameters:
