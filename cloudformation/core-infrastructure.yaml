@@ -70,7 +70,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${ProjectName}-${Environment}-random-suffix'
-      Runtime: python3.9
+      Runtime: python3.13
       Handler: index.lambda_handler
       Role: !GetAtt RandomSuffixFunctionRole.Arn
       Code:
@@ -221,7 +221,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${ProjectName}-${Environment}-s3-notification-config'
-      Runtime: python3.11
+      Runtime: python3.13
       Handler: index.lambda_handler
       Role: !GetAtt S3NotificationFunctionRole.Arn
       Code:

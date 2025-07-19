@@ -107,7 +107,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${ProjectName}-${Environment}-log-distributor'
-      Runtime: python3.11
+      Runtime: python3.13
       Handler: index.lambda_handler
       Role: !Ref LogDistributorRoleArn
       Code:
