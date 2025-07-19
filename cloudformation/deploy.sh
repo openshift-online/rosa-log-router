@@ -136,6 +136,11 @@ if [[ ! "$ENVIRONMENT" =~ ^(production|staging|development)$ ]]; then
     exit 1
 fi
 
+# Update stack name if not explicitly provided
+if [[ "$STACK_NAME" == "multi-tenant-logging-development" ]]; then
+    STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
+fi
+
 # Set AWS CLI profile if specified
 if [[ -n "$PROFILE" ]]; then
     export AWS_PROFILE="$PROFILE"

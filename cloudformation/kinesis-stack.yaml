@@ -153,7 +153,7 @@ Resources:
         RoleARN: !Ref FirehoseRoleArn
         BucketARN: !Sub 'arn:aws:s3:::${CentralLoggingBucketName}'
         # Dynamic partitioning with tenant segregation
-        Prefix: 'logs/tenant_id=!{partitionKeyFromQuery:customer_tenant}/cluster_id=!{partitionKeyFromQuery:cluster_id}/environment=!{partitionKeyFromQuery:environment}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/'
+        Prefix: 'logs/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/'
         ErrorOutputPrefix: 'errors/'
         # Buffering configuration for cost optimization
         BufferingHints:
@@ -164,30 +164,12 @@ Resources:
         EncryptionConfiguration:
           KMSEncryptionConfig:
             AWSKMSKeyARN: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
-        # Data format conversion to Parquet for cost savings
-        DataFormatConversionConfiguration:
-          Enabled: !If [IsParquetConversionEnabled, true, false]
-          OutputFormatConfiguration:
-            Serializer:
-              ParquetSerDe: {}
-          SchemaConfiguration:
-            DatabaseName: !Ref GlueCatalogDatabase
-            TableName: !Ref GlueCatalogTable
-            RoleARN: !Ref FirehoseRoleArn
+        # Data format conversion to Parquet for cost savings (disabled for initial deployment)
+        # DataFormatConversionConfiguration:
+        #   Enabled: false
         # Dynamic partitioning configuration
         DynamicPartitioning:
-          Enabled: true
-          RetryDuration: 3600
-        # Processing configuration for metadata extraction
-        ProcessingConfiguration:
-          Enabled: true
-          Processors:
-            - Type: MetadataExtraction
-              Parameters:
-                - ParameterName: JsonParsingEngine
-                  ParameterValue: JQ-1.6
-                - ParameterName: MetadataExtractionQuery
-                  ParameterValue: '{customer_tenant: .customer_tenant, cluster_id: .cluster_id, environment: .environment}'
+          Enabled: false
         # CloudWatch logging
         CloudWatchLoggingOptions:
           Enabled: true

@@ -583,7 +583,7 @@ Outputs:
 
   VectorRoleArn:
     Description: ARN of the Vector IAM role
-    Value: !If [HasEksOidcIssuer, !GetAtt VectorRole.Arn, '']
+    Value: !If [HasEksOidcIssuer, !GetAtt VectorRole.Arn, 'NONE']
     Export:
       Name: !Sub '${AWS::StackName}-VectorRoleArn'
 
