@@ -20,11 +20,6 @@ Parameters:
     Default: ""
     Description: OIDC issuer URL for the EKS cluster (without https://)
     
-  ClusterNames:
-    Type: CommaDelimitedList
-    Default: "prod-cluster-1,prod-cluster-2"
-    Description: List of Kubernetes cluster names that will send logs
-    
   # Lambda Configuration
     
   # S3 Configuration
@@ -81,7 +76,6 @@ Resources:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
         EksOidcIssuer: !Ref EksOidcIssuer
-        ClusterNames: !Join [",", !Ref ClusterNames]
         S3StandardIADays: !Ref S3StandardIADays
         S3GlacierDays: !Ref S3GlacierDays
         S3DeepArchiveDays: !Ref S3DeepArchiveDays
