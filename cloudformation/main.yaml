@@ -5,7 +5,7 @@ Parameters:
   # Basic Configuration
   Environment:
     Type: String
-    Default: production
+    Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
     

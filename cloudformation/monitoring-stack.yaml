@@ -4,7 +4,7 @@ Description: 'Monitoring, alerting, and SNS/SQS resources for multi-tenant loggi
 Parameters:
   Environment:
     Type: String
-    Default: production
+    Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
     

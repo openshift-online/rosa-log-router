@@ -4,7 +4,7 @@ Description: 'Kinesis Data Firehose and Glue catalog for multi-tenant logging'
 Parameters:
   Environment:
     Type: String
-    Default: production
+    Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
     
@@ -143,7 +143,7 @@ Resources:
             Type: string
             Comment: Hour for partitioning
 
-  # Kinesis Data Firehose Delivery Stream
+  # Kinesis Data Firehose Delivery Stream (minimal working configuration)
   FirehoseDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
@@ -152,29 +152,12 @@ Resources:
       ExtendedS3DestinationConfiguration:
         RoleARN: !Ref FirehoseRoleArn
         BucketARN: !Sub 'arn:aws:s3:::${CentralLoggingBucketName}'
-        # Dynamic partitioning with tenant segregation
-        Prefix: 'logs/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/'
+        Prefix: 'logs/'
         ErrorOutputPrefix: 'errors/'
-        # Buffering configuration for cost optimization
         BufferingHints:
-          SizeInMBs: !Ref FirehoseBufferSizeMB
-          IntervalInSeconds: !Ref FirehoseBufferIntervalSeconds
+          SizeInMBs: 5
+          IntervalInSeconds: 300
         CompressionFormat: GZIP
-        # Encryption configuration
-        EncryptionConfiguration:
-          KMSEncryptionConfig:
-            AWSKMSKeyARN: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KMSKeyId}'
-        # Data format conversion to Parquet for cost savings (disabled for initial deployment)
-        # DataFormatConversionConfiguration:
-        #   Enabled: false
-        # Dynamic partitioning configuration
-        DynamicPartitioning:
-          Enabled: false
-        # CloudWatch logging
-        CloudWatchLoggingOptions:
-          Enabled: true
-          LogGroupName: !Sub '/aws/kinesisfirehose/${ProjectName}-${Environment}-stream'
-          LogStreamName: !Sub '${ProjectName}-${Environment}-delivery'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-firehose'

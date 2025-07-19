@@ -4,7 +4,7 @@ Description: 'Core infrastructure for multi-tenant logging - S3, DynamoDB, KMS, 
 Parameters:
   Environment:
     Type: String
-    Default: production
+    Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
     

@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Minimal Firehose test stack for debugging deployment issues'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    Description: Environment name
+    
+  ProjectName:
+    Type: String
+    Default: firehose-test
+    Description: Name of the project for resource naming
+
+Resources:
+  # Simple S3 bucket for testing
+  TestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-test-bucket'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Firehose (minimal permissions)
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-firehose-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FirehoseS3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${TestBucket.Arn}/*'
+                  - !GetAtt TestBucket.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Minimal Firehose Delivery Stream
+  TestFirehoseStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub '${ProjectName}-${Environment}-stream'
+      DeliveryStreamType: DirectPut
+      ExtendedS3DestinationConfiguration:
+        RoleARN: !GetAtt FirehoseRole.Arn
+        BucketARN: !GetAtt TestBucket.Arn
+        Prefix: 'test-logs/'
+        ErrorOutputPrefix: 'errors/'
+        BufferingHints:
+          SizeInMBs: 1
+          IntervalInSeconds: 60
+        CompressionFormat: GZIP
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-firehose'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  BucketName:
+    Description: Name of the test S3 bucket
+    Value: !Ref TestBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+
+  FirehoseStreamName:
+    Description: Name of the Firehose delivery stream
+    Value: !Ref TestFirehoseStream
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseStreamName'
+
+  FirehoseStreamArn:
+    Description: ARN of the Firehose delivery stream
+    Value: !GetAtt TestFirehoseStream.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FirehoseStreamArn'

@@ -4,7 +4,7 @@ Description: 'Lambda functions for multi-tenant log distribution'
 Parameters:
   Environment:
     Type: String
-    Default: production
+    Default: development
     AllowedValues: [production, staging, development]
     Description: Environment name
     
