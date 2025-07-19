@@ -3,16 +3,16 @@ AWS Lambda function for cross-account log delivery
 Processes S3 events from SQS queue and delivers logs to customer CloudWatch Logs
 """
 
-import json
-import urllib.parse
 import gzip
-import boto3
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+import json
 import logging
 import os
-import io
-from botocore.exceptions import ClientError, NoCredentialsError
+import urllib.parse
+from datetime import datetime
+from typing import Dict, List, Any, Optional
+
+import boto3
+from botocore.exceptions import ClientError
 
 # Configure logging
 logger = logging.getLogger()
@@ -172,27 +172,14 @@ def process_parquet_file(file_content: bytes) -> List[Dict[str, Any]]:
 def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
     """
     Process JSON file content and extract log events
-    Handles both Vector's JSON array format and line-delimited JSON
+    Prioritizes Vector's NDJSON (line-delimited JSON) format with JSON array fallback
     """
     try:
         log_events = []
         content = file_content.decode('utf-8')
         
-        # Try parsing as JSON array first (Vector format)
+        # Try line-delimited JSON first (Vector NDJSON format)
         try:
-            data = json.loads(content)
-            if isinstance(data, list):
-                for log_record in data:
-                    event = convert_log_record_to_event(log_record)
-                    if event:
-                        log_events.append(event)
-            else:
-                # Single JSON object
-                event = convert_log_record_to_event(data)
-                if event:
-                    log_events.append(event)
-        except json.JSONDecodeError:
-            # Try line-delimited JSON
             for line in content.strip().split('\n'):
                 if line:
                     try:
@@ -202,6 +189,22 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
                             log_events.append(event)
                     except json.JSONDecodeError:
                         continue
+        except Exception:
+            # Fallback: try parsing as JSON array or single object
+            try:
+                data = json.loads(content)
+                if isinstance(data, list):
+                    for log_record in data:
+                        event = convert_log_record_to_event(log_record)
+                        if event:
+                            log_events.append(event)
+                else:
+                    # Single JSON object
+                    event = convert_log_record_to_event(data)
+                    if event:
+                        log_events.append(event)
+            except json.JSONDecodeError:
+                pass  # No valid JSON found
         
         logger.info(f"Processed {len(log_events)} log events from JSON file")
         return log_events

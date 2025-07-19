@@ -96,6 +96,8 @@ data:
         filename_extension: "json.gz"
         encoding:
           codec: "json"
+        framing:
+          method: "newline_delimited"
         compression: "gzip"
         batch:
           max_bytes: 10485760  # 10MB
@@ -119,6 +121,8 @@ data:
         path: "/vector-data-dir/debug.log"
         encoding:
           codec: "json"
+        framing:
+          method: "newline_delimited"
         buffer:
           type: "memory"
           max_events: 100
