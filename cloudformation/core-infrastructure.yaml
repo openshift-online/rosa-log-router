@@ -209,44 +209,7 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Backup S3 Bucket
-
-  # SNS topic for log delivery notifications
-  LogDeliveryTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub '${ProjectName}-${Environment}-log-delivery'
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # SNS topic policy to allow S3 to publish messages
-  LogDeliveryTopicPolicy:
-    Type: AWS::SNS::TopicPolicy
-    Properties:
-      Topics:
-        - !Ref LogDeliveryTopic
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowS3Publish
-            Effect: Allow
-            Principal:
-              Service: s3.amazonaws.com
-            Action: SNS:Publish
-            Resource: !Ref LogDeliveryTopic
-            Condition:
-              StringEquals:
-                'aws:SourceAccount': !Ref AWS::AccountId
-              ArnEquals:
-                'aws:SourceArn': !GetAtt CentralLoggingBucket.Arn
-
-
-  # S3 Bucket Notification Configuration
+  # S3 Bucket Notification Configuration (using custom resource to avoid circular dependency)
   S3BucketNotification:
     Type: AWS::CloudFormation::CustomResource
     Properties:
@@ -346,6 +309,42 @@ Resources:
                   - s3:GetBucketNotification
                   - s3:PutBucketNotification
                 Resource: !GetAtt CentralLoggingBucket.Arn
+
+  # SNS topic for log delivery notifications
+  LogDeliveryTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${Environment}-log-delivery'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # SNS topic policy to allow S3 to publish messages
+  LogDeliveryTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref LogDeliveryTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3Publish
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: SNS:Publish
+            Resource: !Ref LogDeliveryTopic
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+              ArnEquals:
+                'aws:SourceArn': !GetAtt CentralLoggingBucket.Arn
+
+
 
   # S3 Access Log Group
   S3AccessLogGroup:
