@@ -5,7 +5,8 @@ metadata:
   namespace: logging
 data:
   aws_region: "us-east-1"
-  kinesis_stream_name: "central-logging-stream"
+  s3_bucket_name: "multi-tenant-logging-production-central"
+  s3_writer_role_arn: "arn:aws:iam::123456789012:role/multi-tenant-logging-production-central-s3-writer-role"
   vector.yaml: |
     # Vector configuration for multi-tenant logging
     data_dir: "/vector-data-dir"
@@ -32,11 +33,12 @@ data:
         type: "remap"
         inputs: ["kubernetes_logs"]
         source: |
-          # Extract tenant information from pod labels
-          .customer_tenant = .kubernetes.pod_labels."customer-tenant-id" || "unknown"
-          .cluster_id = .kubernetes.pod_labels."cluster-id" || get_env_var("CLUSTER_ID") || "unknown"
-          .environment = .kubernetes.pod_labels."environment" || "production"
-          .application = .kubernetes.pod_labels."app" || "unknown"
+          # Extract tenant information from pod annotations (changed from labels)
+          .customer_id = .kubernetes.pod_annotations."customer-id" || "unknown"
+          .cluster_id = .kubernetes.pod_annotations."cluster-id" || get_env_var("CLUSTER_ID") || "unknown"
+          .environment = .kubernetes.pod_annotations."environment" || "production"
+          .application = .kubernetes.pod_annotations."application" || .kubernetes.pod_labels."app" || "unknown"
+          .pod_name = .kubernetes.pod_name || "unknown"
           
           # Extract log level if present
           log_level_match = parse_regex(.message, r'(?P<level>TRACE|DEBUG|INFO|WARN|ERROR|FATAL)') ?? {}
@@ -60,19 +62,20 @@ data:
       filter_tenant_logs:
         type: "filter"
         inputs: ["enrich_metadata"]
-        condition: '.customer_tenant != "unknown"'
+        condition: '.customer_id != "unknown"'
         
-      structure_for_firehose:
+      structure_for_s3:
         type: "remap"
         inputs: ["filter_tenant_logs"]
         source: |
-          # Restructure for Kinesis Firehose dynamic partitioning
+          # Restructure for S3 storage
           . = {
             "timestamp": .timestamp,
-            "customer_tenant": .customer_tenant,
+            "customer_id": .customer_id,
             "cluster_id": .cluster_id,
             "environment": .environment,
             "application": .application,
+            "pod_name": .pod_name,
             "log_level": .log_level,
             "message": .message,
             "kubernetes": .kubernetes,
@@ -82,17 +85,22 @@ data:
     
     # Sinks
     sinks:
-      kinesis_firehose:
-        type: "aws_kinesis_firehose"
-        inputs: ["structure_for_firehose"]
-        stream_name: "${KINESIS_STREAM_NAME}"
+      s3_logs:
+        type: "aws_s3"
+        inputs: ["structure_for_s3"]
+        bucket: "${S3_BUCKET_NAME}"
         region: "${AWS_REGION}"
+        key_prefix: "{{ customer_id }}/{{ cluster_id }}/{{ application }}/{{ pod_name }}/"
+        filename_time_format: "%Y%m%d%H%M%S"
+        filename_append_uuid: true
+        filename_extension: "json.gz"
         encoding:
           codec: "json"
+        compression: "gzip"
         batch:
-          max_bytes: 4000000  # 4MB (Firehose limit is 4MB)
-          max_events: 500
-          timeout_secs: 1
+          max_bytes: 10485760  # 10MB
+          max_events: 10000
+          timeout_secs: 300  # 5 minutes
         buffer:
           type: "disk"
           max_size: 268435456  # 256MB
@@ -101,12 +109,13 @@ data:
           retry_attempts: 3
           retry_initial_backoff_secs: 1
           retry_max_duration_secs: 60
-        compression: "gzip"
+        auth:
+          assume_role: "${S3_WRITER_ROLE_ARN}"
         
       # Optional: Local file backup for debugging
       debug_file:
         type: "file"
-        inputs: ["structure_for_firehose"]
+        inputs: ["structure_for_s3"]
         path: "/vector-data-dir/debug.log"
         encoding:
           codec: "json"

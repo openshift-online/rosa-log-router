@@ -40,21 +40,6 @@ Parameters:
     MaxValue: 1000
     Description: Maximum concurrency for Lambda event source mapping
     
-  # Firehose Configuration
-  FirehoseBufferSizeMB:
-    Type: Number
-    Default: 128
-    MinValue: 1
-    MaxValue: 128
-    Description: Buffer size for Firehose in MB
-    
-  FirehoseBufferIntervalSeconds:
-    Type: Number
-    Default: 900
-    MinValue: 60
-    MaxValue: 900
-    Description: Buffer interval for Firehose in seconds
-    
   # S3 Configuration
   S3StandardIADays:
     Type: Number
@@ -104,12 +89,6 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Enable S3 Intelligent Tiering for cost optimization
-    
-  EnableParquetConversion:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable Parquet format conversion in Firehose
     
   EnableS3Encryption:
     Type: String
@@ -181,7 +160,6 @@ Conditions:
   IsAnalyticsEnabled: !Equals [!Ref EnableAnalytics, "true"]
   IsDetailedMonitoringEnabled: !Equals [!Ref EnableDetailedMonitoring, "true"]
   IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
-  IsParquetConversionEnabled: !Equals [!Ref EnableParquetConversion, "true"]
   IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
   IsCrossRegionReplicationEnabled: !Equals [!Ref EnableCrossRegionReplication, "true"]
   IsXRayTracingEnabled: !Equals [!Ref EnableXRayTracing, "true"]
@@ -210,6 +188,7 @@ Resources:
         EnableCrossRegionReplication: !Ref EnableCrossRegionReplication
         BackupRegion: !Ref BackupRegion
         CostCenter: !Ref CostCenter
+        LogDeliveryHubTopicArn: !GetAtt MonitoringStack.Outputs.LogDeliveryHubTopicArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -220,36 +199,10 @@ Resources:
         - Key: StackType
           Value: core-infrastructure
   
-  # Kinesis Data Processing Stack
-  KinesisStack:
-    Type: AWS::CloudFormation::Stack
-    DependsOn: CoreInfrastructureStack
-    Properties:
-      TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/kinesis-stack.yaml'
-      Parameters:
-        Environment: !Ref Environment
-        ProjectName: !Ref ProjectName
-        FirehoseBufferSizeMB: !Ref FirehoseBufferSizeMB
-        FirehoseBufferIntervalSeconds: !Ref FirehoseBufferIntervalSeconds
-        EnableParquetConversion: !Ref EnableParquetConversion
-        CentralLoggingBucketName: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
-        FirehoseRoleArn: !GetAtt CoreInfrastructureStack.Outputs.FirehoseRoleArn
-        KMSKeyId: !GetAtt CoreInfrastructureStack.Outputs.KMSKeyId
-        CostCenter: !Ref CostCenter
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-        - Key: StackType
-          Value: kinesis-processing
-  
   # Lambda Functions Stack
   LambdaStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: [CoreInfrastructureStack, KinesisStack]
+    DependsOn: CoreInfrastructureStack
     Properties:
       TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/lambda-stack.yaml'
       Parameters:
@@ -277,7 +230,7 @@ Resources:
   # Monitoring and Alerting Stack
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: [CoreInfrastructureStack, KinesisStack, LambdaStack]
+    DependsOn: [CoreInfrastructureStack, LambdaStack]
     Properties:
       TemplateURL: !Sub 'https://s3.amazonaws.com/${TemplateBucket}/cloudformation/templates/monitoring-stack.yaml'
       Parameters:
@@ -288,7 +241,6 @@ Resources:
         AlertEmailEndpoints: !Join [",", !Ref AlertEmailEndpoints]
         LogDistributorFunctionName: !GetAtt LambdaStack.Outputs.LogDistributorFunctionName
         DLQProcessorFunctionName: !GetAtt LambdaStack.Outputs.DLQProcessorFunctionName
-        FirehoseDeliveryStreamName: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamName
         CentralLoggingBucketName: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketName
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
         CostCenter: !Ref CostCenter
@@ -301,7 +253,7 @@ Resources:
           Value: cloudformation
         - Key: StackType
           Value: monitoring-alerting
-
+  
 Outputs:
   # Core Infrastructure Outputs
   CentralLoggingBucketName:
@@ -327,19 +279,6 @@ Outputs:
     Value: !GetAtt CoreInfrastructureStack.Outputs.KMSKeyId
     Export:
       Name: !Sub '${AWS::StackName}-KMSKeyId'
-  
-  # Kinesis Outputs
-  FirehoseDeliveryStreamName:
-    Description: Name of the Firehose delivery stream
-    Value: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamName
-    Export:
-      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamName'
-  
-  FirehoseDeliveryStreamArn:
-    Description: ARN of the Firehose delivery stream
-    Value: !GetAtt KinesisStack.Outputs.FirehoseDeliveryStreamArn
-    Export:
-      Name: !Sub '${AWS::StackName}-FirehoseDeliveryStreamArn'
   
   # Lambda Outputs
   LogDistributorFunctionName:

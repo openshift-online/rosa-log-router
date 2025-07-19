@@ -7,8 +7,7 @@ This repository contains the implementation of a scalable, multi-tenant logging 
 The solution implements a "Centralized Ingestion, Decentralized Delivery" model with the following key components:
 
 - **Vector** log agents deployed as DaemonSets in Kubernetes clusters
-- **Kinesis Data Firehose** for centralized ingestion with dynamic partitioning
-- **S3** for staging and long-term storage with lifecycle policies
+- **S3** for direct log storage with dynamic partitioning by tenant
 - **SNS/SQS** hub-and-spoke pattern for event-driven processing
 - **Lambda** function for cross-account log delivery
 - **DynamoDB** for tenant configuration management
@@ -34,10 +33,6 @@ graph TB
     end
 
     subgraph "Central AWS Account - Log Processing"
-        subgraph "Ingestion Layer"
-            KF[Kinesis Data Firehose<br/>Dynamic Partitioning<br/>JSON → Parquet]
-        end
-        
         subgraph "Storage Layer"
             S3[S3 Central Bucket<br/>Tenant Partitioned<br/>Lifecycle Policies]
             S3E[S3 Event Notifications]
@@ -56,6 +51,7 @@ graph TB
         subgraph "Security"
             STS[AWS STS<br/>Cross-Account Roles]
             CentralRole[Central Log<br/>Distribution Role]
+            S3WriterRole[Central S3<br/>Writer Role]
         end
         
         subgraph "Monitoring"
@@ -92,11 +88,9 @@ graph TB
     end
 
     %% Data Flow
-    V1 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
-    V2 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
-    V3 -->|Enriched Logs<br/>tenant_id, cluster_id| KF
-    
-    KF -->|Parquet Files<br/>Partitioned by Tenant| S3
+    V1 -->|Enriched Logs<br/>customer_id, cluster_id| S3
+    V2 -->|Enriched Logs<br/>customer_id, cluster_id| S3
+    V3 -->|Enriched Logs<br/>customer_id, cluster_id| S3
     S3 --> S3E
     S3E -->|ObjectCreated Events| SNS
     SNS -->|Fan-out Events| SQS
@@ -119,7 +113,6 @@ graph TB
     
     %% Monitoring Flows
     Lambda --> CW
-    KF --> CW
     S3 --> CW
     SQS --> CW
     
@@ -135,8 +128,8 @@ graph TB
     classDef processing fill:#fce4ec
     
     class K8s1,K8s2,K8s3,V1,V2,V3 customer
-    class Lambda,SQS,SNS,KF central
-    class STS,CentralRole,Role_A,Role_B,Trust_A,Trust_B security
+    class Lambda,SQS,SNS central
+    class STS,CentralRole,S3WriterRole,Role_A,Role_B,Trust_A,Trust_B security
     class S3,DDB storage
     class CWL_A,CWL_B,CW,Dash_A,Metric_A processing
 ```
@@ -144,12 +137,11 @@ graph TB
 ### Data Flow Summary
 
 1. **Collection**: Vector agents collect logs from Kubernetes pods and enrich with tenant metadata
-2. **Ingestion**: Kinesis Firehose receives logs and applies dynamic partitioning by tenant
-3. **Staging**: S3 stores logs in Parquet format with tenant-segregated partitions
-4. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
-5. **Processing**: Lambda function processes SQS messages and delivers logs cross-account
-6. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
-7. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
+2. **Direct Write**: Vector writes logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
+3. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
+4. **Processing**: Lambda function processes SQS messages and delivers logs cross-account
+5. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
+6. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
 
 ## Repository Structure
 
@@ -157,7 +149,6 @@ graph TB
 ├── cloudformation/
 │   ├── main.yaml                          # Main CloudFormation orchestration template
 │   ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
-│   ├── kinesis-stack.yaml                 # Firehose delivery stream and Glue catalog
 │   ├── lambda-stack.yaml                  # Lambda functions and event mappings
 │   ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, and alerting
 │   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
@@ -244,7 +235,14 @@ This project uses CloudFormation for infrastructure deployment with a nested sta
 
 ### Recent Infrastructure Updates
 
-The CloudFormation templates have been updated to address several deployment issues:
+The CloudFormation templates have undergone a major architectural change:
+- **Removed Kinesis Data Firehose**: Vector agents now write directly to S3 for better cost efficiency
+- **Added CentralS3WriterRole**: New IAM role for secure cross-account S3 access from Vector
+- **Updated Vector Configuration**: Changed from aws_kinesis_firehose sink to aws_s3 sink
+- **Modified Lambda Function**: Updated to parse new S3 key format: `customer_id/cluster_id/application/pod_name/`
+- **Integrated S3 Events**: Connected S3 event notifications with existing SNS/SQS infrastructure
+
+Previous fixes included:
 - **IAM Policy Fixes**: Corrected S3 bucket ARN format in IAM policies to use proper CloudFormation intrinsic functions
 - **Template URL Format**: Updated nested stack URLs to use the legacy S3 format (`https://s3.amazonaws.com/bucket/key`) required by CloudFormation
 - **Resource Type Validation**: Removed invalid `AWS::DynamoDB::Item` resources that aren't supported by CloudFormation
@@ -258,7 +256,8 @@ The CloudFormation templates have been updated to address several deployment iss
 The following environment variables can be configured:
 
 - `AWS_REGION`: AWS region for deployment (default: us-east-1)
-- `KINESIS_STREAM_NAME`: Name of the Firehose stream
+- `S3_BUCKET_NAME`: Name of the central S3 bucket for logs
+- `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role for Vector
 - `TENANT_CONFIG_TABLE`: DynamoDB table name for tenant configurations
 
 ### CloudFormation Parameters
@@ -270,7 +269,6 @@ Key parameters for customization:
   "Environment": "production",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 100,
-  "FirehoseBufferSizeMB": 128,
   "EnableS3Encryption": true,
   "EnableDetailedMonitoring": true,
   "AlertEmailEndpoints": "ops@company.com",
@@ -287,7 +285,6 @@ The infrastructure includes comprehensive monitoring:
 - **Per-tenant dashboards**: Individual tenant monitoring
 
 ### CloudWatch Alarms
-- Firehose delivery failures
 - Lambda function errors and duration
 - SQS queue depth and message age
 - DynamoDB throttling
@@ -316,14 +313,13 @@ The infrastructure includes comprehensive monitoring:
 ## Performance Optimization
 
 ### Batching and Aggregation
-- Firehose buffer configuration: 128MB / 15 minutes
+- Vector S3 batch configuration: 10MB / 5 minutes
 - Lambda SQS batch size: 10 messages
 - CloudWatch Logs API batching: 1000 events
 
 ### Format Conversion
-- Parquet format for 80-90% storage cost reduction
-- GZIP compression for data transfer optimization
-- Dynamic partitioning for query performance
+- GZIP compression for storage and transfer optimization
+- Dynamic partitioning by customer/cluster/app for query performance
 
 ### Concurrency Management
 - Lambda reserved concurrency: 100
@@ -333,16 +329,15 @@ The infrastructure includes comprehensive monitoring:
 ## Cost Management
 
 ### Estimated Costs (1TB/month)
-- Kinesis Data Firehose: ~$50
 - S3 storage (with lifecycle): ~$25
 - Lambda execution: ~$15
 - SNS/SQS: ~$5
 - DynamoDB: ~$5
-- **Total: ~$100/month** (vs $600+ for direct CloudWatch Logs)
+- **Total: ~$50/month** (vs $600+ for direct CloudWatch Logs)
 
 ### Cost Optimization Features
 - S3 lifecycle policies with tiered storage
-- Parquet format conversion
+- GZIP compression
 - Intelligent tiering
 - Right-sized Lambda memory allocation
 
@@ -351,8 +346,8 @@ The infrastructure includes comprehensive monitoring:
 ### Common Issues
 
 1. **Vector not sending logs**
-   - Check IAM role permissions for Firehose
-   - Verify Kubernetes RBAC configuration
+   - Check IAM role permissions for S3
+   - Verify S3WriterRole trust policy
    - Check Vector pod logs: `kubectl logs -n logging daemonset/vector-logs`
 
 2. **Lambda function errors**
@@ -361,7 +356,7 @@ The infrastructure includes comprehensive monitoring:
    - Check cross-account role trust policies
 
 3. **High costs**
-   - Review Firehose buffer settings
+   - Review Vector batch settings
    - Check S3 lifecycle policies
    - Monitor CloudWatch billing alerts
 
@@ -382,9 +377,15 @@ aws cloudwatch get-metric-statistics \
   --period 3600 \
   --statistics Sum
 
-# Check Firehose status
-aws firehose describe-delivery-stream \
-  --delivery-stream-name central-logging-stream
+# Check S3 bucket metrics
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/S3 \
+  --metric-name NumberOfObjects \
+  --dimensions Name=BucketName,Value=multi-tenant-logging-production-central \
+  --start-time 2024-01-01T00:00:00Z \
+  --end-time 2024-01-01T23:59:59Z \
+  --period 3600 \
+  --statistics Average
 ```
 
 ## Development

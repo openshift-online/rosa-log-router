@@ -94,20 +94,29 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
 def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     """
     Extract tenant information from S3 object key path
-    Expected format: logs/tenant_id=acme-corp/cluster_id=prod/environment=production/...
+    Expected format: customer_id/cluster_id/application/pod_name/timestamp-uuid.json.gz
+    Example: acme-corp/prod-cluster-1/payment-app/pod-xyz-123/20240101120000-a1b2c3d4.json.gz
     """
     path_parts = object_key.split('/')
-    tenant_info = {}
     
-    for part in path_parts:
-        if '=' in part:
-            key, value = part.split('=', 1)
-            tenant_info[key] = value
+    # Ensure we have at least 5 parts (customer_id/cluster_id/application/pod_name/filename)
+    if len(path_parts) < 5:
+        raise ValueError(f"Invalid object key format. Expected at least 5 path segments, got {len(path_parts)}: {object_key}")
     
-    required_fields = ['tenant_id', 'cluster_id', 'environment']
-    for field in required_fields:
-        if field not in tenant_info:
-            raise ValueError(f"Missing required field '{field}' in object key: {object_key}")
+    tenant_info = {
+        'tenant_id': path_parts[0],  # Map customer_id to tenant_id for compatibility
+        'customer_id': path_parts[0],
+        'cluster_id': path_parts[1],
+        'application': path_parts[2],
+        'pod_name': path_parts[3],
+        'environment': 'production'  # Default, can be extracted from cluster_id or metadata
+    }
+    
+    # Extract environment from cluster_id if it contains it (e.g., prod-cluster-1)
+    if '-' in tenant_info['cluster_id']:
+        env_prefix = tenant_info['cluster_id'].split('-')[0]
+        env_map = {'prod': 'production', 'stg': 'staging', 'dev': 'development'}
+        tenant_info['environment'] = env_map.get(env_prefix, 'production')
     
     logger.info(f"Extracted tenant info: {tenant_info}")
     return tenant_info

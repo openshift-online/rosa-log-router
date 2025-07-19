@@ -38,10 +38,6 @@ Parameters:
     Type: String
     Description: Name of the DLQ processor Lambda function
     
-  FirehoseDeliveryStreamName:
-    Type: String
-    Description: Name of the Firehose delivery stream
-    
   CentralLoggingBucketName:
     Type: String
     Description: Name of the central logging S3 bucket
@@ -288,15 +284,15 @@ Resources:
               "height": 6,
               "properties": {
                 "metrics": [
-                  ["AWS/Kinesis/Firehose", "DeliveryToS3.Records", "DeliveryStreamName", "${FirehoseDeliveryStreamName}"],
-                  ["AWS/Kinesis/Firehose", "DeliveryToS3.Success", "DeliveryStreamName", "${FirehoseDeliveryStreamName}"],
-                  ["AWS/Kinesis/Firehose", "DeliveryToS3.DataFreshness", "DeliveryStreamName", "${FirehoseDeliveryStreamName}"]
+                  ["AWS/S3", "NumberOfObjects", "BucketName", "${CentralLoggingBucketName}", "StorageType", "AllStorageTypes"],
+                  ["AWS/S3", "BucketSizeBytes", "BucketName", "${CentralLoggingBucketName}", "StorageType", "StandardStorage"]
                 ],
                 "view": "timeSeries",
                 "stacked": false,
                 "region": "${AWS::Region}",
-                "title": "Firehose Delivery Metrics",
-                "period": 300
+                "title": "S3 Storage Metrics",
+                "period": 86400,
+                "stat": "Average"
               }
             },
             {

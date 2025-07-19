@@ -74,6 +74,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Cost center for billing allocation
+    
+  LogDeliveryHubTopicArn:
+    Type: String
+    Description: ARN of the log delivery hub SNS topic (from monitoring stack)
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
@@ -274,6 +278,107 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
+  # S3 Bucket Notification Configuration
+  S3BucketNotification:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt S3NotificationFunction.Arn
+      BucketName: !Ref CentralLoggingBucket
+      TopicArn: !Ref LogDeliveryHubTopicArn
+      
+  S3NotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-s3-notification-config'
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt S3NotificationFunctionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          
+          def lambda_handler(event, context):
+              try:
+                  request_type = event['RequestType']
+                  bucket_name = event['ResourceProperties']['BucketName']
+                  topic_arn = event['ResourceProperties']['TopicArn']
+                  
+                  s3 = boto3.client('s3')
+                  
+                  if request_type == 'Create' or request_type == 'Update':
+                      # Configure S3 bucket notification
+                      notification_config = {
+                          'TopicConfigurations': [
+                              {
+                                  'Id': 'LogDeliveryNotification',
+                                  'TopicArn': topic_arn,
+                                  'Events': ['s3:ObjectCreated:*'],
+                                  'Filter': {
+                                      'Key': {
+                                          'FilterRules': [
+                                              {
+                                                  'Name': 'suffix',
+                                                  'Value': '.gz'
+                                              }
+                                          ]
+                                      }
+                                  }
+                              }
+                          ]
+                      }
+                      
+                      s3.put_bucket_notification_configuration(
+                          Bucket=bucket_name,
+                          NotificationConfiguration=notification_config
+                      )
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  elif request_type == 'Delete':
+                      # Remove notification configuration
+                      s3.put_bucket_notification_configuration(
+                          Bucket=bucket_name,
+                          NotificationConfiguration={}
+                      )
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      
+              except Exception as e:
+                  print(f"Error: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  S3NotificationFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3NotificationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketNotification
+                  - s3:PutBucketNotification
+                Resource: !GetAtt CentralLoggingBucket.Arn
+
   # S3 Access Log Group
   S3AccessLogGroup:
     Type: AWS::Logs::LogGroup
@@ -333,59 +438,6 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # IAM Role for Firehose
-  FirehoseRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-firehose-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: firehose.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: FirehoseDeliveryPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                  - s3:PutObject
-                Resource:
-                  - !Sub '${CentralLoggingBucket.Arn}/*'
-                  - !GetAtt CentralLoggingBucket.Arn
-              - Effect: Allow
-                Action:
-                  - glue:GetTable
-                  - glue:GetTableVersion
-                  - glue:GetTableVersions
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:GenerateDataKey
-                Resource: !GetAtt LoggingKMSKey.Arn
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/*'
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
   # IAM Role for Vector (EKS Service Account)
   VectorRole:
     Type: AWS::IAM::Role
@@ -404,20 +456,63 @@ Resources:
                 ${EksOidcIssuer}:sub: 'system:serviceaccount:logging:vector-logs'
                 ${EksOidcIssuer}:aud: 'sts.amazonaws.com'
       Policies:
-        - PolicyName: VectorFirehosePolicy
+        - PolicyName: VectorS3AssumeRolePolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - firehose:PutRecord
-                  - firehose:PutRecordBatch
-                Resource: !Sub 'arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/${ProjectName}-${Environment}-*'
+                  - sts:AssumeRole
+                Resource: !GetAtt CentralS3WriterRole.Arn
+              - Effect: Allow
+                Action:
+                  - sts:TagSession
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Central S3 Writer Role for cross-account S3 access
+  CentralS3WriterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-central-s3-writer-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                'aws:userid': !If 
+                  - HasEksOidcIssuer
+                  - !Sub '${VectorRole.RoleId}:*'
+                  - 'AIDAI*'  # Allow any IAM user/role in the account if no Vector role
+      Policies:
+        - PolicyName: S3WriterPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: 
+                  - !Sub '${CentralLoggingBucket.Arn}/*'
               - Effect: Allow
                 Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: !GetAtt LoggingKMSKey.Arn
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -575,17 +670,17 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-KMSKeyArn'
 
-  FirehoseRoleArn:
-    Description: ARN of the Firehose IAM role
-    Value: !GetAtt FirehoseRole.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-FirehoseRoleArn'
-
   VectorRoleArn:
     Description: ARN of the Vector IAM role
     Value: !If [HasEksOidcIssuer, !GetAtt VectorRole.Arn, 'NONE']
     Export:
       Name: !Sub '${AWS::StackName}-VectorRoleArn'
+
+  CentralS3WriterRoleArn:
+    Description: ARN of the Central S3 Writer IAM role
+    Value: !GetAtt CentralS3WriterRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CentralS3WriterRoleArn'
 
   LogDistributorRoleArn:
     Description: ARN of the log distributor Lambda IAM role

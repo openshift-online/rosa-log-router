@@ -8,13 +8,19 @@ The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" 
 
 1. **Main Stack** (`main.yaml`) - Orchestrates nested stacks with parameter passing
 2. **Core Infrastructure** (`core-infrastructure.yaml`) - S3, DynamoDB, KMS, and IAM resources
-3. **Kinesis Stack** (`kinesis-stack.yaml`) - Firehose delivery stream and Glue catalog
-4. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions for log distribution
-5. **Monitoring Stack** (`monitoring-stack.yaml`) - CloudWatch, SNS/SQS, and alerting
+3. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions for log distribution
+4. **Monitoring Stack** (`monitoring-stack.yaml`) - CloudWatch, SNS/SQS, and alerting
 
 ### Recent Updates
 
-The CloudFormation templates have been updated to fix several critical deployment issues:
+The CloudFormation templates have undergone a major architectural change:
+- **Removed Kinesis Data Firehose** - Vector agents now write directly to S3
+- Added CentralS3WriterRole for secure cross-account S3 access from Vector
+- Updated Vector configuration to use aws_s3 sink instead of aws_kinesis_firehose
+- Modified Lambda function to parse new S3 key format: `customer_id/cluster_id/application/pod_name/`
+- Integrated S3 event notifications with existing SNS/SQS infrastructure
+
+Previous fixes included:
 - Fixed IAM policy S3 ARN format errors (using `.Arn` attribute instead of bucket names)
 - Updated nested stack template URLs to use legacy S3 format required by CloudFormation
 - Removed invalid `AWS::DynamoDB::Item` resources from upstream changes
@@ -66,7 +72,6 @@ export AWS_REGION=us-east-2
 cloudformation/
 ├── main.yaml                          # Main orchestration template
 ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
-├── kinesis-stack.yaml                 # Firehose and Glue catalog
 ├── lambda-stack.yaml                  # Lambda functions and event mappings
 ├── monitoring-stack.yaml              # CloudWatch, SNS/SQS, alerting
 ├── customer-log-distribution-role.yaml # Customer account template
@@ -84,7 +89,6 @@ cloudformation/
 | ProjectName               | Project name for resource naming | multi-tenant-logging | Yes |
 | EksOidcIssuer             | OIDC issuer URL for EKS cluster | ""                   | No |
 | LambdaReservedConcurrency | Reserved concurrency for Lambda | 100                  | No |
-| FirehoseBufferSizeMB      | Firehose buffer size in MB      | 128                  | No |
 | AlertEmailEndpoints       | Email addresses for alerts      | ""                   | No |
 | EnableAnalytics           | Enable analytics pipeline       | false                | No |
 | EnableS3Encryption        | Enable S3 encryption            | true                 | No |
@@ -100,7 +104,6 @@ Create parameter files for different environments:
   "Environment": "production",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 200,
-  "FirehoseBufferSizeMB": 128,
   "AlertEmailEndpoints": "ops@company.com,alerts@company.com",
   "EnableDetailedMonitoring": "true",
   "EnableEnhancedMonitoring": "true",
@@ -114,7 +117,6 @@ Create parameter files for different environments:
   "Environment": "staging",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 50,
-  "FirehoseBufferSizeMB": 64,
   "AlertEmailEndpoints": "dev-team@company.com",
   "EnableDetailedMonitoring": "false",
   "CostCenter": "development"
@@ -165,8 +167,8 @@ OPTIONS:
 |----------------------------|-----------------------------------|
 | CentralLoggingBucketName   | S3 bucket for central logging     |
 | TenantConfigTableName      | DynamoDB table for tenant configs |
-| FirehoseDeliveryStreamName | Kinesis Firehose stream name      |
 | LogDistributorFunctionName | Lambda function name              |
+| CentralS3WriterRoleArn     | IAM role ARN for S3 writes        |
 | CloudWatchDashboardURL     | CloudWatch dashboard URL          |
 | VectorRoleArn              | IAM role ARN for Vector           |
 
@@ -190,7 +192,7 @@ aws cloudformation describe-stacks \
 ### CloudWatch Dashboard
 
 The deployment creates a comprehensive dashboard showing:
-- Firehose delivery metrics
+- S3 storage metrics
 - Lambda function performance
 - SQS queue metrics
 - DynamoDB performance
@@ -202,7 +204,6 @@ Access URL: `https://console.aws.amazon.com/cloudwatch/home#dashboards:name=mult
 
 Automatically configured alarms for:
 - Lambda function errors and throttles
-- Firehose delivery failures
 - SQS queue depth and message age
 - DynamoDB throttling
 - Budget threshold alerts
@@ -227,8 +228,8 @@ aws sns subscribe \
 
 The infrastructure creates minimal IAM roles with least privilege:
 
-- **FirehoseRole**: Allows Firehose to write to S3 and access Glue catalog
-- **VectorRole**: Allows Vector to put records to Firehose
+- **CentralS3WriterRole**: Allows Vector to write logs directly to S3
+- **VectorRole**: Allows Vector to assume the CentralS3WriterRole
 - **LogDistributorRole**: Allows Lambda to read from SQS, DynamoDB, and assume cross-account roles
 - **DLQProcessorRole**: Allows DLQ processing Lambda to send alerts
 
@@ -237,7 +238,6 @@ The infrastructure creates minimal IAM roles with least privilege:
 - **S3**: Server-side encryption with KMS
 - **DynamoDB**: Encryption at rest
 - **SQS/SNS**: Encryption with AWS managed keys
-- **Firehose**: Encryption in transit and at rest
 
 ### Cross-Account Access
 
@@ -274,11 +274,11 @@ Automatic transitions:
 - Glacier → Deep Archive (365 days)
 - Deletion (7 years)
 
-### Firehose Optimization
+### S3 Direct Write Optimization
 
-- Parquet format conversion (80-90% storage savings)
-- Dynamic partitioning for efficient querying
-- Optimized buffer settings (128MB/15 minutes)
+- Gzip compression for storage savings
+- Dynamic partitioning by customer_id/cluster_id/application/pod_name
+- Optimized batch settings (10MB/5 minutes)
 
 ### Lambda Optimization
 
