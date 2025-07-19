@@ -4,20 +4,22 @@ This directory contains CloudFormation templates for deploying the multi-tenant 
 
 ## Architecture Overview
 
-The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" architecture using a nested CloudFormation stack approach:
+The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" architecture using a modular nested CloudFormation stack approach:
 
-1. **Main Stack** (`main.yaml`) - Orchestrates nested stacks with parameter passing
+1. **Main Stack** (`main.yaml`) - Orchestrates nested stacks with conditional deployment
 2. **Core Infrastructure** (`core-infrastructure.yaml`) - S3, DynamoDB, KMS, IAM, and native S3 notifications
-3. **Lambda Stack** (`lambda-stack.yaml`) - Lambda functions, SQS queues, and event mappings
+3. **SQS Stack** (`sqs-stack.yaml`) - Optional SQS queue and DLQ for message processing
+4. **Lambda Stack** (`lambda-stack.yaml`) - Optional container-based Lambda functions for log processing
 
 ### Recent Updates (January 2025)
 
 **Major Architectural Improvements:**
+- **Container-Based Lambda** - Unified log processor using ECR container images with multi-mode execution
+- **Modular Deployment** - Optional SQS and Lambda stacks with `--include-sqs` and `--include-lambda` flags
 - **Native S3 Notifications** - Replaced custom Lambda functions with native `AWS::S3::Bucket NotificationConfiguration`
 - **Eliminated Circular Dependencies** - Deterministic bucket naming with deploy script parameter generation
-- **Simplified Infrastructure** - Reduced from 3 to 1 Lambda function, removed 159 lines of custom code
-- **Python 3.13 Upgrade** - All Lambda functions upgraded to latest Python runtime
-- **Enhanced Deployment** - Improved deploy script with better validation and error handling
+- **Simplified Infrastructure** - Reduced complexity with container-based approach
+- **Enhanced Deployment** - Improved deploy script with modular stack selection and ECR integration
 
 **Previous Major Changes:**
 - **Removed Kinesis Data Firehose** - Vector agents now write directly to S3
@@ -41,25 +43,57 @@ The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" 
 - S3 bucket for storing CloudFormation templates
 - Valid AWS account with necessary service quotas
 
-### Basic Deployment
+### Deployment Options
+
+The infrastructure supports three deployment patterns to accommodate different processing requirements:
+
+#### **Core Infrastructure Only**
+Deploy only S3, DynamoDB, SNS, and IAM resources. Suitable for external log processing systems.
 
 ```bash
-# Clone repository and navigate to cloudformation directory
 cd cloudformation/
-
-# Deploy with minimal configuration
 ./deploy.sh -b your-cloudformation-templates-bucket
+```
 
-# Deploy to staging environment
-./deploy.sh -e staging -b your-cloudformation-templates-bucket
+#### **Core + SQS Processing**
+Add SQS queue and DLQ for message buffering. Enables external applications to poll for log processing events.
 
-# Deploy with custom parameters
-./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket
+```bash
+cd cloudformation/
+./deploy.sh -b your-cloudformation-templates-bucket --include-sqs
+```
 
-# Deploy using environment variables for AWS configuration
+#### **Full Container-Based Processing**
+Complete serverless processing using container-based Lambda functions with ECR image deployment.
+
+```bash
+# First, build and push container to ECR
+cd ../container/
+podman build -f Containerfile -t log-processor:latest .
+aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
+podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+
+# Deploy with Lambda processing
+cd ../cloudformation/
+./deploy.sh -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+```
+
+#### **Environment-Specific Deployment**
+```bash
+# Development environment with SQS only
+./deploy.sh -e development -b your-templates-bucket --include-sqs
+
+# Staging environment with full Lambda processing
+./deploy.sh -e staging -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_IMAGE_URI
+
+# Production with custom parameters
+./deploy.sh -e production -p my-logging-project -r us-west-2 -b my-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_IMAGE_URI
+
+# Using environment variables for AWS configuration
 export AWS_PROFILE=your-profile
 export AWS_REGION=YOUR_AWS_REGION
-./deploy.sh -b your-cloudformation-templates-bucket
+./deploy.sh -b your-cloudformation-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_IMAGE_URI
 ```
 
 ### Validate Templates Only
@@ -76,11 +110,12 @@ export AWS_REGION=YOUR_AWS_REGION
 
 ```
 cloudformation/
-├── main.yaml                          # Main orchestration template
+├── main.yaml                          # Main orchestration template with conditional stacks
 ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM, native S3 notifications
-├── lambda-stack.yaml                  # Lambda functions, SQS queues, and event mappings
+├── sqs-stack.yaml                     # Optional SQS queue and DLQ for message processing
+├── lambda-stack.yaml                  # Optional container-based Lambda functions
 ├── customer-log-distribution-role.yaml # Customer account template
-├── deploy.sh                          # Enhanced deployment script with random suffix generation
+├── deploy.sh                          # Enhanced deployment script with modular options
 └── README.md                          # This file
 ```
 
@@ -94,6 +129,9 @@ cloudformation/
 | ProjectName               | Project name for resource naming | multi-tenant-logging | Yes |
 | TemplateBucket            | S3 bucket for nested templates | N/A                  | Yes |
 | RandomSuffix              | Random suffix for unique naming | Generated by script  | Yes |
+| IncludeSQSStack           | Deploy SQS stack                | false                | No |
+| IncludeLambdaStack        | Deploy Lambda stack             | false                | No |
+| ECRImageUri               | ECR container image URI         | ""                   | If Lambda enabled |
 | EksOidcIssuer             | OIDC issuer URL for EKS cluster | ""                   | No |
 | EnableS3Encryption        | Enable S3 encryption            | true                 | No |
 | EnableS3IntelligentTiering| Enable S3 intelligent tiering   | true                 | No |
@@ -142,25 +180,33 @@ OPTIONS:
     -p, --project-name NAME     Project name
     -r, --region REGION         AWS region
     -b, --template-bucket NAME  S3 bucket for templates (required)
+    --include-sqs               Include SQS stack for log processing
+    --include-lambda            Include Lambda stack for container-based processing
+    --ecr-image-uri URI         ECR container image URI (required if --include-lambda)
     --profile PROFILE           AWS CLI profile
-    --dry-run                   Show what would be deployed
     --validate-only             Only validate templates
     -h, --help                  Show help
 ```
 
 #### Examples
 ```bash
-# Production deployment
-./deploy.sh -e production -b my-templates-bucket
+# Core infrastructure only
+./deploy.sh -b my-templates-bucket
+
+# Core + SQS for external processing
+./deploy.sh -b my-templates-bucket --include-sqs
+
+# Full container-based Lambda deployment
+./deploy.sh -b my-templates-bucket --include-sqs --include-lambda --ecr-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
 
 # Staging with custom profile
-./deploy.sh -e staging -b my-templates-bucket --profile staging-profile
+./deploy.sh -e staging -b my-templates-bucket --profile staging-profile --include-sqs
 
-# Validate only
+# Validate templates only
 ./deploy.sh -b my-templates-bucket --validate-only
 
-# Dry run
-./deploy.sh -b my-templates-bucket --dry-run
+# Production with all options
+./deploy.sh -e production -b my-templates-bucket --include-sqs --include-lambda --ecr-image-uri ECR_URI
 ```
 
 ## Resource Outputs
