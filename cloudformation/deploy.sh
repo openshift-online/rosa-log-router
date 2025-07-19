@@ -279,11 +279,28 @@ deploy_stack() {
         print_status "Creating new stack: $STACK_NAME"
     fi
     
+    # Generate random suffix for unique resource names
+    local random_suffix
+    if command -v openssl &> /dev/null; then
+        random_suffix=$(openssl rand -hex 4)
+    else
+        # Fallback method using /dev/urandom
+        random_suffix=$(head -c 1000 /dev/urandom | tr -dc 'a-f0-9' | head -c 8)
+    fi
+    
+    if [[ -z "$random_suffix" || ${#random_suffix} -ne 8 ]]; then
+        # Fallback to timestamp-based suffix if random generation fails
+        random_suffix=$(date +%s | tail -c 8)
+    fi
+    
+    print_status "Generated random suffix: $random_suffix"
+    
     # Prepare parameters
     local parameters=(
         "Environment=$ENVIRONMENT"
         "ProjectName=$PROJECT_NAME"
         "TemplateBucket=$TEMPLATE_BUCKET"
+        "RandomSuffix=$random_suffix"
     )
     
     # Add optional parameters if not default
