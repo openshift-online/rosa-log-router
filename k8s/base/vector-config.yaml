@@ -18,26 +18,17 @@ data:
       kubernetes_logs:
         type: "kubernetes_logs"
         # Collect logs from all pods on the node
-        # We'll filter by namespace label in the transform
+        extra_namespace_label_selector: "hypershift.openshift.io/hosted-control-plane=true"
         glob_minimum_cooldown_ms: 1000
         auto_partial_merge: true
         namespace_annotation_fields:
           - metadata.labels
     
     # Transforms
-    transforms:
-      filter_namespaces:
-        type: "filter"
-        inputs: ["kubernetes_logs"]
-        condition:
-          type: "vrl"
-          source: |
-            # Only process logs from namespaces with the hosted control plane label
-            .kubernetes.namespace_labels."hypershift.openshift.io/hosted-control-plane" == "true"
-      
+    transforms:  
       enrich_metadata:
         type: "remap"
-        inputs: ["filter_namespaces"]
+        inputs: ["kubernetes_logs"]
         source: |
           # Extract metadata for S3 path structure
           .cluster_id = get_env_var!("CLUSTER_ID") || "unknown"
