@@ -27,12 +27,13 @@ pip3 install --user -r requirements.txt
 ```
 
 **SQS Polling Mode** (polls live queue for messages):
+> Note: Replace `XXXXXXXX` with the actual 8-character RandomSuffix from your CloudFormation stack deployment.
 ```bash
 cd container/
 export AWS_PROFILE=YOUR_AWS_PROFILE
 export AWS_REGION=YOUR_AWS_REGION
 export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
 export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue
 
 python3 log_processor.py --mode sqs
@@ -44,7 +45,7 @@ cd container/
 export AWS_PROFILE=YOUR_AWS_PROFILE
 export AWS_REGION=YOUR_AWS_REGION
 export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
 
 # Test with sample S3 event
 echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
@@ -52,10 +53,13 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 
 #### Container-based Execution
 
-Build the container:
+Build the containers:
 ```bash
 cd container/
-podman build -f Containerfile -t log-processor:latest .
+# Build collector container first (contains Vector)
+podman build -f Containerfile.collector -t log-collector:latest .
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
 ```
 
 **Option 1: AWS Profile with Volume Mount**
@@ -65,7 +69,7 @@ podman run --rm \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=sqs \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest
@@ -84,7 +88,7 @@ podman run --rm \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=sqs \
   log-processor:latest
 ```
@@ -96,7 +100,7 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=manual \
   log-processor:latest
 ```
@@ -109,6 +113,13 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 
 ### Container Management
 ```bash
+# Build collector container (contains Vector binary)
+cd container/
+podman build -f Containerfile.collector -t log-collector:latest .
+
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
+
 # Tag and push to ECR (for Lambda deployment)
 aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
 podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
@@ -138,7 +149,7 @@ kubectl apply -f k8s/vector-daemonset.yaml
 aws cloudformation create-stack \
   --stack-name customer-logging-infrastructure \
   --template-body file://cloudformation/customer-log-distribution-role.yaml \
-  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
                ParameterKey=LogRetentionDays,ParameterValue=90 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
@@ -159,8 +170,8 @@ podman run --rm \
 cd test_container/
 pip3 install -r requirements.txt
 
-# Set up environment for Vector role assumption (use test-vector-with-role.sh script)
-./test-vector-with-role.sh
+# Set up environment for Vector role assumption (use test-vector.sh script)
+../test-vector.sh
 
 # Basic Vector test with realistic fake logs and role assumption
 python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
@@ -258,14 +269,20 @@ The system consists of 5 main stages with flexible processing options:
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
 - Processes SQS messages containing S3 events
 - Extracts tenant information from S3 object keys (customer_id/cluster_id/application/pod_name)
-- Assumes cross-account roles using ABAC (Attribute-Based Access Control)
+- Assumes cross-account roles with ExternalId validation
 - Handles gzip-compressed NDJSON log formats from Vector
-- Delivers logs to customer CloudWatch Logs in batches
+- **Vector Integration**: Spawns Vector subprocess for reliable CloudWatch Logs delivery
+  - Generates temporary Vector config with customer credentials
+  - Streams decompressed logs to Vector via stdin
+  - Vector handles batching, retries, and CloudWatch API interactions
+  - Cleans up temporary files and processes after delivery
 
 ### Container Infrastructure (`container/`)
-- **Containerfile**: Podman-compatible container definition using Fedora 42
+- **Containerfile.collector**: Base container with Vector binary installation
+- **Containerfile.processor**: Log processor container that includes Vector
+- **Multi-stage build**: Processor builds on collector for consistent Vector version
 - **Multi-mode entrypoint**: Supports Lambda runtime, SQS polling, and manual modes
-- **Minimal dependencies**: Only boto3 and botocore required
+- **Minimal dependencies**: Only boto3 and botocore required for Python
 - **Rootless execution**: Runs as non-root user for security
 
 ### CloudFormation Infrastructure (`cloudformation/`)
@@ -277,13 +294,12 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Security Model
 
-The system uses a double-hop Attribute-Based Access Control (ABAC) architecture for cross-account access:
-- Lambda execution role in central account (assumes central log distribution role)
+The system uses a double-hop role assumption architecture for cross-account access:
+- Lambda/Container execution role in central account (assumes central log distribution role)
 - Central log distribution role in central account (assumes customer roles)
 - Customer-specific "log distribution" roles in customer accounts
-- Session tags for tenant isolation (`tenant_id`, `cluster_id`, `environment`)
-- Trust policies that validate session tags match customer's tenant ID
-- Two-step role assumption provides additional security boundaries
+- ExternalId validation for additional security
+- Two-step role assumption provides security boundaries and audit trail
 
 ## Vector Authentication Configuration
 
@@ -349,7 +365,7 @@ The architecture prioritizes cost efficiency:
 - **SQS mode**: Check container logs with `podman logs CONTAINER_ID`
 - **Manual mode**: Check stdin input format (SNS message with S3 event)
 - Verify DynamoDB tenant configuration table
-- Check cross-account role trust policies and session tags
+- Check cross-account role trust policies and ExternalId configuration
 - Ensure ECR image URI is correct (for Lambda deployment)
 
 ### Container Build Issues
@@ -394,10 +410,14 @@ podman run -e SQS_QUEUE_URL=... -e EXECUTION_MODE=sqs log-processor:latest
 
 ### Lambda Container Processing
 ```bash
-# Build and push container
-podman build -f Containerfile -t log-processor .
+# Build containers
+cd container/
+podman build -f Containerfile.collector -t log-collector:latest .
+podman build -f Containerfile.processor -t log-processor:latest .
+
+# Push to ECR
 aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
-podman tag log-processor ECR_URI/log-processor:latest
+podman tag log-processor:latest ECR_URI/log-processor:latest
 podman push ECR_URI/log-processor:latest
 
 # Deploy with Lambda

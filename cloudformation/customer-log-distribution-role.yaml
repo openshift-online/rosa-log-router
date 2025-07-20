@@ -5,8 +5,8 @@ Parameters:
   CentralLogDistributionRoleArn:
     Type: String
     Description: 'ARN of the central log distribution role (provided by log service provider)'
-    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/CentralLogDistributionRole$'
-    ConstraintDescription: 'Must be a valid IAM role ARN for CentralLogDistributionRole'
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$'
+    ConstraintDescription: 'Must be a valid IAM role ARN matching pattern: arn:aws:iam::ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX'
     
   LogRetentionDays:
     Type: Number
@@ -45,9 +45,6 @@ Resources:
             Principal:
               AWS: !Ref CentralLogDistributionRoleArn
             Action: 'sts:AssumeRole'
-            Condition:
-              StringEquals:
-                'aws:RequestedRegion': !Ref 'AWS::Region'
       Policies:
         - PolicyName: CloudWatchLogsDeliveryPolicy
           PolicyDocument:

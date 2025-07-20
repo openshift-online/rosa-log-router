@@ -9,9 +9,12 @@ import gzip
 import json
 import logging
 import os
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
+import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -327,64 +330,177 @@ def deliver_logs_to_customer(
     tenant_info: Dict[str, str]
 ) -> None:
     """
-    Deliver log events to customer's CloudWatch Logs using double-hop cross-account role assumption
+    Deliver log events to customer's CloudWatch Logs using Vector with double-hop cross-account role assumption
     """
     try:
         sts_client = boto3.client('sts', region_name=AWS_REGION)
         
-        # Step 1: Assume the central log distribution role with session tags
+        # Step 1: Assume the central log distribution role without session tags
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
-            RoleSessionName=f"CentralLogDistribution-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
-            Tags=[
-                {'Key': 'tenant_id', 'Value': tenant_info['tenant_id']},
-                {'Key': 'cluster_id', 'Value': tenant_info['cluster_id']},
-                {'Key': 'environment', 'Value': tenant_info['environment']}
-            ]
+            RoleSessionName=f"CentralLogDistribution-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
         )
         
         # Step 2: Create STS client with central role credentials
         central_sts_client = boto3.client(
             'sts',
+            region_name=AWS_REGION,
             aws_access_key_id=central_role_response['Credentials']['AccessKeyId'],
             aws_secret_access_key=central_role_response['Credentials']['SecretAccessKey'],
             aws_session_token=central_role_response['Credentials']['SessionToken']
         )
         
         # Step 3: Assume the customer's log distribution role using central role
+        # Get the current account ID for ExternalId
+        current_account_id = boto3.client('sts').get_caller_identity()['Account']
         customer_role_response = central_sts_client.assume_role(
             RoleArn=tenant_config['log_distribution_role_arn'],
             RoleSessionName=f"CustomerLogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
-            Tags=[
-                {'Key': 'tenant_id', 'Value': tenant_info['tenant_id']},
-                {'Key': 'cluster_id', 'Value': tenant_info['cluster_id']},
-                {'Key': 'environment', 'Value': tenant_info['environment']}
-            ]
+            ExternalId=current_account_id
         )
         
-        # Step 4: Create CloudWatch Logs client with customer role credentials
-        logs_client = boto3.client(
-            'logs',
-            region_name=tenant_config['target_region'],
-            aws_access_key_id=customer_role_response['Credentials']['AccessKeyId'],
-            aws_secret_access_key=customer_role_response['Credentials']['SecretAccessKey'],
-            aws_session_token=customer_role_response['Credentials']['SessionToken']
-        )
+        # Extract customer credentials
+        customer_credentials = customer_role_response['Credentials']
         
-        # Ensure log group and stream exist
+        # Generate unique session ID for Vector
+        session_id = str(uuid.uuid4())
+        
+        # Prepare log group and stream names
         log_group_name = tenant_config['log_group_name']
         log_stream_name = f"{tenant_info['cluster_id']}-{tenant_info['environment']}-{datetime.now().strftime('%Y-%m-%d')}"
         
-        ensure_log_stream_exists(logs_client, log_group_name, log_stream_name)
+        # Use Vector to deliver logs
+        deliver_logs_with_vector(
+            log_events=log_events,
+            credentials=customer_credentials,
+            region=tenant_config['target_region'],
+            log_group=log_group_name,
+            log_stream=log_stream_name,
+            session_id=session_id
+        )
         
-        # Deliver logs in batches
-        deliver_logs_in_batches(logs_client, log_group_name, log_stream_name, log_events)
-        
-        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']}")
+        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} using Vector")
         
     except Exception as e:
         logger.error(f"Failed to deliver logs to customer {tenant_info['tenant_id']}: {str(e)}")
         raise
+
+def deliver_logs_with_vector(
+    log_events: List[Dict[str, Any]],
+    credentials: Dict[str, Any],
+    region: str,
+    log_group: str,
+    log_stream: str,
+    session_id: str
+) -> None:
+    """
+    Use Vector subprocess to deliver logs to CloudWatch
+    """
+    temp_config_path = None
+    vector_process = None
+    
+    try:
+        # Load Vector config template
+        template_path = os.path.join(os.path.dirname(__file__), 'vector_config_template.yaml')
+        with open(template_path, 'r') as f:
+            config_template = f.read()
+        
+        # Substitute credentials and parameters
+        config = config_template.format(
+            session_id=session_id,
+            region=region,
+            log_group=log_group,
+            log_stream=log_stream,
+            access_key_id=credentials['AccessKeyId'],
+            secret_access_key=credentials['SecretAccessKey'],
+            session_token=credentials['SessionToken']
+        )
+        
+        # Write config to temporary file
+        temp_config_fd, temp_config_path = tempfile.mkstemp(suffix='.yaml', prefix='vector-config-')
+        with os.fdopen(temp_config_fd, 'w') as f:
+            f.write(config)
+        temp_config_fd = None  # File is closed by fdopen
+        
+        # Create data directory for Vector
+        data_dir = f"/tmp/vector-{session_id}"
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Start Vector subprocess
+        vector_cmd = ['vector', '--config', temp_config_path]
+        logger.info(f"Starting Vector with config: {temp_config_path}")
+        
+        vector_process = subprocess.Popen(
+            vector_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Give Vector a moment to start
+        import time
+        time.sleep(0.5)
+        
+        # Check if Vector started successfully
+        if vector_process.poll() is not None:
+            stdout, stderr = vector_process.communicate()
+            raise Exception(f"Vector failed to start. Exit code: {vector_process.returncode}, Stdout: {stdout}, Stderr: {stderr}")
+        
+        # Send log events to Vector via stdin
+        logger.info(f"Sending {len(log_events)} log events to Vector")
+        
+        # Send all events as one write to avoid BrokenPipe issues
+        all_events = ""
+        for event in log_events:
+            all_events += json.dumps(event) + '\n'
+        
+        # Use communicate to send input and wait for completion
+        logger.info("Waiting for Vector to complete log delivery")
+        try:
+            stdout, stderr = vector_process.communicate(input=all_events, timeout=300)
+        except subprocess.TimeoutExpired:
+            logger.error("Vector process timed out")
+            vector_process.kill()
+            stdout, stderr = vector_process.communicate()
+            raise Exception(f"Vector timed out. Stdout: {stdout}, Stderr: {stderr}")
+        except Exception as e:
+            logger.error(f"Failed to communicate with Vector: {str(e)}")
+            raise
+        
+        if vector_process.returncode != 0:
+            raise Exception(f"Vector exited with code {vector_process.returncode}. Stderr: {stderr}")
+        
+        logger.info("Vector successfully delivered logs to CloudWatch")
+        
+    except subprocess.TimeoutExpired:
+        logger.error("Vector process timed out")
+        if vector_process:
+            vector_process.kill()
+        raise Exception("Vector process timed out after 5 minutes")
+        
+    except Exception as e:
+        logger.error(f"Error in Vector log delivery: {str(e)}")
+        # Log the vector config for debugging
+        if temp_config_path and os.path.exists(temp_config_path):
+            with open(temp_config_path, 'r') as f:
+                logger.error(f"Vector config was: {f.read()}")
+        raise
+        
+    finally:
+        # Cleanup
+        if temp_config_path and os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
+        
+        # Cleanup data directory
+        data_dir = f"/tmp/vector-{session_id}"
+        if os.path.exists(data_dir):
+            import shutil
+            shutil.rmtree(data_dir, ignore_errors=True)
+        
+        # Ensure process is terminated
+        if vector_process and vector_process.poll() is None:
+            vector_process.kill()
 
 def ensure_log_stream_exists(logs_client, log_group_name: str, log_stream_name: str) -> None:
     """

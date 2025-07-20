@@ -1,0 +1,19 @@
+FROM registry.fedoraproject.org/fedora:42
+
+# Install Vector
+RUN dnf update -y && \
+    rpm -i https://yum.vector.dev/stable/vector-0/x86_64/vector-0.48.0-1.x86_64.rpm && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+# Switch to non-root user
+USER vector
+
+# Set working directory
+WORKDIR /var/lib/vector
+
+# Default entrypoint for Vector
+ENTRYPOINT ["vector"]
+
+# Default command shows help
+CMD ["--help"]
