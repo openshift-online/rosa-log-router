@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **This is a PROOF OF CONCEPT (POC) project** for a multi-tenant logging pipeline infrastructure on AWS that implements a "Centralized Ingestion, Decentralized Delivery" architecture. The system collects logs from Kubernetes/OpenShift clusters using Vector agents, writes them directly to S3, and delivers them to individual customer AWS accounts.
 
-**POC Status**: This project is focused on demonstrating core functionality with minimal complexity. Advanced monitoring, alerting, and optimization features should be added incrementally after the core pipeline is validated.
+**POC Status**: This project is focused on demonstrating core functionality with minimal complexity. The infrastructure provides basic observability through AWS native services. Advanced monitoring, custom metrics, and alerting features should be added incrementally after the core pipeline is validated.
 
 ## Development Commands
 
@@ -155,11 +155,14 @@ podman run --rm \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest --mode sqs
 
-# Test Vector with fake log generator
+# Test Vector with fake log generator and S3 role assumption
 cd test_container/
 pip3 install -r requirements.txt
 
-# Basic Vector test with realistic fake logs
+# Set up environment for Vector role assumption (use test-vector-with-role.sh script)
+./test-vector-with-role.sh
+
+# Basic Vector test with realistic fake logs and role assumption
 python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
 
 # High-volume Vector performance test
@@ -178,6 +181,13 @@ python3 fake_log_generator.py \
 # Container-based Vector test
 podman build -f Containerfile -t fake-log-generator .
 podman run --rm fake-log-generator --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# Manual role assumption setup (alternative to script)
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile scuppett-dev)
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile scuppett-dev)
+export S3_WRITER_ROLE_ARN=arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role
+export S3_BUCKET_NAME=multi-tenant-logging-development-central-12345678
+export AWS_REGION=us-east-2
 
 # Check Vector status
 kubectl get pods -n logging
@@ -235,13 +245,14 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Key Components
 
-### Vector Configuration (`k8s/vector-config.yaml`)
-- Collects logs from `/var/log/pods/**/*.log`
+### Vector Configuration (`k8s/vector-config.yaml`, `vector-local-test.yaml`)
+- Collects logs from `/var/log/pods/**/*.log` (production) or stdin (local testing)
 - Enriches with tenant metadata from pod annotations (`customer-id`, `cluster-id`, `environment`, `application`)
 - Filters out system logs and unknown tenants
 - Writes directly to S3 with dynamic key prefixing using NDJSON format
 - Uses disk-based buffering for reliability
 - Batch settings: 10MB / 5 minutes
+- **Role Assumption**: Uses base AWS credentials to assume S3WriterRole for secure S3 access
 
 ### Unified Log Processor (`container/log_processor.py`)
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
@@ -273,6 +284,31 @@ The system uses a double-hop Attribute-Based Access Control (ABAC) architecture 
 - Session tags for tenant isolation (`tenant_id`, `cluster_id`, `environment`)
 - Trust policies that validate session tags match customer's tenant ID
 - Two-step role assumption provides additional security boundaries
+
+## Vector Authentication Configuration
+
+### Local Testing with Role Assumption
+
+For local Vector testing, the configuration requires base AWS credentials and role assumption:
+
+```yaml
+# vector-local-test.yaml
+auth:
+  assume_role: "${S3_WRITER_ROLE_ARN}"
+```
+
+**Required Environment Variables for Vector:**
+- `AWS_ACCESS_KEY_ID`: Base access key from your AWS profile
+- `AWS_SECRET_ACCESS_KEY`: Base secret key from your AWS profile
+- `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role to assume
+- `S3_BUCKET_NAME`: Target S3 bucket for log storage
+- `AWS_REGION`: AWS region
+
+**Setup Process:**
+1. Extract base credentials from AWS profile
+2. Set environment variables for Vector
+3. Vector uses base credentials to assume S3WriterRole
+4. S3WriterRole provides permissions for S3 bucket access
 
 ## Environment Variables
 
