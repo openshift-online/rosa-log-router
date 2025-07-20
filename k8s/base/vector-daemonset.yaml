@@ -74,7 +74,9 @@ spec:
         configMap:
           name: vector-config
       - name: vector-data
-        emptyDir: {}
+        hostPath:
+          path: /var/lib/vector-data
+          type: DirectoryOrCreate
       tolerations:
       - effect: NoSchedule
         operator: Exists
