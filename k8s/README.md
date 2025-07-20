@@ -8,15 +8,14 @@ This directory contains Kustomize-based deployment configurations for Vector log
 k8s/
 ├── base/                      # Base Vector deployment resources
 │   ├── kustomization.yaml
-│   ├── service-account.yaml   # Vector service account
+│   ├── vector-namespace.yaml  # Logging namespace
+│   ├── vector-serviceaccount.yaml   # Vector service account
 │   ├── vector-config.yaml     # Vector ConfigMap
 │   └── vector-daemonset.yaml  # Vector DaemonSet
 └── overlays/                  # Environment-specific configurations
-    ├── development/
-    │   ├── kustomization.yaml
-    │   └── service-account-patch.yaml
-    ├── staging/
     └── production/
+        ├── kustomization.yaml
+        └── vector-config-patch.yaml  # Production config overrides
 ```
 
 ## Prerequisites
@@ -59,61 +58,56 @@ k8s/
 
 ### Using Kustomize
 
-1. **Update the overlay configuration** for your environment:
+1. **Deploy Vector to development/testing** (uses base configuration):
    ```bash
-   cd overlays/development
-   
-   # Edit service-account-patch.yaml with your IAM role ARN
-   vim service-account-patch.yaml
-   
-   # Edit kustomization.yaml with your AWS resources
-   vim kustomization.yaml
+   kubectl apply -k k8s/base/
    ```
 
-2. **Create the logging namespace**:
+2. **Deploy Vector to production** (applies production overlays):
    ```bash
-   kubectl create namespace logging
+   kubectl apply -k k8s/overlays/production/
    ```
 
-3. **Deploy Vector**:
+3. **Preview changes before applying**:
    ```bash
-   # From the k8s directory
-   kubectl apply -k overlays/development
+   kubectl kustomize k8s/base/
    ```
 
-### Manual Deployment (without Kustomize)
+The base configuration creates the logging namespace automatically.
 
-If you prefer not to use Kustomize:
+### Key Configuration Updates
 
-1. **Create namespace**:
-   ```bash
-   kubectl create namespace logging
-   ```
+#### Namespace Label Filtering
+Vector is configured to collect logs only from namespaces with specific labels:
+```yaml
+extra_namespace_label_selector: "hypershift.openshift.io/hosted-control-plane=true"
+```
 
-2. **Create service account with IAM annotation**:
-   ```bash
-   kubectl create serviceaccount vector-logs -n logging
-   kubectl annotate serviceaccount vector-logs -n logging \
-     eks.amazonaws.com/role-arn=arn:aws:iam::ACCOUNT:role/ROLE_NAME
-   ```
+#### Vector Output Format
+Vector outputs logs as NDJSON (newline-delimited JSON) with a JSON array format:
+- Each file contains a single JSON array on one line
+- Files are compressed with gzip
+- S3 object keys follow the pattern: `customer_id/cluster_id/application/pod_name/timestamp-uuid.json.gz`
 
-3. **Update and apply base resources**:
-   ```bash
-   # Update vector-config.yaml with your values
-   kubectl apply -f base/vector-config.yaml
-   kubectl apply -f base/vector-daemonset.yaml
-   ```
+#### Pod Annotations for Metadata
+Vector extracts metadata from pod annotations:
+- `customer_id`: Customer identifier
+- `cluster_id`: Cluster identifier
+- `application`: Application name
+- `environment`: Environment (production, staging, etc.)
 
 ## Configuration
 
 ### Environment Variables in ConfigMap
 
-Update these values in your overlay's `kustomization.yaml`:
+The base configuration uses environment variable substitution:
 
-- `aws_region`: AWS region where S3 bucket exists
-- `s3_bucket_name`: Central S3 bucket name from core infrastructure
-- `s3_writer_role_arn`: S3 writer role ARN from core infrastructure
-- `cluster_id`: Unique identifier for this cluster
+- `AWS_REGION`: AWS region where S3 bucket exists
+- `S3_BUCKET_NAME`: Central S3 bucket name from core infrastructure
+- `S3_WRITER_ROLE_ARN`: S3 writer role ARN from core infrastructure
+- `CLUSTER_ID`: Unique identifier for this cluster
+
+These can be set as ConfigMap literals in overlays or provided at deployment time.
 
 ### Service Account Annotation
 
@@ -146,6 +140,18 @@ annotations:
    ```
 
 ## Troubleshooting
+
+### Namespace Filtering Issues
+
+1. **Check if namespaces have required labels**:
+   ```bash
+   kubectl get namespaces -l hypershift.openshift.io/hosted-control-plane=true
+   ```
+
+2. **Verify Vector is seeing the namespaces**:
+   ```bash
+   kubectl logs -n logging daemonset/vector-logs | grep "Discovered namespace"
+   ```
 
 ### OIDC Authentication Issues
 
@@ -198,40 +204,57 @@ To create a new environment overlay:
    apiVersion: kustomize.config.k8s.io/v1beta1
    kind: Kustomization
    
-   namespace: logging
-   
-   bases:
+   resources:
      - ../../base
    
-   patches:
-     - path: service-account-patch.yaml
-       target:
-         kind: ServiceAccount
-         name: vector-logs
+   patchesStrategicMerge:
+     - vector-config-patch.yaml
    
    configMapGenerator:
      - name: vector-config
        behavior: merge
        literals:
-         - aws_region=YOUR_REGION
-         - s3_bucket_name=YOUR_BUCKET
-         - s3_writer_role_arn=YOUR_S3_WRITER_ROLE
-         - cluster_id=YOUR_CLUSTER_ID
+         - AWS_REGION=YOUR_REGION
+         - S3_BUCKET_NAME=YOUR_BUCKET
+         - S3_WRITER_ROLE_ARN=YOUR_S3_WRITER_ROLE
+         - CLUSTER_ID=YOUR_CLUSTER_ID
    ```
 
-3. **Create service-account-patch.yaml**:
+3. **Create vector-config-patch.yaml** for environment-specific Vector configuration:
    ```yaml
    apiVersion: v1
-   kind: ServiceAccount
+   kind: ConfigMap
    metadata:
-     name: vector-logs
-     annotations:
-       eks.amazonaws.com/role-arn: YOUR_VECTOR_ROLE_ARN
+     name: vector-config
+     namespace: logging
+   data:
+     vector.yaml: |
+       # Environment-specific Vector configuration overrides
+       # For example, different batching settings or additional transforms
    ```
 
 ## Security Considerations
 
 - Vector service account only has permission to assume the S3 writer role
-- S3 writer role only has permission to write to the central logging bucket
+- S3 writer role only has permission to write to the central logging bucket with appropriate prefix restrictions
 - Each cluster has its own Vector IAM role with OIDC trust
 - No long-lived credentials are used
+- S3 encryption is enforced with KMS
+- Vector uses double-hop role assumption for enhanced security
+
+## Performance Tuning
+
+### Batching Configuration
+Vector is configured with optimal batching for cost efficiency:
+- `batch.timeout_secs: 300` (5 minutes)
+- `batch.max_bytes: 10485760` (10MB)
+
+These settings reduce S3 PUT requests and improve throughput.
+
+### Buffer Configuration
+Vector uses disk buffers for reliability:
+- Type: `disk`
+- Maximum size: 268435488 bytes (256MB)
+- When full: `block_new_events`
+
+This ensures no log loss during S3 connectivity issues.
