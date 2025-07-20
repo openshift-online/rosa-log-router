@@ -1,0 +1,27 @@
+data_dir: /tmp/vector-{session_id}
+
+sources:
+  stdin:
+    type: stdin
+    decoding:
+      codec: "json"
+
+sinks:
+  cloudwatch_logs:
+    type: aws_cloudwatch_logs
+    inputs: ["stdin"]
+    region: "{region}"
+    group_name: "{log_group}"
+    stream_name: "{log_stream}"
+    encoding:
+      codec: "json"
+    auth:
+      access_key_id: "{access_key_id}"
+      secret_access_key: "{secret_access_key}"
+      session_token: "{session_token}"
+    batch:
+      max_events: 1000
+      timeout_secs: 5
+    request:
+      retry_attempts: 3
+      retry_max_duration_secs: 30

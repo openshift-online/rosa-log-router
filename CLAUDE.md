@@ -52,10 +52,13 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 
 #### Container-based Execution
 
-Build the container:
+Build the containers:
 ```bash
 cd container/
-podman build -f Containerfile -t log-processor:latest .
+# Build collector container first (contains Vector)
+podman build -f Containerfile.collector -t log-collector:latest .
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
 ```
 
 **Option 1: AWS Profile with Volume Mount**
@@ -109,6 +112,13 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 
 ### Container Management
 ```bash
+# Build collector container (contains Vector binary)
+cd container/
+podman build -f Containerfile.collector -t log-collector:latest .
+
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
+
 # Tag and push to ECR (for Lambda deployment)
 aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
 podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
@@ -159,8 +169,8 @@ podman run --rm \
 cd test_container/
 pip3 install -r requirements.txt
 
-# Set up environment for Vector role assumption (use test-vector-with-role.sh script)
-./test-vector-with-role.sh
+# Set up environment for Vector role assumption (use test-vector.sh script)
+../test-vector.sh
 
 # Basic Vector test with realistic fake logs and role assumption
 python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
@@ -258,14 +268,20 @@ The system consists of 5 main stages with flexible processing options:
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
 - Processes SQS messages containing S3 events
 - Extracts tenant information from S3 object keys (customer_id/cluster_id/application/pod_name)
-- Assumes cross-account roles using ABAC (Attribute-Based Access Control)
+- Assumes cross-account roles with ExternalId validation
 - Handles gzip-compressed NDJSON log formats from Vector
-- Delivers logs to customer CloudWatch Logs in batches
+- **Vector Integration**: Spawns Vector subprocess for reliable CloudWatch Logs delivery
+  - Generates temporary Vector config with customer credentials
+  - Streams decompressed logs to Vector via stdin
+  - Vector handles batching, retries, and CloudWatch API interactions
+  - Cleans up temporary files and processes after delivery
 
 ### Container Infrastructure (`container/`)
-- **Containerfile**: Podman-compatible container definition using Fedora 42
+- **Containerfile.collector**: Base container with Vector binary installation
+- **Containerfile.processor**: Log processor container that includes Vector
+- **Multi-stage build**: Processor builds on collector for consistent Vector version
 - **Multi-mode entrypoint**: Supports Lambda runtime, SQS polling, and manual modes
-- **Minimal dependencies**: Only boto3 and botocore required
+- **Minimal dependencies**: Only boto3 and botocore required for Python
 - **Rootless execution**: Runs as non-root user for security
 
 ### CloudFormation Infrastructure (`cloudformation/`)
@@ -277,13 +293,12 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Security Model
 
-The system uses a double-hop Attribute-Based Access Control (ABAC) architecture for cross-account access:
-- Lambda execution role in central account (assumes central log distribution role)
+The system uses a double-hop role assumption architecture for cross-account access:
+- Lambda/Container execution role in central account (assumes central log distribution role)
 - Central log distribution role in central account (assumes customer roles)
 - Customer-specific "log distribution" roles in customer accounts
-- Session tags for tenant isolation (`tenant_id`, `cluster_id`, `environment`)
-- Trust policies that validate session tags match customer's tenant ID
-- Two-step role assumption provides additional security boundaries
+- ExternalId validation for additional security
+- Two-step role assumption provides security boundaries and audit trail
 
 ## Vector Authentication Configuration
 
@@ -349,7 +364,7 @@ The architecture prioritizes cost efficiency:
 - **SQS mode**: Check container logs with `podman logs CONTAINER_ID`
 - **Manual mode**: Check stdin input format (SNS message with S3 event)
 - Verify DynamoDB tenant configuration table
-- Check cross-account role trust policies and session tags
+- Check cross-account role trust policies and ExternalId configuration
 - Ensure ECR image URI is correct (for Lambda deployment)
 
 ### Container Build Issues
@@ -394,10 +409,14 @@ podman run -e SQS_QUEUE_URL=... -e EXECUTION_MODE=sqs log-processor:latest
 
 ### Lambda Container Processing
 ```bash
-# Build and push container
-podman build -f Containerfile -t log-processor .
+# Build containers
+cd container/
+podman build -f Containerfile.collector -t log-collector:latest .
+podman build -f Containerfile.processor -t log-processor:latest .
+
+# Push to ECR
 aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
-podman tag log-processor ECR_URI/log-processor:latest
+podman tag log-processor:latest ECR_URI/log-processor:latest
 podman push ECR_URI/log-processor:latest
 
 # Deploy with Lambda
