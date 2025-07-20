@@ -2,7 +2,7 @@ FROM registry.fedoraproject.org/fedora:42
 
 # Install Vector
 RUN dnf update -y && \
-    export ARCH=$(uname -m | sed 's/x86_64/aarch64/'); \
+    export ARCH=$(uname -m); \
     rpm -i https://yum.vector.dev/stable/vector-0/${ARCH}/vector-0.48.0-1.${ARCH}.rpm && \
     dnf clean all && \
     rm -rf /var/cache/dnf
