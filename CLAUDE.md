@@ -145,15 +145,39 @@ aws cloudformation create-stack \
 
 ### Testing and Validation
 ```bash
-# Test container locally with manual input
+# Test log processor with manual input
 echo '{"Message": "{\"Records\": [...]}"}' | podman run --rm -i log-processor:latest --mode manual
 
-# Test container against live SQS queue
+# Test log processor against live SQS queue
 podman run --rm \
   -e AWS_PROFILE=YOUR_AWS_PROFILE \
   -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/QUEUE-NAME \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest --mode sqs
+
+# Test Vector with fake log generator
+cd test_container/
+pip3 install -r requirements.txt
+
+# Basic Vector test with realistic fake logs
+python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# High-volume Vector performance test
+python3 fake_log_generator.py \
+  --min-batch-size 50 --max-batch-size 100 \
+  --min-sleep 0.1 --max-sleep 0.5 \
+  --total-batches 100 | vector --config ../vector-local-test.yaml
+
+# Multi-tenant Vector test
+python3 fake_log_generator.py \
+  --customer-id acme-corp \
+  --cluster-id prod-cluster-1 \
+  --application payment-service \
+  --total-batches 20 | vector --config ../vector-local-test.yaml
+
+# Container-based Vector test
+podman build -f Containerfile -t fake-log-generator .
+podman run --rm fake-log-generator --total-batches 10 | vector --config ../vector-local-test.yaml
 
 # Check Vector status
 kubectl get pods -n logging

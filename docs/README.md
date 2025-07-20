@@ -484,6 +484,7 @@ aws cloudwatch get-metric-statistics \
 
 ### Local Testing
 
+#### **Log Processor Testing**
 ```bash
 # Test unified log processor locally (direct Python)
 cd container/
@@ -492,7 +493,40 @@ python3 log_processor.py --mode manual
 # Test with container (SQS polling)
 podman build -f Containerfile -t log-processor:latest .
 podman run --rm -e EXECUTION_MODE=sqs -v ~/.aws:/home/logprocessor/.aws:ro log-processor:latest
+```
 
+#### **Vector Pipeline Testing with Fake Log Generator**
+```bash
+# Install fake log generator dependencies
+cd test_container/
+pip3 install -r requirements.txt
+
+# Basic Vector test with realistic fake logs
+python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# High-volume performance test
+python3 fake_log_generator.py \
+  --min-batch-size 50 --max-batch-size 100 \
+  --min-sleep 0.1 --max-sleep 0.5 \
+  --total-batches 100 | vector --config ../vector-local-test.yaml
+
+# Multi-tenant testing with specific metadata
+python3 fake_log_generator.py \
+  --customer-id acme-corp \
+  --cluster-id prod-cluster-1 \
+  --application payment-service \
+  --total-batches 20 | vector --config ../vector-local-test.yaml
+
+# Container-based testing
+podman build -f Containerfile -t fake-log-generator .
+podman run --rm fake-log-generator --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# Use automated test script
+./test-vector.sh
+```
+
+#### **Infrastructure Validation**
+```bash
 # Validate CloudFormation templates
 cd cloudformation/
 ./deploy.sh --validate-only -b your-templates-bucket
