@@ -39,7 +39,11 @@ AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     AWS Lambda handler for processing SQS messages containing S3 events
+    
+    Returns batchItemFailures to enable partial batch failure handling.
+    Failed messages will be retried by SQS.
     """
+    batch_item_failures = []
     successful_records = 0
     failed_records = 0
     
@@ -50,17 +54,22 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             process_sqs_record(record)
             successful_records += 1
         except Exception as e:
-            logger.error(f"Failed to process record: {str(e)}")
+            logger.error(f"Failed to process record {record.get('messageId', 'unknown')}: {str(e)}", exc_info=True)
             failed_records += 1
+            
+            # Add failed message ID to batch item failures
+            # This tells Lambda to not delete this message from SQS
+            if 'messageId' in record:
+                batch_item_failures.append({
+                    'itemIdentifier': record['messageId']
+                })
             
     logger.info(f"Processing complete. Success: {successful_records}, Failed: {failed_records}")
     
+    # Return partial batch failure response
+    # This ensures failed messages remain in the queue for retry
     return {
-        'statusCode': 200,
-        'body': json.dumps({
-            'processed': successful_records,
-            'failed': failed_records
-        })
+        'batchItemFailures': batch_item_failures
     }
 
 def sqs_polling_mode():

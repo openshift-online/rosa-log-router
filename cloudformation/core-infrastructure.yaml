@@ -371,10 +371,6 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-          - Effect: Allow
-            Principal:
               AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: sts:AssumeRole
       ManagedPolicyArns:
@@ -482,6 +478,11 @@ Outputs:
     Value: !Ref CentralLoggingBucket
     Export:
       Name: !Sub '${AWS::StackName}-CentralLoggingBucketName'
+  CentralLoggingBucketArn:
+    Description: ARN of the central logging S3 bucket
+    Value: !GetAtt CentralLoggingBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CentralLoggingBucketArn'
 
   TenantConfigTableName:
     Description: Name of the tenant configuration DynamoDB table
