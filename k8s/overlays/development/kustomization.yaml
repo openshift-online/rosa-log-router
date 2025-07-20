@@ -12,10 +12,6 @@ patches:
     target:
       kind: ServiceAccount
       name: vector-logs
-  - path: vector-config-patch.yaml
-    target:
-      kind: ConfigMap
-      name: vector-config
   - path: daemonset-patch.yaml
     target:
       kind: DaemonSet

@@ -17,44 +17,38 @@ data:
     sources:
       kubernetes_logs:
         type: "kubernetes_logs"
-        # Only collect logs from specific namespace
-        extra_field_selector: "metadata.namespace=clusters-jhjaggars-test"
+        # Collect logs from all pods on the node
+        # We'll filter by namespace label in the transform
         glob_minimum_cooldown_ms: 1000
         auto_partial_merge: true
+        namespace_annotation_fields:
+          - metadata.labels
     
     # Transforms
     transforms:
+      filter_namespaces:
+        type: "filter"
+        inputs: ["kubernetes_logs"]
+        condition:
+          type: "vrl"
+          source: |
+            # Only process logs from namespaces with the hosted control plane label
+            .kubernetes.namespace_labels."hypershift.openshift.io/hosted-control-plane" == "true"
+      
       enrich_metadata:
         type: "remap"
-        inputs: ["kubernetes_logs"]
+        inputs: ["filter_namespaces"]
         source: |
-          # Extract tenant information from pod annotations
-          .customer_id = .kubernetes.pod_annotations."customer-id" || "test-customer"
-          .cluster_id = get_env_var!("CLUSTER_ID") || "scuppett-oepz"
-          .environment = .kubernetes.pod_annotations."environment" || "development"
-          .application = .kubernetes.pod_annotations."application" || .kubernetes.pod_labels."app" || "unknown"
+          # Extract metadata for S3 path structure
+          .cluster_id = get_env_var!("CLUSTER_ID") || "unknown"
+          .namespace = .kubernetes.pod_namespace || "unknown"
+          .application = .kubernetes.pod_labels.app || "unknown"
           .pod_name = .kubernetes.pod_name || "unknown"
           
-          # Extract log level if present
-          log_level_match = parse_regex(.message, r'(?P<level>TRACE|DEBUG|INFO|WARN|ERROR|FATAL)') ?? {}
-          .log_level = log_level_match.level || "INFO"
-          
-          # Add timestamp if not present
+          # Keep timestamp
           if !exists(.timestamp) {
             .timestamp = now()
           }
-          
-          # Clean up kubernetes metadata to reduce payload size
-          del(.kubernetes.pod_labels)
-          del(.kubernetes.pod_annotations)
-          .kubernetes = object({
-            "namespace": .kubernetes.pod_namespace,
-            "pod_name": .kubernetes.pod_name,
-            "container_name": .kubernetes.container_name,
-            "node_name": .kubernetes.pod_node_name
-          })
-          
-      # Remove filter since we're targeting specific namespace
     
     # Sinks
     sinks:
@@ -66,8 +60,8 @@ data:
         bucket: "${S3_BUCKET_NAME}"
         region: "${AWS_REGION}"
         
-        # Dynamic key prefix based on tenant metadata
-        key_prefix: "{{ customer_id }}/{{ cluster_id }}/{{ application }}/{{ pod_name }}/"
+        # Dynamic key prefix based on cluster/namespace/app/pod structure
+        key_prefix: "{{ cluster_id }}/{{ namespace }}/{{ application }}/{{ pod_name }}/"
         
         # Batch settings
         batch:

@@ -7,7 +7,7 @@ allowHostIPC: false
 allowHostNetwork: false
 allowHostPID: false
 allowHostPorts: false
-allowPrivilegedContainer: false
+allowPrivilegedContainer: true
 allowedCapabilities: null
 defaultAddCapabilities: null
 fsGroup:
@@ -18,8 +18,10 @@ requiredDropCapabilities:
 - MKNOD
 runAsUser:
   type: RunAsAny
+allowedUnsafeSysctls:
+- '*'
 seLinuxContext:
-  type: MustRunAs
+  type: RunAsAny
 supplementalGroups:
   type: RunAsAny
 users:

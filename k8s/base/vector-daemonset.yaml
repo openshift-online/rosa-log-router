@@ -58,13 +58,11 @@ spec:
         - name: vector-data
           mountPath: /vector-data-dir
         securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          allowPrivilegeEscalation: false
+          privileged: true
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: true
           readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
       volumes:
       - name: var-log
         hostPath:

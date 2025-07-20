@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: vector-config
-data:
-  aws_region: "us-east-2"
-  s3_bucket_name: "multi-tenant-logging-production-central"
-  s3_writer_role_arn: "arn:aws:iam::123456789012:role/multi-tenant-logging-production-central-s3-writer-role"
