@@ -4,9 +4,6 @@ metadata:
   name: vector-config
   namespace: logging
 data:
-  aws_region: "us-east-1"
-  s3_bucket_name: "multi-tenant-logging-production-central"
-  s3_writer_role_arn: "arn:aws:iam::123456789012:role/multi-tenant-logging-production-central-s3-writer-role"
   vector.yaml: |
     # Vector configuration for multi-tenant logging
     data_dir: "/vector-data-dir"
@@ -20,23 +17,21 @@ data:
     sources:
       kubernetes_logs:
         type: "kubernetes_logs"
+        # Only collect logs from specific namespace
+        extra_field_selector: "metadata.namespace=clusters-jhjaggars-test"
+        glob_minimum_cooldown_ms: 1000
         auto_partial_merge: true
-        include_paths: ["/var/log/pods/**/*.log"]
-        exclude_paths: [
-          "/var/log/pods/kube-system_**",
-          "/var/log/pods/logging_vector-logs-**"
-        ]
-        
+    
     # Transforms
     transforms:
       enrich_metadata:
         type: "remap"
         inputs: ["kubernetes_logs"]
         source: |
-          # Extract tenant information from pod annotations (changed from labels)
-          .customer_id = .kubernetes.pod_annotations."customer-id" || "unknown"
-          .cluster_id = .kubernetes.pod_annotations."cluster-id" || get_env_var("CLUSTER_ID") || "unknown"
-          .environment = .kubernetes.pod_annotations."environment" || "production"
+          # Extract tenant information from pod annotations
+          .customer_id = .kubernetes.pod_annotations."customer-id" || "test-customer"
+          .cluster_id = get_env_var!("CLUSTER_ID") || "scuppett-oepz"
+          .environment = .kubernetes.pod_annotations."environment" || "development"
           .application = .kubernetes.pod_annotations."application" || .kubernetes.pod_labels."app" || "unknown"
           .pod_name = .kubernetes.pod_name || "unknown"
           
@@ -52,77 +47,60 @@ data:
           # Clean up kubernetes metadata to reduce payload size
           del(.kubernetes.pod_labels)
           del(.kubernetes.pod_annotations)
-          .kubernetes = object!({
+          .kubernetes = object({
             "namespace": .kubernetes.pod_namespace,
             "pod_name": .kubernetes.pod_name,
             "container_name": .kubernetes.container_name,
             "node_name": .kubernetes.pod_node_name
           })
           
-      filter_tenant_logs:
-        type: "filter"
-        inputs: ["enrich_metadata"]
-        condition: '.customer_id != "unknown"'
-        
-      structure_for_s3:
-        type: "remap"
-        inputs: ["filter_tenant_logs"]
-        source: |
-          # Restructure for S3 storage
-          . = {
-            "timestamp": .timestamp,
-            "customer_id": .customer_id,
-            "cluster_id": .cluster_id,
-            "environment": .environment,
-            "application": .application,
-            "pod_name": .pod_name,
-            "log_level": .log_level,
-            "message": .message,
-            "kubernetes": .kubernetes,
-            "source_type": .source_type,
-            "file": .file
-          }
+      # Remove filter since we're targeting specific namespace
     
     # Sinks
     sinks:
       s3_logs:
         type: "aws_s3"
-        inputs: ["structure_for_s3"]
+        inputs: ["enrich_metadata"]
+        
+        # S3 bucket configuration
         bucket: "${S3_BUCKET_NAME}"
         region: "${AWS_REGION}"
+        
+        # Dynamic key prefix based on tenant metadata
         key_prefix: "{{ customer_id }}/{{ cluster_id }}/{{ application }}/{{ pod_name }}/"
-        filename_time_format: "%Y%m%d%H%M%S"
-        filename_append_uuid: true
-        filename_extension: "json.gz"
-        encoding:
-          codec: "json"
-        framing:
-          method: "newline_delimited"
-        compression: "gzip"
+        
+        # Batch settings
         batch:
           max_bytes: 10485760  # 10MB
-          max_events: 10000
-          timeout_secs: 300  # 5 minutes
-        buffer:
-          type: "disk"
-          max_size: 268435456  # 256MB
-          when_full: "block"
+          timeout_secs: 300    # 5 minutes
+        
+        # Request settings
         request:
           retry_attempts: 3
           retry_initial_backoff_secs: 1
-          retry_max_duration_secs: 60
-        auth:
-          assume_role: "${S3_WRITER_ROLE_ARN}"
+          retry_max_duration_secs: 30
+          timeout_secs: 30
         
-      # Optional: Local file backup for debugging
-      debug_file:
-        type: "file"
-        inputs: ["structure_for_s3"]
-        path: "/vector-data-dir/debug.log"
+        # Compression
+        compression: "gzip"
+        
+        # File format
         encoding:
           codec: "json"
-        framing:
-          method: "newline_delimited"
+          framing:
+            method: "newline_delimited"
+        
+        # Buffer configuration
         buffer:
-          type: "memory"
-          max_events: 100
+          type: "disk"
+          max_size: 10737418240  # 10GB
+          when_full: "block"
+        
+        # Authentication via IRSA
+        auth:
+          assume_role: "${S3_WRITER_ROLE_ARN}"
+          
+        # Add timestamp to filename
+        filename_append_uuid: true
+        filename_time_format: "%Y%m%d-%H%M%S"
+        filename_extension: "json.gz"

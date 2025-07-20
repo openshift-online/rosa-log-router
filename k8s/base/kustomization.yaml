@@ -5,9 +5,10 @@ namespace: logging
 
 resources:
   - service-account.yaml
-  - scc.yaml
   - vector-config.yaml
   - vector-daemonset.yaml
+  - vector-clusterrole.yaml
+  - vector-clusterrolebinding.yaml
 
 labels:
   - pairs:

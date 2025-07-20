@@ -7,24 +7,12 @@ spec:
     spec:
       containers:
       - name: vector
-        image: 641875867446.dkr.ecr.us-east-2.amazonaws.com/jhjaggars-logdesign/collector:main
-        command: ["vector"]
         env:
-        - name: VECTOR_CONFIG_YAML
-          value: "/etc/vector/vector.yaml"
-        - name: AWS_STS_REGIONAL_ENDPOINTS
-          value: "regional"
-        - name: AWS_DEFAULT_REGION
-          value: "us-east-2"
-        - name: VECTOR_SELF_NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
         - name: VECTOR_LOG
           value: "DEBUG"
-        - name: VECTOR_REQUIRE_HEALTHY
-          value: "true"
         - name: AWS_REGION
+          value: "us-east-2"
+        - name: AWS_DEFAULT_REGION
           value: "us-east-2"
         - name: S3_BUCKET_NAME
           value: "multi-tenant-logging-development-central-12345678"

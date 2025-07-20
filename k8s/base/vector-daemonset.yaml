@@ -5,6 +5,9 @@ metadata:
   namespace: logging
   labels:
     app: vector-logs
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: multi-tenant-logging
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
@@ -17,10 +20,19 @@ spec:
       serviceAccountName: vector-logs
       containers:
       - name: vector
-        image: timberio/vector:0.34.1-distroless-libc
+        image: public.ecr.aws/d1w4s4o1/logdesign/collector:main
+        command: ["vector"]
         env:
         - name: VECTOR_CONFIG_YAML
-          value: /etc/vector/vector.yaml
+          value: "/etc/vector/vector.yaml"
+        - name: AWS_STS_REGIONAL_ENDPOINTS
+          value: "regional"
+        - name: VECTOR_SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: VECTOR_LOG
+          value: "INFO"
         - name: VECTOR_REQUIRE_HEALTHY
           value: "true"
         ports:
@@ -70,28 +82,3 @@ spec:
         operator: Exists
       - effect: NoExecute
         operator: Exists
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: vector-logs
-rules:
-- apiGroups: [""]
-  resources: ["pods", "namespaces"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["nodes"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: vector-logs
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: vector-logs
-subjects:
-- kind: ServiceAccount
-  name: vector-logs
-  namespace: logging

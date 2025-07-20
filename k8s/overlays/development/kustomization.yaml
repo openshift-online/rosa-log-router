@@ -4,7 +4,7 @@ kind: Kustomization
 namespace: logging
 
 resources:
-  - ../../base
+  - ../../openshift-base
 
 # Patch the service account with IAM role annotation
 patches:
