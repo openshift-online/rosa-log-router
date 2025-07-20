@@ -304,7 +304,7 @@ Provide customers with the CloudFormation template:
 aws cloudformation create-stack \
   --stack-name customer-logging-infrastructure \
   --template-body file://cloudformation/customer-log-distribution-role.yaml \
-  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
                ParameterKey=LogRetentionDays,ParameterValue=90 \
   --capabilities CAPABILITY_NAMED_IAM
 ```

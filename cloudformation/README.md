@@ -292,15 +292,9 @@ Lambda functions use ABAC (Attribute-Based Access Control) for secure cross-acco
     {
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/LogDistributorRole"
+        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX"
       },
-      "Action": "sts:AssumeRole",
-      "Condition": {
-        "StringEquals": {
-          "sts:ExternalId": "CENTRAL-ACCOUNT",
-          "aws:RequestedRegion": "us-east-1"
-        }
-      }
+      "Action": "sts:AssumeRole"
     }
   ]
 }
