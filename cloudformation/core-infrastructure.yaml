@@ -353,6 +353,10 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
@@ -378,7 +382,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - sts:AssumeRole
-                Resource: 'arn:aws:iam::*:role/LogDistribution-*'
+                Resource: 'arn:aws:iam::*:role/CustomerLogDistribution'
                 Condition:
                   StringEquals:
                     'sts:ExternalId': !Ref 'AWS::AccountId'
@@ -411,6 +415,10 @@ Resources:
           - Effect: Allow
             Principal:
               Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
@@ -504,6 +512,12 @@ Outputs:
     Value: !GetAtt LogDistributorRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
+
+  CentralLogDistributionRoleArn:
+    Description: ARN of the central log distribution role (same as LogDistributorRole)
+    Value: !GetAtt LogDistributorRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CentralLogDistributionRoleArn'
 
   DLQProcessorRoleArn:
     Description: ARN of the DLQ processor Lambda IAM role
