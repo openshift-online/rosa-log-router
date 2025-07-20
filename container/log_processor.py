@@ -547,6 +547,7 @@ def deliver_logs_with_vector(
         logger.info(f"Sending {len(log_events)} log events to Vector")
         
         # Send all events as one write to avoid BrokenPipe issues
+
         # Send only the message content to Vector, not the full event structure
         all_events = ""
         for event in log_events:
