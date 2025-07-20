@@ -327,6 +327,12 @@ Resources:
                   - !Sub '${CentralLoggingBucket.Arn}/*'
               - Effect: Allow
                 Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt CentralLoggingBucket.Arn
+              - Effect: Allow
+                Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: !GetAtt LoggingKMSKey.Arn
@@ -340,6 +346,20 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
+
+  # Managed Policy for Vector agents to assume S3 writer role
+  VectorAssumeRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-vector-assume-role-policy'
+      Description: 'Policy allowing Vector agents to assume the central S3 writer role'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource: !GetAtt CentralS3WriterRole.Arn
 
   # IAM Role for Log Distributor Lambda
   LogDistributorRole:
@@ -506,6 +526,12 @@ Outputs:
     Value: !GetAtt CentralS3WriterRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-CentralS3WriterRoleArn'
+
+  VectorAssumeRolePolicyArn:
+    Description: ARN of the managed policy for Vector agents to assume S3 writer role
+    Value: !Ref VectorAssumeRolePolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-VectorAssumeRolePolicyArn'
 
   LogDistributorRoleArn:
     Description: ARN of the log distributor Lambda IAM role
