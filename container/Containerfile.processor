@@ -1,13 +1,9 @@
-FROM localhost/log-collector:latest AS collector
+FROM localhost/log-collector:latest
 
-FROM registry.fedoraproject.org/fedora:42
-
-# Copy Vector from collector image
-COPY --from=collector /usr/bin/vector /usr/bin/vector
+USER 0
 
 # Install Python and basic tools
-RUN dnf update -y && \
-    dnf install -y python3 python3-pip python3-boto3 python3-simplejson && \
+RUN dnf install -y python3 python3-pip python3-boto3 python3-simplejson && \
     dnf clean all
 
 # Create app directory
