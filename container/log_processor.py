@@ -409,6 +409,9 @@ def deliver_logs_with_vector(
     temp_config_path = None
     vector_process = None
     
+    logger.info(f"Starting Vector delivery for {len(log_events)} log events")
+    logger.info(f"Target: {log_group}/{log_stream} in {region}")
+    
     try:
         # Load Vector config template
         template_path = os.path.join(os.path.dirname(__file__), 'vector_config_template.yaml')
@@ -436,16 +439,37 @@ def deliver_logs_with_vector(
         data_dir = f"/tmp/vector-{session_id}"
         os.makedirs(data_dir, exist_ok=True)
         
+        # Set up Vector environment variables
+        vector_env = os.environ.copy()
+        vector_env.update({
+            'VECTOR_DATA_DIR': data_dir,
+            'AWS_ACCESS_KEY_ID': credentials['AccessKeyId'],
+            'AWS_SECRET_ACCESS_KEY': credentials['SecretAccessKey'],
+            'AWS_SESSION_TOKEN': credentials['SessionToken'],
+            'AWS_REGION': region,
+            'LOG_GROUP': log_group,
+            'LOG_STREAM': log_stream
+        })
+        
+        # Log critical environment variables (mask sensitive data)
+        logger.info(f"Vector environment variables:")
+        logger.info(f"  VECTOR_DATA_DIR: {data_dir}")
+        logger.info(f"  AWS_ACCESS_KEY_ID: {credentials['AccessKeyId'][:10]}...")
+        logger.info(f"  AWS_REGION: {region}")
+        logger.info(f"  LOG_GROUP: {log_group}")
+        logger.info(f"  LOG_STREAM: {log_stream}")
+        
         # Start Vector subprocess
         vector_cmd = ['vector', '--config', temp_config_path]
-        logger.info(f"Starting Vector with config: {temp_config_path}")
+        logger.info(f"Starting Vector with command: {' '.join(vector_cmd)}")
         
         vector_process = subprocess.Popen(
             vector_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=vector_env
         )
         
         # Give Vector a moment to start
@@ -469,19 +493,40 @@ def deliver_logs_with_vector(
         logger.info("Waiting for Vector to complete log delivery")
         try:
             stdout, stderr = vector_process.communicate(input=all_events, timeout=300)
+            return_code = vector_process.returncode
+            
+            # Log Vector output
+            logger.info(f"Vector process completed with return code: {return_code}")
+            
+            if stdout:
+                logger.info("Vector stdout:")
+                for line in stdout.splitlines():
+                    logger.info(f"  VECTOR: {line}")
+            else:
+                logger.info("Vector stdout: (empty)")
+                
+            if stderr:
+                logger.warning("Vector stderr:")
+                for line in stderr.splitlines():
+                    logger.warning(f"  VECTOR: {line}")
+            else:
+                logger.info("Vector stderr: (empty)")
+                
         except subprocess.TimeoutExpired:
-            logger.error("Vector process timed out")
+            logger.error("Vector process timed out after 300 seconds")
             vector_process.kill()
             stdout, stderr = vector_process.communicate()
-            raise Exception(f"Vector timed out. Stdout: {stdout}, Stderr: {stderr}")
+            logger.error(f"Vector stdout after timeout: {stdout}")
+            logger.error(f"Vector stderr after timeout: {stderr}")
+            raise Exception(f"Vector timed out after 300 seconds")
         except Exception as e:
             logger.error(f"Failed to communicate with Vector: {str(e)}")
             raise
         
-        if vector_process.returncode != 0:
-            raise Exception(f"Vector exited with code {vector_process.returncode}. Stderr: {stderr}")
+        if return_code != 0:
+            raise Exception(f"Vector exited with non-zero code {return_code}")
         
-        logger.info("Vector successfully delivered logs to CloudWatch")
+        logger.info(f"Vector successfully delivered {len(log_events)} logs to CloudWatch")
         
     except subprocess.TimeoutExpired:
         logger.error("Vector process timed out")
