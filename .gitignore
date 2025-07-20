@@ -83,8 +83,3 @@ coverage.xml
 # Documentation builds
 _build/
 .doctrees
-
-# CloudFormation output files
-cloudformation/response.json
-cloudformation/*.gz
-cloudformation/test-*.json

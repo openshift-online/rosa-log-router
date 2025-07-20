@@ -148,8 +148,7 @@ Create parameter files for different environments:
   "LambdaReservedConcurrency": 200,
   "AlertEmailEndpoints": "ops@company.com,alerts@company.com",
   "EnableDetailedMonitoring": "true",
-  "EnableEnhancedMonitoring": "true",
-  "CostCenter": "platform-engineering"
+  "EnableEnhancedMonitoring": "true"
 }
 ```
 
@@ -160,8 +159,7 @@ Create parameter files for different environments:
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 50,
   "AlertEmailEndpoints": "dev-team@company.com",
-  "EnableDetailedMonitoring": "false",
-  "CostCenter": "development"
+  "EnableDetailedMonitoring": "false"
 }
 ```
 
@@ -219,7 +217,6 @@ OPTIONS:
 | TenantConfigTableName      | DynamoDB table for tenant configs |
 | LogDistributorFunctionName | Lambda function name              |
 | CentralS3WriterRoleArn     | IAM role ARN for S3 writes        |
-| CloudWatchDashboardURL     | CloudWatch dashboard URL          |
 | VectorRoleArn              | IAM role ARN for Vector           |
 
 ### Using Outputs
@@ -237,25 +234,20 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-## Monitoring and Alerting
+## Monitoring and Observability
 
-### CloudWatch Dashboard
+The infrastructure provides basic observability through standard AWS service metrics:
 
-The deployment creates a comprehensive dashboard showing:
-- S3 storage metrics
-- Lambda function performance
-- SQS queue metrics
-- DynamoDB performance
-- Cost and usage metrics
+### Built-in AWS Monitoring
+- **CloudWatch Logs**: Lambda function logs and processing events
+- **Service Metrics**: S3, Lambda, SQS, and DynamoDB metrics available through AWS Console
+- **Resource Tags**: All resources tagged for organization and cost tracking
 
-Access URL: `https://console.aws.amazon.com/cloudwatch/home#dashboards:name=multi-tenant-logging-production-overview`
-
-### CloudWatch Alarms
-
-Automatically configured alarms for:
-- Lambda function errors and throttles
-- SQS queue depth and message age
-- DynamoDB throttling
+### Custom Monitoring (Optional)
+Custom dashboards and alarms can be added incrementally based on operational requirements:
+- Lambda function performance monitoring
+- S3 storage utilization tracking
+- SQS queue depth monitoring
 - Budget threshold alerts
 
 ### SNS Notifications

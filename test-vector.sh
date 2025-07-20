@@ -43,19 +43,19 @@ echo "  S3_WRITER_ROLE_ARN=$S3_WRITER_ROLE_ARN"
 echo "  AWS_REGION=$AWS_REGION"
 
 echo ""
-echo "To test Vector:"
-echo "1. echo 'Test log message' | vector --config $CONFIG_FILE"
-echo "2. Or run: vector --config $CONFIG_FILE < test-logs.json"
-
-# Create test data
-cat > test-logs.json << 'EOF'
-{"message": "INFO Test application started successfully", "level": "INFO"}
-{"message": "DEBUG Processing user request id=12345", "level": "DEBUG"}  
-{"message": "WARN Database connection slow, retrying...", "level": "WARN"}
-{"message": "ERROR Failed to process payment for order #67890", "level": "ERROR"}
-{"message": "INFO Application shutdown complete", "level": "INFO"}
-EOF
-
+echo "To test Vector with fake log generator:"
+echo "1. Basic test with fake logs:"
+echo "   cd test_container && python3 fake_log_generator.py --total-batches 10 | vector --config ../$CONFIG_FILE"
 echo ""
-echo "Test log data created in test-logs.json"
-echo "Run: vector --config $CONFIG_FILE < test-logs.json"
+echo "2. High-volume performance test:"
+echo "   cd test_container && python3 fake_log_generator.py --min-batch-size 20 --max-batch-size 50 --min-sleep 0.1 --max-sleep 1.0 --total-batches 50 | vector --config ../$CONFIG_FILE"
+echo ""
+echo "3. Multi-tenant test (different customer):"
+echo "   cd test_container && python3 fake_log_generator.py --customer-id acme-corp --cluster-id prod-cluster-1 --application payment-service --total-batches 20 | vector --config ../$CONFIG_FILE"
+echo ""
+echo "4. Container-based test:"
+echo "   cd test_container && podman build -f Containerfile -t fake-log-generator ."
+echo "   podman run --rm fake-log-generator --total-batches 10 | vector --config $CONFIG_FILE"
+echo ""
+echo "5. Simple single message test:"
+echo "   echo '{\"message\": \"Test log message\", \"level\": \"INFO\"}' | vector --config $CONFIG_FILE"

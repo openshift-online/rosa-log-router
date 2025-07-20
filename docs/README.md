@@ -54,11 +54,6 @@ graph TB
             CentralRole[Central Log<br/>Distribution Role]
             S3WriterRole[Central S3<br/>Writer Role]
         end
-        
-        subgraph "Monitoring"
-            CW[CloudWatch<br/>Metrics & Dashboards]
-            Alarms[CloudWatch Alarms<br/>Budget Alerts]
-        end
     end
 
     subgraph "Customer AWS Account A"
@@ -71,9 +66,8 @@ graph TB
             Trust_A[Trust Policy<br/>Session Tag Validation]
         end
         
-        subgraph "Customer Monitoring"
-            Dash_A[CloudWatch Dashboard<br/>Log Insights Queries]
-            Metric_A[Custom Metrics<br/>Error Filtering]
+        subgraph "Customer Delivery"
+            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
         end
     end
 
@@ -112,14 +106,9 @@ graph TB
     Trust_A -.->|Validate Session Tags| Role_A
     Trust_B -.->|Validate Session Tags| Role_B
     
-    %% Monitoring Flows
-    Lambda --> CW
-    S3 --> CW
-    SQS --> CW
-    
-    CW --> Alarms
-    CWL_A --> Dash_A
-    CWL_A --> Metric_A
+    %% Additional Flow Notes
+    %% S3 events trigger processing pipeline
+    %% Cross-account role assumption provides security
 
     %% Styling
     classDef customer fill:#e1f5fe
@@ -132,7 +121,7 @@ graph TB
     class Lambda,SQS,SNS central
     class STS,CentralRole,S3WriterRole,Role_A,Role_B,Trust_A,Trust_B security
     class S3,DDB storage
-    class CWL_A,CWL_B,CW,Dash_A,Metric_A processing
+    class CWL_A,CWL_B processing
 ```
 
 ### Data Flow Summary
@@ -361,30 +350,26 @@ Key parameters for customization:
   "Environment": "production",
   "ProjectName": "multi-tenant-logging",
   "LambdaReservedConcurrency": 100,
-  "EnableS3Encryption": true,
-  "EnableDetailedMonitoring": true,
-  "AlertEmailEndpoints": "ops@company.com",
-  "CostCenter": "platform-engineering"
+  "EnableS3Encryption": true
 }
 ```
 
-## Monitoring and Alerts
+## Monitoring and Observability
 
-The infrastructure includes comprehensive monitoring:
+The infrastructure provides basic observability through AWS native services:
 
-### CloudWatch Dashboards
-- **Multi-tenant logging overview**: System-wide metrics
-- **Per-tenant dashboards**: Individual tenant monitoring
+### CloudWatch Logs
+- **Lambda Function Logs**: Automatic logging of processing events and errors
+- **Customer Log Delivery**: Logs delivered to customer CloudWatch Logs accounts
 
-### CloudWatch Alarms
-- Lambda function errors and duration
-- SQS queue depth and message age
-- DynamoDB throttling
-- Dead letter queue messages
+### Resource Tagging
+- All resources tagged with Environment, Project, and StackType for organization
+- Enables cost tracking and resource management
 
-### Cost Monitoring
-- AWS Cost Budget alerts with threshold notifications
-- Resource tagging for cost allocation
+### Built-in AWS Monitoring
+- Standard AWS service metrics available through AWS Console
+- S3 bucket metrics, Lambda execution metrics, SQS queue metrics
+- DynamoDB operational metrics
 
 ## Security
 
@@ -484,6 +469,7 @@ aws cloudwatch get-metric-statistics \
 
 ### Local Testing
 
+#### **Log Processor Testing**
 ```bash
 # Test unified log processor locally (direct Python)
 cd container/
@@ -492,7 +478,40 @@ python3 log_processor.py --mode manual
 # Test with container (SQS polling)
 podman build -f Containerfile -t log-processor:latest .
 podman run --rm -e EXECUTION_MODE=sqs -v ~/.aws:/home/logprocessor/.aws:ro log-processor:latest
+```
 
+#### **Vector Pipeline Testing with Fake Log Generator**
+```bash
+# Install fake log generator dependencies
+cd test_container/
+pip3 install -r requirements.txt
+
+# Basic Vector test with realistic fake logs
+python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# High-volume performance test
+python3 fake_log_generator.py \
+  --min-batch-size 50 --max-batch-size 100 \
+  --min-sleep 0.1 --max-sleep 0.5 \
+  --total-batches 100 | vector --config ../vector-local-test.yaml
+
+# Multi-tenant testing with specific metadata
+python3 fake_log_generator.py \
+  --customer-id acme-corp \
+  --cluster-id prod-cluster-1 \
+  --application payment-service \
+  --total-batches 20 | vector --config ../vector-local-test.yaml
+
+# Container-based testing
+podman build -f Containerfile -t fake-log-generator .
+podman run --rm fake-log-generator --total-batches 10 | vector --config ../vector-local-test.yaml
+
+# Use automated test script
+./test-vector.sh
+```
+
+#### **Infrastructure Validation**
+```bash
 # Validate CloudFormation templates
 cd cloudformation/
 ./deploy.sh --validate-only -b your-templates-bucket
