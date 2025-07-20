@@ -184,17 +184,18 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
 def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     """
     Extract tenant information from S3 object key path
-    Expected format: customer_id/cluster_id/application/pod_name/timestamp-uuid.json.gz
+    Expected format: cluster_id/namespace/application/pod_name/timestamp-uuid.json.gz
     """
     path_parts = object_key.split('/')
     
     if len(path_parts) < 5:
         raise ValueError(f"Invalid object key format. Expected at least 5 path segments, got {len(path_parts)}: {object_key}")
-    
+
     tenant_info = {
-        'tenant_id': path_parts[0],
-        'customer_id': path_parts[0],
-        'cluster_id': path_parts[1],
+        'cluster_id': path_parts[0],
+        'tenant_id': path_parts[1], # Use customer_id as tenant_id for DynamoDB lookup
+        'customer_id': path_parts[1],
+        'namespace': path_parts[1],
         'application': path_parts[2],
         'pod_name': path_parts[3],
         'environment': 'production'
