@@ -345,7 +345,7 @@ Resources:
   LogDistributorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-log-distributor-role'
+      RoleName: !Sub 'ROSA-CentralLogDistributionRole-${RandomSuffix}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

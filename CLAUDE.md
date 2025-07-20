@@ -27,12 +27,13 @@ pip3 install --user -r requirements.txt
 ```
 
 **SQS Polling Mode** (polls live queue for messages):
+> Note: Replace `XXXXXXXX` with the actual 8-character RandomSuffix from your CloudFormation stack deployment.
 ```bash
 cd container/
 export AWS_PROFILE=YOUR_AWS_PROFILE
 export AWS_REGION=YOUR_AWS_REGION
 export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
 export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue
 
 python3 log_processor.py --mode sqs
@@ -44,7 +45,7 @@ cd container/
 export AWS_PROFILE=YOUR_AWS_PROFILE
 export AWS_REGION=YOUR_AWS_REGION
 export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role
+export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
 
 # Test with sample S3 event
 echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
@@ -68,7 +69,7 @@ podman run --rm \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=sqs \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest
@@ -87,7 +88,7 @@ podman run --rm \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=sqs \
   log-processor:latest
 ```
@@ -99,7 +100,7 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
   -e AWS_REGION=YOUR_AWS_REGION \
   -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/multi-tenant-logging-development-log-distributor-role \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=manual \
   log-processor:latest
 ```
@@ -148,7 +149,7 @@ kubectl apply -f k8s/vector-daemonset.yaml
 aws cloudformation create-stack \
   --stack-name customer-logging-infrastructure \
   --template-body file://cloudformation/customer-log-distribution-role.yaml \
-  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/CentralLogDistributionRole \
+  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
                ParameterKey=LogRetentionDays,ParameterValue=90 \
   --capabilities CAPABILITY_NAMED_IAM
 ```

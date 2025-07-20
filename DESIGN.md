@@ -326,15 +326,9 @@ The CloudFormation implementation includes several cost optimization features:
     {
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/LogDistributorRole"
+        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX"
       },
-      "Action": "sts:AssumeRole",
-      "Condition": {
-        "StringEquals": {
-          "sts:ExternalId": "CENTRAL-ACCOUNT",
-          "aws:PrincipalTag/tenant_id": "${aws:RequestedRegion}"
-        }
-      }
+      "Action": "sts:AssumeRole"
     }
   ]
 }
