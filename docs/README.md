@@ -161,6 +161,7 @@ graph TB
 │   ├── sqs-stack.yaml                     # Optional SQS queue and DLQ
 │   ├── lambda-stack.yaml                  # Optional container-based Lambda functions
 │   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
+│   ├── cluster-vector-role.yaml           # Cluster-specific Vector IAM role for OIDC
 │   ├── deploy.sh                          # CloudFormation deployment script with modular options
 │   └── README.md                          # CloudFormation-specific documentation
 ├── container/
@@ -173,12 +174,27 @@ graph TB
 ├── docs/
 │   └── README.md                          # This file
 ├── k8s/
-│   ├── vector-config.yaml                # Vector ConfigMap
-│   └── vector-daemonset.yaml             # Vector DaemonSet deployment
+│   ├── README.md                          # Kubernetes deployment documentation
+│   ├── base/                              # Base Kustomize resources
+│   │   ├── kustomization.yaml             # Base Kustomize configuration
+│   │   ├── service-account.yaml           # Vector service account
+│   │   ├── vector-clusterrole.yaml        # Vector cluster role with log access
+│   │   ├── vector-clusterrolebinding.yaml # Role binding for service account
+│   │   ├── vector-config.yaml             # Vector ConfigMap with environment variables
+│   │   └── vector-daemonset.yaml          # Vector DaemonSet deployment
+│   ├── openshift-base/                    # OpenShift-specific resources
+│   │   ├── kustomization.yaml             # OpenShift Kustomize configuration
+│   │   └── scc.yaml                       # SecurityContextConstraints for OpenShift
+│   └── overlays/                          # Environment-specific overrides
+│       └── development/                   # Development environment overlay
+│           ├── kustomization.yaml         # Development Kustomize configuration
+│           ├── service-account-patch.yaml # IAM role annotation patch
+│           └── daemonset-patch.yaml       # Development-specific DaemonSet patches
 ├── test_container/
 │   ├── Containerfile                      # Fake log generator container
 │   ├── fake_log_generator.py              # Realistic log generator for testing
-│   └── requirements.txt                   # Test dependencies
+│   ├── requirements.txt                   # Test dependencies
+│   └── README.md                          # Test container documentation
 ├── vector-local-test.yaml                # Vector configuration for local testing
 ├── test-vector.sh                        # Automated Vector testing script
 ├── .env.sample                           # Environment variable template
@@ -246,13 +262,99 @@ export AWS_REGION=YOUR_AWS_REGION
 
 ### 2. Deploy Vector to Kubernetes
 
+The project uses Kustomize for flexible Kubernetes deployments with support for multiple environments and both standard Kubernetes and OpenShift.
+
+#### **Prerequisites**
+1. **Deploy Core Infrastructure** first to get required IAM role ARNs
+2. **Create OIDC Provider** for your cluster (if not already exists):
+   ```bash
+   # For OpenShift/ROSA clusters
+   OIDC_URL=$(oc get authentication.config.openshift.io cluster -o json | jq -r .spec.serviceAccountIssuer | sed 's|https://||')
+   
+   # For EKS clusters  
+   OIDC_URL=$(aws eks describe-cluster --name YOUR_CLUSTER --query "cluster.identity.oidc.issuer" --output text | sed 's|https://||')
+   
+   # Create OIDC provider in AWS
+   aws iam create-open-id-connect-provider \
+     --url https://${OIDC_URL} \
+     --client-id-list openshift  # or "sts.amazonaws.com" for EKS
+   ```
+
+3. **Deploy Cluster-Specific IAM Role**:
+   ```bash
+   aws cloudformation create-stack \
+     --stack-name vector-role-YOUR-CLUSTER \
+     --template-body file://cloudformation/cluster-vector-role.yaml \
+     --parameters \
+       ParameterKey=ClusterName,ParameterValue=YOUR-CLUSTER \
+       ParameterKey=OIDCProviderURL,ParameterValue=${OIDC_URL} \
+       ParameterKey=OIDCAudience,ParameterValue=openshift \
+       ParameterKey=ServiceAccountNamespace,ParameterValue=logging \
+       ParameterKey=ServiceAccountName,ParameterValue=vector-logs \
+       ParameterKey=VectorAssumeRolePolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/POLICY_FROM_CORE_STACK \
+     --capabilities CAPABILITY_NAMED_IAM
+   ```
+
+#### **Standard Kubernetes Deployment**
 ```bash
 # Create logging namespace
 kubectl create namespace logging
 
-# Deploy Vector configuration
-kubectl apply -f k8s/vector-config.yaml
-kubectl apply -f k8s/vector-daemonset.yaml
+# Deploy using Kustomize base configuration
+kubectl apply -k k8s/base
+
+# Verify deployment
+kubectl get pods -n logging
+kubectl logs -n logging daemonset/vector-logs
+```
+
+#### **OpenShift/ROSA Deployment**
+```bash
+# Create logging namespace
+kubectl create namespace logging
+
+# Deploy using OpenShift overlay with SecurityContextConstraints
+kubectl apply -k k8s/overlays/development
+
+# Verify deployment
+kubectl get pods -n logging
+kubectl get scc vector-scc
+```
+
+#### **Environment-Specific Deployment**
+For production or custom environments, create overlays with environment-specific configurations:
+
+```bash
+# Deploy with environment-specific settings
+kubectl apply -k k8s/overlays/production
+
+# Or customize on-the-fly with kustomize
+kubectl kustomize k8s/base | kubectl apply -f -
+```
+
+#### **Configuration Updates**
+Update the Vector ConfigMap with your environment-specific values:
+
+```yaml
+# In k8s/overlays/YOUR-ENV/vector-config-patch.yaml
+configMapGenerator:
+  - name: vector-config
+    behavior: merge
+    literals:
+      - AWS_REGION=us-east-1
+      - S3_BUCKET_NAME=your-central-logging-bucket
+      - S3_WRITER_ROLE_ARN=arn:aws:iam::ACCOUNT:role/your-s3-writer-role
+      - CLUSTER_ID=your-cluster-identifier
+```
+
+#### **Service Account IAM Role Annotation**
+Ensure the Vector service account is annotated with your cluster-specific IAM role:
+
+```yaml
+# In k8s/overlays/YOUR-ENV/service-account-patch.yaml
+- op: add
+  path: /metadata/annotations/eks.amazonaws.com~1role-arn
+  value: arn:aws:iam::ACCOUNT:role/your-cluster-vector-role
 ```
 
 ### 3. Local Development and Testing
