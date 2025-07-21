@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: logging
+data:
+  vector.yaml: |
+    # Vector configuration for multi-tenant logging
+    data_dir: "/vector-data-dir"
+    
+    api:
+      enabled: true
+      address: "0.0.0.0:8686"
+      playground: false
+    
+    # Sources
+    sources:
+      kubernetes_logs:
+        type: "kubernetes_logs"
+        # Collect logs from all pods on the node
+        extra_namespace_label_selector: "hypershift.openshift.io/hosted-control-plane=true"
+        glob_minimum_cooldown_ms: 1000
+        auto_partial_merge: true
+        namespace_annotation_fields:
+          - metadata.labels
+    
+    # Transforms
+    transforms:  
+      enrich_metadata:
+        type: "remap"
+        inputs: ["kubernetes_logs"]
+        source: |
+          # Extract metadata for S3 path structure
+          .cluster_id = get_env_var!("CLUSTER_ID") || "unknown"
+          .namespace = .kubernetes.pod_namespace || "unknown"
+          .application = .kubernetes.pod_labels.app || "unknown"
+          .pod_name = .kubernetes.pod_name || "unknown"
+          
+          # Keep timestamp
+          if !exists(.timestamp) {
+            .timestamp = now()
+          }
+    
+    # Sinks
+    sinks:
+      s3_logs:
+        type: "aws_s3"
+        inputs: ["enrich_metadata"]
+        
+        # S3 bucket configuration
+        bucket: "${S3_BUCKET_NAME}"
+        region: "${AWS_REGION}"
+        
+        # Dynamic key prefix based on cluster/namespace/app/pod structure
+        key_prefix: "{{ cluster_id }}/{{ namespace }}/{{ application }}/{{ pod_name }}/"
+        
+        # Batch settings
+        batch:
+          max_bytes: 10485760  # 10MB
+          timeout_secs: 300    # 5 minutes
+        
+        # Request settings
+        request:
+          retry_attempts: 3
+          retry_initial_backoff_secs: 1
+          retry_max_duration_secs: 30
+          timeout_secs: 30
+        
+        # Compression
+        compression: "gzip"
+        
+        # File format
+        encoding:
+          codec: "json"
+          framing:
+            method: "newline_delimited"
+        
+        # Buffer configuration
+        buffer:
+          type: "disk"
+          max_size: 10737418240  # 10GB
+          when_full: "block"
+        
+        # Authentication via IRSA
+        auth:
+          assume_role: "${S3_WRITER_ROLE_ARN}"
+          
+        # Add timestamp to filename
+        filename_append_uuid: true
+        filename_time_format: "%Y%m%d-%H%M%S"
+        filename_extension: "json.gz"

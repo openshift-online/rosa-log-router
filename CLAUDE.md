@@ -128,19 +128,23 @@ podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:l
 
 ### Infrastructure Management
 ```bash
-# Deploy Vector to Kubernetes
+# Deploy Vector to Kubernetes/OpenShift using Kustomize
 kubectl create namespace logging
-kubectl apply -f k8s/vector-config.yaml
-kubectl apply -f k8s/vector-daemonset.yaml
+
+# For standard Kubernetes
+kubectl apply -k k8s/base
+
+# For OpenShift with SecurityContextConstraints
+kubectl apply -k k8s/overlays/openshift
 
 # Deploy core infrastructure only (no SQS or Lambda)
-./cloudformation/deploy.sh
+./cloudformation/deploy.sh -b TEMPLATE_BUCKET
 
 # Deploy with SQS stack for external processing
-./cloudformation/deploy.sh --include-sqs
+./cloudformation/deploy.sh -b TEMPLATE_BUCKET --include-sqs
 
 # Deploy with both SQS and Lambda container-based processing
-./cloudformation/deploy.sh --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+./cloudformation/deploy.sh -b TEMPLATE_BUCKET --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 ```
 
 ### Customer Onboarding
@@ -256,25 +260,35 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Key Components
 
-### Vector Configuration (`k8s/vector-config.yaml`, `vector-local-test.yaml`)
-- Collects logs from `/var/log/pods/**/*.log` (production) or stdin (local testing)
-- Enriches with tenant metadata from pod annotations (`customer-id`, `cluster-id`, `environment`, `application`)
-- Filters out system logs and unknown tenants
-- Writes directly to S3 with dynamic key prefixing using NDJSON format
-- Uses disk-based buffering for reliability
+### Vector Configuration (`k8s/base/vector-config.yaml`, `vector-local-test.yaml`)
+- Collects logs from `/var/log/pods/**/*.log` in production
+- **Namespace Filtering**: Uses `extra_namespace_label_selector` to only collect from namespaces with `hypershift.openshift.io/hosted-control-plane=true`
+- Enriches logs with metadata: cluster_id, namespace, application (from pod label), pod_name
+- Writes directly to S3 with dynamic key prefixing: `cluster_id/namespace/application/pod_name/`
+- Output format: NDJSON (newline-delimited JSON) with all logs in a single JSON array per file
+- Uses disk-based buffering for reliability (10GB max)
 - Batch settings: 10MB / 5 minutes
-- **Role Assumption**: Uses base AWS credentials to assume S3WriterRole for secure S3 access
+- **Role Assumption**: Uses IRSA or base AWS credentials to assume S3WriterRole for secure S3 access
 
 ### Unified Log Processor (`container/log_processor.py`)
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
 - Processes SQS messages containing S3 events
-- Extracts tenant information from S3 object keys (customer_id/cluster_id/application/pod_name)
-- Assumes cross-account roles with ExternalId validation
-- Handles gzip-compressed NDJSON log formats from Vector
+- Extracts tenant information from S3 object keys (cluster_id/namespace/application/pod_name)
+- **Log Processing**: 
+  - Downloads and decompresses gzipped files from S3
+  - Parses Vector's JSON array format (single line with array of log objects)
+  - Extracts only the 'message' field from each log record
+- **CloudWatch Delivery**:
+  - Log streams named: `application-pod_name-date`
+  - Sends only message content (no Vector metadata wrapper)
+- **Cross-Account Access**:
+  - Double-hop role assumption with ExternalId validation
+  - Lambda role → Central distribution role → Customer role
 - **Vector Integration**: Spawns Vector subprocess for reliable CloudWatch Logs delivery
   - Generates temporary Vector config with customer credentials
-  - Streams decompressed logs to Vector via stdin
+  - Streams raw log messages to Vector via stdin
   - Vector handles batching, retries, and CloudWatch API interactions
+  - Enhanced logging: environment variables, stdout/stderr, return codes
   - Cleans up temporary files and processes after delivery
 
 ### Container Infrastructure (`container/`)
@@ -364,9 +378,17 @@ The architecture prioritizes cost efficiency:
 - **Lambda mode**: Check CloudWatch Logs: `/aws/lambda/log-distributor`
 - **SQS mode**: Check container logs with `podman logs CONTAINER_ID`
 - **Manual mode**: Check stdin input format (SNS message with S3 event)
-- Verify DynamoDB tenant configuration table
+- Verify DynamoDB tenant configuration table (check KMS permissions)
 - Check cross-account role trust policies and ExternalId configuration
 - Ensure ECR image URI is correct (for Lambda deployment)
+- **Lambda Permissions Required**:
+  - S3: GetObject, GetBucketLocation, ListBucket
+  - KMS: Decrypt, DescribeKey (for both S3 and DynamoDB)
+  - DynamoDB: GetItem, Query, BatchGetItem
+  - STS: AssumeRole (for central distribution role)
+- **Customer Role Permissions**:
+  - CloudWatch Logs: DescribeLogGroups (on *), CreateLogGroup, CreateLogStream, PutLogEvents, PutRetentionPolicy
+  - Trust relationship must include ExternalId condition
 
 ### Container Build Issues
 - Use `podman build --no-cache` to force rebuild

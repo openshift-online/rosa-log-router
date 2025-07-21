@@ -52,22 +52,27 @@ For this architecture, **Vector** is the recommended agent. It is a modern, high
 To effectively implement this model, the Vector configuration must be precisely tuned for filtering, enrichment, and direct S3 delivery.
 
 * **Deployment as a DaemonSet:** Vector is deployed as a DaemonSet in each Kubernetes/OpenShift cluster, ensuring an agent runs on every node to collect logs from all pods.  
-* **Filtering and Enrichment Logic:** The Vector configuration will contain a filter transform that uses VRL to inspect pod labels.  
-  * **Filtering:** The filter will be configured to only allow logs from pods that contain the rosa\_export\_logs label. All other logs will be dropped.  
-  * **Enrichment:** For the logs that pass the filter, a remap transform will extract the values from other labels (e.g., customer\_id, cluster\_id, application) and the pod name from the Kubernetes metadata that Vector automatically adds to the event. These values are promoted to top-level fields in the log event.  
+* **Filtering and Enrichment Logic:** The Vector configuration uses namespace label selectors and transforms for filtering and enrichment.  
+  * **Filtering:** Vector's kubernetes_logs source is configured with `extra_namespace_label_selector: "hypershift.openshift.io/hosted-control-plane=true"` to collect logs only from namespaces with the hosted control plane label. This approach is more efficient than using filter transforms.  
+  * **Enrichment:** A remap transform extracts values from pod annotations (e.g., `customer_id`, `cluster_id`, `application`) and the pod name from the Kubernetes metadata that Vector automatically adds to the event. These values are promoted to top-level fields in the log event.  
 * **Configuring the aws\_s3 Sink:** The sink is the final step in the Vector agent's pipeline.  
-  * **Dynamic key\_prefix:** The sink's key\_prefix option will use Vector's template syntax to build the dynamic S3 path from the fields created during the enrichment step. 12  
-    Ini, TOML  
-    \# In vector.toml  
-    \[sinks.s3\_destination\]  
-      type \= "aws\_s3"  
-      inputs \= \["enriched\_logs"\]  
-      bucket \= "your-central-logging-bucket"  
-      key\_prefix \= "{{customer\_id}}/{{cluster\_id}}/{{application}}/{{pod\_name}}/"  
-      \#... other options
-
-  * **File Naming:** Vector's S3 sink automatically ensures unique file names by appending a timestamp and a UUID, matching the desired \<ts\>-\<uuid\> format. Compression is enabled by default to produce .gz files. 12  
-  * **Batching and Compression:** To optimize S3 costs and avoid the "small file problem," the sink's batching parameters must be tuned. By setting a larger batch.timeout\_secs (e.g., 300 seconds) and batch.max\_bytes (e.g., 10MB), each Vector agent will buffer logs and write larger, more cost-efficient objects to S3. This is critical for reducing S3 PUT request costs and the number of downstream notifications. 12
+  * **Dynamic key\_prefix:** The sink's key_prefix option uses Vector's template syntax to build the dynamic S3 path from the fields created during the enrichment step:
+    ```yaml
+    # In vector-config.yaml
+    s3:
+      type: "aws_s3"
+      inputs: ["final_logs"]
+      bucket: "${S3_BUCKET_NAME}"
+      key_prefix: "{{ customer_id }}/{{ cluster_id }}/{{ application }}/{{ pod_name }}/"
+      compression: "gzip"
+      encoding:
+        codec: "json"
+        method: "newline_delimited"
+    ```
+  * **File Format:** Vector outputs logs in NDJSON format (newline-delimited JSON) but actually writes them as a JSON array on a single line. The log processor handles this format appropriately.
+  * **File Naming:** Vector's S3 sink automatically ensures unique file names by appending a timestamp and UUID. Files are compressed with gzip to produce .gz files.
+  * **Batching and Compression:** The sink's batching parameters are tuned for cost efficiency with `batch.timeout_secs: 300` and `batch.max_bytes: 10485760` (10MB). This reduces S3 PUT request costs and downstream notifications.
+  * **Authentication:** Vector uses IAM role assumption to access S3, configured with `auth.assume_role: "${S3_WRITER_ROLE_ARN}"`
 
 ## **Section 3: S3 Staging and the Hub-and-Spoke Delivery Pipeline**
 
@@ -94,16 +99,44 @@ The mechanism that initiates the final delivery is a highly decoupled and respon
 An AWS Lambda function, configured with the SQS queue as its event source, serves as the delivery engine. This processing logic lives entirely within your AWS account.
 
 1. **Parse the Event:** The Lambda function is invoked with a batch of messages from the SQS queue. It parses each message to extract the S3 bucket name and object key.  
-2. **Extract Tenant Identifier:** The function's code parses the object key to extract the customer\_id.  
-3. **Assume Cross-Account Role:** Using the customer\_id, the function looks up the configuration for that tenant (e.g., from DynamoDB) and calls the AWS Security Token Service (STS) to assume the specialized **"log distribution" role** in the customer's account.  
-4. **Fetch and Deliver Logs:** Using the temporary credentials, the Lambda function reads the gzipped JSON file from S3, parses the log records, and calls the PutLogEvents API to deliver them to the correct Log Group in the customer's account. 17
+2. **Extract Tenant Identifier:** The function parses the object key to extract the customer_id from the first path segment.
+3. **Assume Cross-Account Role:** The function performs double-hop role assumption:
+   - First assumes the central log distribution role without session tags
+   - Then uses that role to assume the customer's log distribution role with ExternalId validation
+4. **Fetch and Deliver Logs:** The Lambda function:
+   - Downloads and decompresses the gzipped file from S3
+   - Parses the JSON array format produced by Vector
+   - Spawns a Vector subprocess for reliable CloudWatch Logs delivery
+   - Streams only the message content (not the full Vector record) to the subprocess
+   - Uses log stream naming format: `application-pod_name-date`
 
 ### **3.4. The Final Hop: Infrastructure in the Customer Account**
 
 Each customer must deploy a standardized AWS CloudFormation template in their account to create the necessary resources. The key component is the specialized **"log distribution" IAM Role**.
 
-* **Trust Policy:** This policy explicitly trusts the ARN of your central log processing Lambda's execution role, ensuring only your designated function can assume it. 6  
-* **Permissions Policy:** This policy grants only the logs:PutLogEvents permission and restricts it to a specific, pre-agreed-upon CloudWatch Log Group ARN within the customer's account.
+* **Trust Policy:** This policy trusts the ARN of the central log distribution role (not the Lambda execution role directly), implementing proper role chaining:
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "CENTRAL-ACCOUNT-ID"
+        }
+      }
+    }]
+  }
+  ```
+* **Permissions Policy:** Grants CloudWatch Logs permissions including:
+  - `logs:CreateLogGroup` and `logs:CreateLogStream` for automatic resource creation
+  - `logs:PutLogEvents` for log delivery
+  - `logs:DescribeLogGroups` on all resources for Vector healthchecks
+  - `logs:DescribeLogStreams` on the specific log group
 
 ## **Section 4: The Recommended End-to-End Architecture**
 
@@ -398,14 +431,51 @@ podman run --rm \
   log-processor:latest
 ```
 
-### **6.7. Deployment Workflow**
+### **6.7. Kubernetes Deployment with Kustomize**
 
-#### **Complete Deployment Process**
-1. **Build and Push Container:**
+The Vector deployment on Kubernetes/OpenShift uses Kustomize for flexible, environment-specific configurations:
+
+#### **Kustomize Structure**
+```
+k8s/
+├── base/
+│   ├── kustomization.yaml
+│   ├── vector-config.yaml
+│   ├── vector-daemonset.yaml
+│   ├── vector-namespace.yaml
+│   └── vector-serviceaccount.yaml
+└── overlays/
+    └── production/
+        ├── kustomization.yaml
+        └── vector-config-patch.yaml
+```
+
+#### **Deployment Commands**
+```bash
+# Deploy to development (uses base configuration)
+kubectl apply -k k8s/base/
+
+# Deploy to production (applies production overlays)
+kubectl apply -k k8s/overlays/production/
+
+# Preview changes before applying
+kubectl kustomize k8s/base/
+```
+
+### **6.8. Complete Deployment Workflow**
+
+#### **Full System Deployment**
+1. **Build and Push Containers:**
    ```bash
    cd container/
-   podman build -f Containerfile -t log-processor:latest .
+   # Build collector container first (contains Vector)
+   podman build -f Containerfile.collector -t log-collector:latest .
+   # Build processor container (includes Vector from collector)
+   podman build -f Containerfile.processor -t log-processor:latest .
+   
+   # Push to ECR
    aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
+   podman tag log-processor:latest ECR_URI/log-processor:latest
    podman push ECR_URI/log-processor:latest
    ```
 
@@ -415,10 +485,17 @@ podman run --rm \
    ./deploy.sh --include-sqs --include-lambda --ecr-image-uri ECR_URI/log-processor:latest
    ```
 
-3. **Configure Vector Agents:**
+3. **Deploy Vector with Kustomize:**
    ```bash
-   kubectl apply -f k8s/vector-config.yaml
-   kubectl apply -f k8s/vector-daemonset.yaml
+   # For development/testing
+   kubectl apply -k k8s/base/
+   
+   # For production with custom settings
+   kubectl apply -k k8s/overlays/production/
+   
+   # Verify deployment
+   kubectl get pods -n logging
+   kubectl logs -n logging daemonset/vector-logs
    ```
 
 #### **Environment-Specific Deployments**
@@ -433,7 +510,29 @@ podman run --rm \
 ./deploy.sh -e production --include-sqs --include-lambda --ecr-image-uri ECR_URI
 ```
 
-### **6.8. Future Considerations**
+### **6.9. Log Processing Architecture Details**
+
+#### **Vector Output Format**
+Vector produces compressed files containing a JSON array on a single line:
+```json
+[{"timestamp":"2024-01-01T00:00:00Z","message":"Log line 1","customer_id":"acme",...},{"timestamp":"2024-01-01T00:00:01Z","message":"Log line 2",...}]
+```
+
+#### **Lambda Processing Flow**
+1. **S3 Event Processing**: Lambda receives S3 event notifications via SQS
+2. **File Download**: Downloads and decompresses the .gz file
+3. **JSON Parsing**: Handles Vector's single-line JSON array format
+4. **Message Extraction**: Extracts only the `message` field from each log record
+5. **Vector Subprocess**: Spawns Vector with temporary config for CloudWatch delivery
+6. **Error Handling**: Returns `batchItemFailures` for proper SQS retry behavior
+
+#### **CloudWatch Logs Integration**
+- **Log Groups**: Created automatically if they don't exist
+- **Log Streams**: Named as `application-pod_name-date` for easy identification
+- **Message Format**: Only the log message content is sent, without Vector metadata
+- **Permissions**: Customer roles must include `logs:DescribeLogGroups` for Vector healthchecks
+
+### **6.10. Future Considerations**
 
 **Potential Enhancements:**
 - **Multi-Region Replication:** S3 Cross-Region Replication for disaster recovery

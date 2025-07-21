@@ -149,11 +149,13 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
-        LogDistributorRoleArn: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
+        TenantConfigTableArn: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableArn
         SQSQueueArn: !If [ShouldIncludeSQSStack, !GetAtt SQSStack.Outputs.LogDeliveryQueueArn, ""]
+        SQSQueueUrl: !If [ShouldIncludeSQSStack, !GetAtt SQSStack.Outputs.LogDeliveryQueueUrl, ""]
         ECRImageUri: !Ref ECRImageUri
         CentralLogDistributionRoleArn: !GetAtt CoreInfrastructureStack.Outputs.CentralLogDistributionRoleArn
+        CentralLoggingBucketArn: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName

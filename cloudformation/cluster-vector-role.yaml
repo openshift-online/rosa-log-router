@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM role for Vector agents running in a specific OpenShift/EKS cluster with OIDC provider'
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: 'Name of the OpenShift/EKS cluster (used for role naming)'
+    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$'
+    ConstraintDescription: 'Must be a valid cluster name (alphanumeric and hyphens only)'
+    
+  OIDCProviderURL:
+    Type: String
+    Description: 'OIDC provider URL for the cluster (without https://)'
+    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9]$'
+    ConstraintDescription: 'Must be a valid OIDC provider URL without https://'
+    
+  OIDCAudience:
+    Type: String
+    Default: 'openshift'
+    Description: 'OIDC audience for the cluster (use "openshift" for OpenShift, "sts.amazonaws.com" for EKS)'
+    AllowedValues: ['openshift', 'sts.amazonaws.com']
+    
+  ServiceAccountNamespace:
+    Type: String
+    Default: 'logging'
+    Description: 'Kubernetes namespace where Vector service account exists'
+    
+  ServiceAccountName:
+    Type: String
+    Default: 'vector'
+    Description: 'Name of the Vector service account'
+    
+  VectorAssumeRolePolicyArn:
+    Type: String
+    Description: 'ARN of the managed policy allowing Vector to assume S3 writer role'
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:policy/.+$'
+    
+  ProjectName:
+    Type: String
+    Default: 'multi-tenant-logging'
+    Description: 'Name of the project for resource tagging'
+    
+  Environment:
+    Type: String
+    Default: 'development'
+    AllowedValues: ['production', 'staging', 'development']
+    Description: 'Environment name'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Cluster Configuration"
+        Parameters:
+          - ClusterName
+          - OIDCProviderURL
+          - OIDCAudience
+      - Label:
+          default: "Service Account Configuration"
+        Parameters:
+          - ServiceAccountNamespace
+          - ServiceAccountName
+      - Label:
+          default: "IAM Configuration"
+        Parameters:
+          - VectorAssumeRolePolicyArn
+      - Label:
+          default: "Tagging"
+        Parameters:
+          - ProjectName
+          - Environment
+    ParameterLabels:
+      ClusterName:
+        default: "Cluster Name"
+      OIDCProviderURL:
+        default: "OIDC Provider URL"
+      OIDCAudience:
+        default: "OIDC Audience"
+      ServiceAccountNamespace:
+        default: "Service Account Namespace"
+      ServiceAccountName:
+        default: "Service Account Name"
+      VectorAssumeRolePolicyArn:
+        default: "Vector Assume Role Policy ARN"
+
+Resources:
+  # IAM role for Vector agents in this cluster
+  ClusterVectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${ClusterName}-vector-role'
+      Description: !Sub 'Role for Vector agents in ${ClusterName} cluster'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/${OIDCProviderURL}'
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                ? !Sub '${OIDCProviderURL}:aud'
+                : !Ref OIDCAudience
+                ? !Sub '${OIDCProviderURL}:sub'
+                : !Sub 'system:serviceaccount:${ServiceAccountNamespace}:${ServiceAccountName}'
+      ManagedPolicyArns:
+        - !Ref VectorAssumeRolePolicyArn
+      Tags:
+        - Key: 'Project'
+          Value: !Ref ProjectName
+        - Key: 'Environment'
+          Value: !Ref Environment
+        - Key: 'Cluster'
+          Value: !Ref ClusterName
+        - Key: 'ManagedBy'
+          Value: 'CloudFormation'
+        - Key: 'Purpose'
+          Value: 'VectorLogShipping'
+
+Outputs:
+  ClusterVectorRoleArn:
+    Description: 'ARN of the Vector role for this cluster'
+    Value: !GetAtt ClusterVectorRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterVectorRoleArn'
+      
+  ServiceAccountAnnotation:
+    Description: 'Annotation to add to Vector service account for IRSA'
+    Value: !Sub 'eks.amazonaws.com/role-arn: ${ClusterVectorRole.Arn}'
+    
+  KustomizationExample:
+    Description: 'Example kustomization patch for service account annotation'
+    Value: !Sub |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: ${ServiceAccountName}
+        namespace: ${ServiceAccountNamespace}
+        annotations:
+          eks.amazonaws.com/role-arn: ${ClusterVectorRole.Arn}
+          
+  DeploymentInstructions:
+    Description: 'Instructions for deploying Vector with this role'
+    Value: !Sub |
+      1. Ensure OIDC provider is registered in AWS IAM:
+         aws iam create-open-id-connect-provider \
+           --url https://${OIDCProviderURL} \
+           --client-id-list ${OIDCAudience}
+           
+      2. Apply the service account annotation to Vector:
+         kubectl annotate serviceaccount -n ${ServiceAccountNamespace} ${ServiceAccountName} \
+           eks.amazonaws.com/role-arn=${ClusterVectorRole.Arn}
+           
+      3. Configure Vector with:
+         - S3_WRITER_ROLE_ARN from core infrastructure stack
+         - AWS_REGION=${AWS::Region}
+         - Use IRSA authentication (no explicit credentials needed)

@@ -5,6 +5,9 @@ metadata:
   namespace: logging
   labels:
     app: vector-logs
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: multi-tenant-logging
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
@@ -17,22 +20,21 @@ spec:
       serviceAccountName: vector-logs
       containers:
       - name: vector
-        image: timberio/vector:0.34.1-distroless-libc
+        image: public.ecr.aws/d1w4s4o1/logdesign/collector:main
+        command: ["vector"]
         env:
         - name: VECTOR_CONFIG_YAML
-          value: /etc/vector/vector.yaml
+          value: "/etc/vector/vector.yaml"
+        - name: AWS_STS_REGIONAL_ENDPOINTS
+          value: "regional"
+        - name: VECTOR_SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: VECTOR_LOG
+          value: "INFO"
         - name: VECTOR_REQUIRE_HEALTHY
           value: "true"
-        - name: AWS_REGION
-          valueFrom:
-            configMapKeyRef:
-              name: vector-config
-              key: aws_region
-        - name: KINESIS_STREAM_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: vector-config
-              key: kinesis_stream_name
         ports:
         - containerPort: 8686
           name: prometheus
@@ -56,13 +58,11 @@ spec:
         - name: vector-data
           mountPath: /vector-data-dir
         securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          allowPrivilegeEscalation: false
+          privileged: true
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: true
           readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
       volumes:
       - name: var-log
         hostPath:
@@ -74,42 +74,11 @@ spec:
         configMap:
           name: vector-config
       - name: vector-data
-        emptyDir: {}
+        hostPath:
+          path: /var/lib/vector-data
+          type: DirectoryOrCreate
       tolerations:
       - effect: NoSchedule
         operator: Exists
       - effect: NoExecute
         operator: Exists
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: vector-logs
-  namespace: logging
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/VectorLogsRole
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: vector-logs
-rules:
-- apiGroups: [""]
-  resources: ["pods", "namespaces"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["nodes"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: vector-logs
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: vector-logs
-subjects:
-- kind: ServiceAccount
-  name: vector-logs
-  namespace: logging

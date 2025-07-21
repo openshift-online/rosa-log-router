@@ -26,7 +26,17 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# For Lambda, we need to ensure the root logger and all handlers are set to INFO
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Set all existing handlers to INFO level (Lambda adds its own handler)
+for handler in root_logger.handlers:
+    handler.setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Environment variables
 TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
@@ -39,7 +49,11 @@ AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     AWS Lambda handler for processing SQS messages containing S3 events
+    
+    Returns batchItemFailures to enable partial batch failure handling.
+    Failed messages will be retried by SQS.
     """
+    batch_item_failures = []
     successful_records = 0
     failed_records = 0
     
@@ -50,17 +64,22 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             process_sqs_record(record)
             successful_records += 1
         except Exception as e:
-            logger.error(f"Failed to process record: {str(e)}")
+            logger.error(f"Failed to process record {record.get('messageId', 'unknown')}: {str(e)}", exc_info=True)
             failed_records += 1
+            
+            # Add failed message ID to batch item failures
+            # This tells Lambda to not delete this message from SQS
+            if 'messageId' in record:
+                batch_item_failures.append({
+                    'itemIdentifier': record['messageId']
+                })
             
     logger.info(f"Processing complete. Success: {successful_records}, Failed: {failed_records}")
     
+    # Return partial batch failure response
+    # This ensures failed messages remain in the queue for retry
     return {
-        'statusCode': 200,
-        'body': json.dumps({
-            'processed': successful_records,
-            'failed': failed_records
-        })
+        'batchItemFailures': batch_item_failures
     }
 
 def sqs_polling_mode():
@@ -184,17 +203,18 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
 def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     """
     Extract tenant information from S3 object key path
-    Expected format: customer_id/cluster_id/application/pod_name/timestamp-uuid.json.gz
+    Expected format: cluster_id/namespace/application/pod_name/timestamp-uuid.json.gz
     """
     path_parts = object_key.split('/')
     
     if len(path_parts) < 5:
         raise ValueError(f"Invalid object key format. Expected at least 5 path segments, got {len(path_parts)}: {object_key}")
-    
+
     tenant_info = {
-        'tenant_id': path_parts[0],
-        'customer_id': path_parts[0],
-        'cluster_id': path_parts[1],
+        'cluster_id': path_parts[0],
+        'tenant_id': path_parts[1], # Use customer_id as tenant_id for DynamoDB lookup
+        'customer_id': path_parts[1],
+        'namespace': path_parts[1],
         'application': path_parts[2],
         'pod_name': path_parts[3],
         'environment': 'production'
@@ -238,9 +258,16 @@ def download_and_process_log_file(bucket_name: str, object_key: str) -> List[Dic
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         file_content = response['Body'].read()
         
+        logger.info(f"Downloaded file size: {len(file_content)} bytes (compressed)")
+        
         # Decompress if gzipped
         if object_key.endswith('.gz'):
             file_content = gzip.decompress(file_content)
+            logger.info(f"Decompressed file size: {len(file_content)} bytes")
+        
+        # Log first 500 characters of the file for debugging
+        sample = file_content[:500].decode('utf-8', errors='replace')
+        logger.info(f"File content sample (first 500 chars): {sample}")
         
         return process_json_file(file_content)
         
@@ -257,33 +284,66 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
         log_events = []
         content = file_content.decode('utf-8')
         
+        lines = content.strip().split('\n')
+        logger.info(f"File contains {len(lines)} lines")
+        
         # Try line-delimited JSON first (Vector NDJSON format)
-        try:
-            for line in content.strip().split('\n'):
-                if line:
-                    try:
-                        log_record = json.loads(line)
-                        event = convert_log_record_to_event(log_record)
+        line_parse_success = 0
+        line_parse_errors = 0
+        
+        for line_num, line in enumerate(lines):
+            if line:
+                try:
+                    parsed_data = json.loads(line)
+                    line_parse_success += 1
+                    
+                    # Handle if the line is a JSON array
+                    if isinstance(parsed_data, list):
+                        logger.info(f"Line {line_num} is a JSON array with {len(parsed_data)} items")
+                        for idx, log_record in enumerate(parsed_data):
+                            if idx == 0 and line_num == 0:
+                                if isinstance(log_record, dict):
+                                    logger.info(f"First log record keys: {list(log_record.keys())}")
+                                    logger.info(f"First log record sample: {str(log_record)[:200]}...")
+                            event = convert_log_record_to_event(log_record)
+                            if event:
+                                log_events.append(event)
+                    else:
+                        # Single log record
+                        if line_num == 0 and isinstance(parsed_data, dict):
+                            logger.info(f"First log record keys: {list(parsed_data.keys())}")
+                            logger.info(f"First log record sample: {str(parsed_data)[:200]}...")
+                        event = convert_log_record_to_event(parsed_data)
                         if event:
                             log_events.append(event)
-                    except json.JSONDecodeError:
-                        continue
-        except Exception:
-            # Fallback: try parsing as JSON array or single object
+                        else:
+                            logger.debug(f"Line {line_num}: convert_log_record_to_event returned None")
+                except json.JSONDecodeError as e:
+                    line_parse_errors += 1
+                    if line_num < 3:  # Log first few parse errors
+                        logger.warning(f"Line {line_num} JSON parse error: {str(e)}, content: {line[:100]}...")
+        
+        logger.info(f"Line parsing results: {line_parse_success} successful, {line_parse_errors} errors")
+        
+        # If no events found via line parsing, try fallback methods
+        if len(log_events) == 0 and line_parse_errors > 0:
+            logger.info("No events from line parsing, trying fallback JSON parsing")
             try:
                 data = json.loads(content)
                 if isinstance(data, list):
+                    logger.info(f"Parsed as JSON array with {len(data)} items")
                     for log_record in data:
                         event = convert_log_record_to_event(log_record)
                         if event:
                             log_events.append(event)
                 else:
                     # Single JSON object
+                    logger.info("Parsed as single JSON object")
                     event = convert_log_record_to_event(data)
                     if event:
                         log_events.append(event)
-            except json.JSONDecodeError:
-                pass  # No valid JSON found
+            except json.JSONDecodeError as e:
+                logger.error(f"Fallback JSON parsing failed: {str(e)}")
         
         logger.info(f"Processed {len(log_events)} log events from JSON file")
         return log_events
@@ -297,31 +357,43 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
     Convert log record to CloudWatch Logs event format
     """
     try:
-        if isinstance(log_record, dict):
-            timestamp = log_record.get('timestamp')
-            if timestamp:
-                if isinstance(timestamp, str):
-                    try:
-                        # Handle ISO format timestamps
-                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                        timestamp_ms = int(dt.timestamp() * 1000)
-                    except ValueError:
-                        # Fallback to current time
-                        timestamp_ms = int(datetime.now().timestamp() * 1000)
-                else:
-                    # Handle numeric timestamps
-                    timestamp_ms = int(timestamp * 1000) if timestamp < 1e12 else int(timestamp)
+        if not isinstance(log_record, dict):
+            logger.warning(f"Log record is not a dict: {type(log_record)}")
+            return None
+            
+        # Handle timestamp - Vector might use different field names
+        timestamp = log_record.get('timestamp') or log_record.get('.timestamp') or log_record.get('time')
+        if timestamp:
+            if isinstance(timestamp, str):
+                try:
+                    # Handle ISO format timestamps
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    timestamp_ms = int(dt.timestamp() * 1000)
+                except ValueError:
+                    # Fallback to current time
+                    timestamp_ms = int(datetime.now().timestamp() * 1000)
             else:
-                timestamp_ms = int(datetime.now().timestamp() * 1000)
-            
-            message = log_record.get('message', str(log_record))
-            
-            return {
-                'timestamp': timestamp_ms,
-                'message': message
-            }
+                # Handle numeric timestamps
+                timestamp_ms = int(timestamp * 1000) if timestamp < 1e12 else int(timestamp)
+        else:
+            timestamp_ms = int(datetime.now().timestamp() * 1000)
+        
+        # Vector typically stores the log message in 'message' field
+        message = log_record.get('message') or log_record.get('.') or log_record.get('log')
+        
+        if not message:
+            # If no message field found, use the entire record
+            message = json.dumps(log_record)
+        elif isinstance(message, (dict, list)):
+            # If message is a dict/list, convert to string
+            message = json.dumps(message)
+        
+        return {
+            'timestamp': timestamp_ms,
+            'message': str(message)
+        }
     except Exception as e:
-        logger.warning(f"Failed to convert log record: {str(e)}")
+        logger.warning(f"Failed to convert log record: {str(e)}, record: {str(log_record)[:200]}...")
         return None
 
 def deliver_logs_to_customer(
@@ -367,7 +439,7 @@ def deliver_logs_to_customer(
         
         # Prepare log group and stream names
         log_group_name = tenant_config['log_group_name']
-        log_stream_name = f"{tenant_info['cluster_id']}-{tenant_info['environment']}-{datetime.now().strftime('%Y-%m-%d')}"
+        log_stream_name = f"{tenant_info['application']}-{tenant_info['pod_name']}-{datetime.now().strftime('%Y-%m-%d')}"
         
         # Use Vector to deliver logs
         deliver_logs_with_vector(
@@ -399,6 +471,9 @@ def deliver_logs_with_vector(
     temp_config_path = None
     vector_process = None
     
+    logger.info(f"Starting Vector delivery for {len(log_events)} log events")
+    logger.info(f"Target: {log_group}/{log_stream} in {region}")
+    
     try:
         # Load Vector config template
         template_path = os.path.join(os.path.dirname(__file__), 'vector_config_template.yaml')
@@ -426,16 +501,37 @@ def deliver_logs_with_vector(
         data_dir = f"/tmp/vector-{session_id}"
         os.makedirs(data_dir, exist_ok=True)
         
+        # Set up Vector environment variables
+        vector_env = os.environ.copy()
+        vector_env.update({
+            'VECTOR_DATA_DIR': data_dir,
+            'AWS_ACCESS_KEY_ID': credentials['AccessKeyId'],
+            'AWS_SECRET_ACCESS_KEY': credentials['SecretAccessKey'],
+            'AWS_SESSION_TOKEN': credentials['SessionToken'],
+            'AWS_REGION': region,
+            'LOG_GROUP': log_group,
+            'LOG_STREAM': log_stream
+        })
+        
+        # Log critical environment variables (mask sensitive data)
+        logger.info(f"Vector environment variables:")
+        logger.info(f"  VECTOR_DATA_DIR: {data_dir}")
+        logger.info(f"  AWS_ACCESS_KEY_ID: {credentials['AccessKeyId'][:10]}...")
+        logger.info(f"  AWS_REGION: {region}")
+        logger.info(f"  LOG_GROUP: {log_group}")
+        logger.info(f"  LOG_STREAM: {log_stream}")
+        
         # Start Vector subprocess
         vector_cmd = ['vector', '--config', temp_config_path]
-        logger.info(f"Starting Vector with config: {temp_config_path}")
+        logger.info(f"Starting Vector with command: {' '.join(vector_cmd)}")
         
         vector_process = subprocess.Popen(
             vector_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=vector_env
         )
         
         # Give Vector a moment to start
@@ -451,27 +547,52 @@ def deliver_logs_with_vector(
         logger.info(f"Sending {len(log_events)} log events to Vector")
         
         # Send all events as one write to avoid BrokenPipe issues
+
+        # Send only the message content to Vector, not the full event structure
         all_events = ""
         for event in log_events:
-            all_events += json.dumps(event) + '\n'
+            # Extract just the message content
+            message = event.get('message', '')
+            all_events += message + '\n'
         
         # Use communicate to send input and wait for completion
         logger.info("Waiting for Vector to complete log delivery")
         try:
             stdout, stderr = vector_process.communicate(input=all_events, timeout=300)
+            return_code = vector_process.returncode
+            
+            # Log Vector output
+            logger.info(f"Vector process completed with return code: {return_code}")
+            
+            if stdout:
+                logger.info("Vector stdout:")
+                for line in stdout.splitlines():
+                    logger.info(f"  VECTOR: {line}")
+            else:
+                logger.info("Vector stdout: (empty)")
+                
+            if stderr:
+                logger.warning("Vector stderr:")
+                for line in stderr.splitlines():
+                    logger.warning(f"  VECTOR: {line}")
+            else:
+                logger.info("Vector stderr: (empty)")
+                
         except subprocess.TimeoutExpired:
-            logger.error("Vector process timed out")
+            logger.error("Vector process timed out after 300 seconds")
             vector_process.kill()
             stdout, stderr = vector_process.communicate()
-            raise Exception(f"Vector timed out. Stdout: {stdout}, Stderr: {stderr}")
+            logger.error(f"Vector stdout after timeout: {stdout}")
+            logger.error(f"Vector stderr after timeout: {stderr}")
+            raise Exception(f"Vector timed out after 300 seconds")
         except Exception as e:
             logger.error(f"Failed to communicate with Vector: {str(e)}")
             raise
         
-        if vector_process.returncode != 0:
-            raise Exception(f"Vector exited with code {vector_process.returncode}. Stderr: {stderr}")
+        if return_code != 0:
+            raise Exception(f"Vector exited with non-zero code {return_code}")
         
-        logger.info("Vector successfully delivered logs to CloudWatch")
+        logger.info(f"Vector successfully delivered {len(log_events)} logs to CloudWatch")
         
     except subprocess.TimeoutExpired:
         logger.error("Vector process timed out")

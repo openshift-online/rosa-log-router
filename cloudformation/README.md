@@ -20,6 +20,9 @@ The infrastructure implements a "Centralized Ingestion, Decentralized Delivery" 
 - **Eliminated Circular Dependencies** - Deterministic bucket naming with deploy script parameter generation
 - **Simplified Infrastructure** - Reduced complexity with container-based approach
 - **Enhanced Deployment** - Improved deploy script with modular stack selection and ECR integration
+- **Vector Integration in Lambda** - Log processor spawns Vector subprocess for reliable CloudWatch delivery
+- **Improved Error Handling** - Lambda returns `batchItemFailures` for proper SQS retry behavior
+- **Enhanced IAM Security** - Double-hop role assumption with ExternalId validation
 
 **Previous Major Changes:**
 - **Removed Kinesis Data Firehose** - Vector agents now write directly to S3
@@ -67,9 +70,14 @@ cd cloudformation/
 Complete serverless processing using container-based Lambda functions with ECR image deployment.
 
 ```bash
-# First, build and push container to ECR
+# First, build and push containers to ECR
 cd ../container/
-podman build -f Containerfile -t log-processor:latest .
+# Build collector container first (contains Vector)
+podman build -f Containerfile.collector -t log-collector:latest .
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
+
+# Push to ECR
 aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
 podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
@@ -118,6 +126,27 @@ cloudformation/
 ├── deploy.sh                          # Enhanced deployment script with modular options
 └── README.md                          # This file
 ```
+
+### Key Implementation Details
+
+#### Lambda Execution Role Permissions
+The Lambda execution role includes comprehensive permissions for:
+- S3 bucket access: `GetObject`, `GetBucketLocation`, `ListBucket`
+- KMS decryption for encrypted S3 buckets
+- DynamoDB access for tenant configuration lookup
+- STS AssumeRole for double-hop cross-account access
+
+#### Double-Hop Role Assumption
+The Lambda function performs secure cross-account access:
+1. Lambda execution role assumes central log distribution role
+2. Central role assumes customer log distribution role with ExternalId
+3. Customer role provides minimal CloudWatch Logs permissions
+
+#### Customer Role Requirements
+Customer log distribution roles must include:
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
+- `logs:DescribeLogGroups` on all resources (required for Vector healthchecks)
+- Trust relationship with central log distribution role and ExternalId condition
 
 ## Parameters
 
@@ -270,9 +299,10 @@ aws sns subscribe \
 
 The infrastructure creates minimal IAM roles with least privilege:
 
-- **CentralS3WriterRole**: Allows Vector to write logs directly to S3
-- **VectorRole**: Allows Vector to assume the CentralS3WriterRole
-- **LogDistributorRole**: Allows Lambda to read from SQS, DynamoDB, and assume cross-account roles
+- **CentralS3WriterRole**: Allows Vector to write logs directly to S3 with KMS encryption
+- **VectorRole**: Uses IRSA to assume the CentralS3WriterRole (when OIDC configured)
+- **LambdaExecutionRole**: Full permissions for log processing including S3, KMS, DynamoDB, and STS
+- **LogDistributorRole** (CentralLogDistributionRole): Intermediate role for double-hop assumption
 - **DLQProcessorRole**: Allows DLQ processing Lambda to send alerts
 
 ### Encryption
@@ -283,7 +313,7 @@ The infrastructure creates minimal IAM roles with least privilege:
 
 ### Cross-Account Access
 
-Lambda functions use ABAC (Attribute-Based Access Control) for secure cross-account log delivery:
+Lambda functions use double-hop role assumption with ExternalId for secure cross-account log delivery:
 
 ```json
 {
@@ -294,7 +324,12 @@ Lambda functions use ABAC (Attribute-Based Access Control) for secure cross-acco
       "Principal": {
         "AWS": "arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX"
       },
-      "Action": "sts:AssumeRole"
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "CENTRAL-ACCOUNT-ID"
+        }
+      }
     }
   ]
 }
@@ -319,8 +354,10 @@ Automatic transitions:
 ### Lambda Optimization
 
 - Reserved concurrency to prevent runaway costs
-- Batch processing (10 SQS messages per invocation)
-- Efficient error handling with DLQ
+- Batch processing (10 SQS messages per invocation) with partial batch failure support
+- Efficient error handling with `batchItemFailures` for automatic retry
+- Container-based deployment for better cold start performance
+- Vector subprocess for optimized CloudWatch Logs delivery
 
 ## Troubleshooting
 
@@ -410,6 +447,26 @@ aws cloudformation create-change-set \
   --template-body file://main.yaml \
   --change-set-name update-$(date +%Y%m%d-%H%M%S)
 ```
+
+## Lambda Processing Details
+
+### Log Format Handling
+The Lambda processor handles Vector's output format:
+- Vector writes JSON arrays on a single line
+- Lambda parses the array and extracts individual log events
+- Only the `message` field is sent to CloudWatch (no Vector metadata)
+
+### Log Stream Naming
+CloudWatch log streams are named using the pattern: `application-pod_name-date`
+- Example: `payment-service-payment-pod-abc123-2024-01-01`
+- This format provides clear identification of log sources
+
+### Error Handling
+The Lambda function implements robust error handling:
+- Returns `batchItemFailures` for failed messages
+- Failed messages remain in SQS for retry
+- Comprehensive INFO-level logging for debugging
+- Vector subprocess output captured and logged
 
 ## Support
 

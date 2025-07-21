@@ -13,10 +13,6 @@ Parameters:
     Default: multi-tenant-logging
     Description: Name of the project for resource naming
     
-  LogDistributorRoleArn:
-    Type: String
-    Description: ARN of the log distributor Lambda IAM role
-    
   TenantConfigTableName:
     Type: String
     Description: Name of the tenant configuration DynamoDB table
@@ -25,6 +21,10 @@ Parameters:
     Type: String
     Description: ARN of the SQS queue to process messages from
     
+  SQSQueueUrl:
+    Type: String
+    Description: URL of the SQS queue
+    
   ECRImageUri:
     Type: String
     Description: URI of the ECR container image for the log processor
@@ -32,8 +32,70 @@ Parameters:
   CentralLogDistributionRoleArn:
     Type: String
     Description: ARN of the central log distribution role for cross-account access
+    
+  TenantConfigTableArn:
+    Type: String
+    Description: ARN of the tenant configuration DynamoDB table
+    
+  CentralLoggingBucketArn:
+    Type: String
+    Description: ARN of the central logging S3 bucket
 
 Resources:
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-lambda-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: LogProcessorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # DynamoDB access for tenant configurations
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:BatchGetItem
+                Resource: !Ref TenantConfigTableArn
+              # S3 access for reading log files
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - !Ref CentralLoggingBucketArn
+                  - !Sub '${CentralLoggingBucketArn}/*'
+              # Assume the central log distribution role
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: !Ref CentralLogDistributionRoleArn
+              # KMS access for encrypted S3 buckets
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
 
   # CloudWatch Log Group for Lambda functions
   LogDistributorLogGroup:
@@ -59,7 +121,7 @@ Resources:
       PackageType: Image
       Code:
         ImageUri: !Ref ECRImageUri
-      Role: !Ref LogDistributorRoleArn
+      Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
           TENANT_CONFIG_TABLE: !Ref TenantConfigTableName
@@ -67,7 +129,6 @@ Resources:
           RETRY_ATTEMPTS: "3"
           CENTRAL_LOG_DISTRIBUTION_ROLE_ARN: !Ref CentralLogDistributionRoleArn
           EXECUTION_MODE: "lambda"
-          AWS_REGION: !Ref AWS::Region
       Timeout: 300
       MemorySize: 1024
       Tags:
@@ -90,6 +151,8 @@ Resources:
       FunctionName: !Ref LogDistributorFunction
       BatchSize: 10
       MaximumBatchingWindowInSeconds: 5
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
 
 
 Outputs:
