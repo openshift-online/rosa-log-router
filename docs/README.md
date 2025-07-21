@@ -99,7 +99,6 @@ graph TB
     SQS -->|Batch Messages (10)| Lambda
     
     %% Lambda Processing Flow
-    Lambda -->|Parse S3 Keys<br/>Extract Tenant Info| Lambda
     Lambda -->|Lookup Tenant Config| DDB
     Lambda -->|Assume Central Role<br/>with Session Tags| STS
     STS -->|Grant Permissions<br/>tenant_id, cluster_id| CentralRole
