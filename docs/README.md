@@ -96,7 +96,7 @@ graph TB
     S3 --> S3E
     S3E -->|Trigger Events| SNS
     SNS -->|Fan-out to Queue| SQS
-    SQS -->|Batch Messages (10)| Lambda
+    SQS -->|Batch Messages 10| Lambda
     
     %% Lambda Processing Flow
     Lambda -->|Lookup Tenant Config| DDB
