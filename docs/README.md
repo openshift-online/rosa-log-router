@@ -25,9 +25,9 @@ graph TB
         K8s3[Kubernetes Cluster N<br/>ROSA/OpenShift]
         
         subgraph "Vector DaemonSets"
-            V1[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
-            V2[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
-            V3[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
+            V1[Vector Agent<br/>Pod Logs + Metadata]
+            V2[Vector Agent<br/>Pod Logs + Metadata]
+            V3[Vector Agent<br/>Pod Logs + Metadata]
         end
         
         K8s1 --> V1
@@ -37,18 +37,18 @@ graph TB
 
     subgraph "Central AWS Account - Log Processing"
         subgraph "Storage Layer"
-            S3[S3 Central Bucket<br/>Dynamic Partitioning<br/>customer_id/cluster_id/app/pod]
+            S3[S3 Central Bucket<br/>Dynamic Partitioning]
             S3E[S3 Event Notifications<br/>ObjectCreated Events]
         end
         
         subgraph "Event Processing"
             SNS[SNS Topic<br/>Hub-and-Spoke Pattern]
             SQS[SQS Queue + DLQ<br/>Batch Processing]
-            Lambda[ECR Container Lambda<br/>Unified Log Processor<br/>Multi-mode Execution]
+            Lambda[Container Lambda<br/>Log Processor]
         end
         
         subgraph "Configuration"
-            DDB[DynamoDB<br/>Tenant Configurations<br/>ExternalId Validation]
+            DDB[DynamoDB<br/>Tenant Configurations]
         end
         
         subgraph "Container Infrastructure"
@@ -59,30 +59,30 @@ graph TB
         
         subgraph "Security & Identity"
             STS[AWS STS<br/>Role Assumption Service]
-            CentralRole[Central Log Distribution Role<br/>Double-hop Security]
+            CentralRole[Central Log Distribution Role]
             S3WriterRole[S3 Writer Role<br/>Vector S3 Access]
         end
     end
 
     subgraph "Customer AWS Account A"
         subgraph "Log Delivery"
-            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*<br/>Log Groups & Streams]
+            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
         end
         
         subgraph "Customer IAM"
-            Role_A[Customer Log Distribution Role<br/>CloudWatch Logs Access]
-            Trust_A[Trust Policy<br/>Session Tag Validation<br/>ExternalId Required]
+            Role_A[Customer Log Distribution Role]
+            Trust_A[Trust Policy<br/>Session Tag Validation]
         end
     end
 
     subgraph "Customer AWS Account B"
         subgraph "Log Delivery"
-            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*<br/>Log Groups & Streams]
+            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
         end
         
         subgraph "Customer IAM"
-            Role_B[Customer Log Distribution Role<br/>CloudWatch Logs Access]
-            Trust_B[Trust Policy<br/>Session Tag Validation<br/>ExternalId Required]
+            Role_B[Customer Log Distribution Role]
+            Trust_B[Trust Policy<br/>Session Tag Validation]
         end
     end
 
