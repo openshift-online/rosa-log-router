@@ -4,14 +4,16 @@ This repository contains the implementation of a scalable, multi-tenant logging 
 
 ## Architecture Overview
 
-The solution implements a "Centralized Ingestion, Decentralized Delivery" model with a modern container-based processing architecture:
+This is a **PROOF OF CONCEPT (POC)** project implementing a "Centralized Ingestion, Decentralized Delivery" model with a modern container-based processing architecture:
 
-- **Vector** log agents deployed as DaemonSets in Kubernetes clusters
-- **S3** for direct log storage with dynamic partitioning by tenant
+- **Vector** log agents deployed as DaemonSets in Kubernetes clusters with role assumption for S3 access
+- **S3** for direct log storage with dynamic partitioning by customer_id/cluster_id/application/pod_name
 - **SNS/SQS** hub-and-spoke pattern for event-driven processing
 - **Container-based Lambda** functions for cross-account log delivery using ECR images
 - **DynamoDB** for tenant configuration management
 - **Unified log processor** supporting Lambda, SQS polling, and manual execution modes
+- **Vector integration** within processor for reliable CloudWatch Logs delivery
+- **Multi-stage container builds** with collector and processor containers
 
 ### AWS Architecture Diagram
 
@@ -23,9 +25,9 @@ graph TB
         K8s3[Kubernetes Cluster N<br/>ROSA/OpenShift]
         
         subgraph "Vector DaemonSets"
-            V1[Vector Agent<br/>Pod Logs + Metadata]
-            V2[Vector Agent<br/>Pod Logs + Metadata]
-            V3[Vector Agent<br/>Pod Logs + Metadata]
+            V1[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
+            V2[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
+            V3[Vector Agent<br/>Pod Logs + Metadata<br/>S3WriterRole Assumption]
         end
         
         K8s1 --> V1
@@ -35,103 +37,121 @@ graph TB
 
     subgraph "Central AWS Account - Log Processing"
         subgraph "Storage Layer"
-            S3[S3 Central Bucket<br/>Tenant Partitioned<br/>Lifecycle Policies]
-            S3E[S3 Event Notifications]
+            S3[S3 Central Bucket<br/>Dynamic Partitioning<br/>customer_id/cluster_id/app/pod]
+            S3E[S3 Event Notifications<br/>ObjectCreated Events]
         end
         
         subgraph "Event Processing"
-            SNS[SNS Topic<br/>Hub-and-Spoke]
-            SQS[SQS Queue<br/>+DLQ]
-            Lambda[Lambda Function<br/>Log Distributor]
+            SNS[SNS Topic<br/>Hub-and-Spoke Pattern]
+            SQS[SQS Queue + DLQ<br/>Batch Processing]
+            Lambda[ECR Container Lambda<br/>Unified Log Processor<br/>Multi-mode Execution]
         end
         
         subgraph "Configuration"
-            DDB[DynamoDB<br/>Tenant Config]
+            DDB[DynamoDB<br/>Tenant Configurations<br/>ExternalId Validation]
         end
         
-        subgraph "Security"
-            STS[AWS STS<br/>Cross-Account Roles]
-            CentralRole[Central Log<br/>Distribution Role]
-            S3WriterRole[Central S3<br/>Writer Role]
+        subgraph "Container Infrastructure"
+            ECR[ECR Repository<br/>Multi-stage Builds]
+            Collector[Collector Container<br/>Vector Binary]
+            Processor[Processor Container<br/>Python + Vector]
+        end
+        
+        subgraph "Security & Identity"
+            STS[AWS STS<br/>Role Assumption Service]
+            CentralRole[Central Log Distribution Role<br/>Double-hop Security]
+            S3WriterRole[S3 Writer Role<br/>Vector S3 Access]
         end
     end
 
     subgraph "Customer AWS Account A"
         subgraph "Log Delivery"
-            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*<br/>Log Groups & Streams]
         end
         
         subgraph "Customer IAM"
-            Role_A[Customer Log<br/>Distribution Role]
-            Trust_A[Trust Policy<br/>Session Tag Validation]
-        end
-        
-        subgraph "Customer Delivery"
-            CWL_A[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+            Role_A[Customer Log Distribution Role<br/>CloudWatch Logs Access]
+            Trust_A[Trust Policy<br/>Session Tag Validation<br/>ExternalId Required]
         end
     end
 
     subgraph "Customer AWS Account B"
-        subgraph "Log Delivery "
-            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*]
+        subgraph "Log Delivery"
+            CWL_B[CloudWatch Logs<br/>/ROSA/cluster-logs/*<br/>Log Groups & Streams]
         end
         
-        subgraph "Customer IAM "
-            Role_B[Customer Log<br/>Distribution Role]
-            Trust_B[Trust Policy<br/>Session Tag Validation]
+        subgraph "Customer IAM"
+            Role_B[Customer Log Distribution Role<br/>CloudWatch Logs Access]
+            Trust_B[Trust Policy<br/>Session Tag Validation<br/>ExternalId Required]
         end
     end
 
-    %% Data Flow
-    V1 -->|Enriched Logs<br/>customer_id, cluster_id| S3
-    V2 -->|Enriched Logs<br/>customer_id, cluster_id| S3
-    V3 -->|Enriched Logs<br/>customer_id, cluster_id| S3
+    %% Vector to S3 Flow
+    V1 -.->|Assume Role| S3WriterRole
+    V2 -.->|Assume Role| S3WriterRole
+    V3 -.->|Assume Role| S3WriterRole
+    S3WriterRole -->|Write NDJSON Logs<br/>GZIP Compressed| S3
+    
+    %% S3 Event Processing Flow
     S3 --> S3E
-    S3E -->|ObjectCreated Events| SNS
-    SNS -->|Fan-out Events| SQS
-    SQS -->|Batch Messages| Lambda
+    S3E -->|Trigger Events| SNS
+    SNS -->|Fan-out to Queue| SQS
+    SQS -->|Batch Messages (10)| Lambda
     
-    Lambda -->|Tenant Lookup| DDB
-    Lambda -->|Assume Role| STS
-    STS -->|Session Tags<br/>tenant_id, cluster_id| CentralRole
+    %% Lambda Processing Flow
+    Lambda -->|Parse S3 Keys<br/>Extract Tenant Info| Lambda
+    Lambda -->|Lookup Tenant Config| DDB
+    Lambda -->|Assume Central Role<br/>with Session Tags| STS
+    STS -->|Grant Permissions<br/>tenant_id, cluster_id| CentralRole
     
-    %% Cross-Account Access
-    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_A
-    CentralRole -->|Double-Hop<br/>Assume Customer Role| Role_B
+    %% Cross-Account Delivery Flow
+    CentralRole -->|Double-hop Assumption<br/>Customer Role A| Role_A
+    CentralRole -->|Double-hop Assumption<br/>Customer Role B| Role_B
     
-    Role_A -->|Deliver Logs| CWL_A
-    Role_B -->|Deliver Logs| CWL_B
+    %% Vector Integration within Lambda
+    Lambda -->|Spawn Vector Subprocess<br/>Dynamic Config Generation| Processor
+    Processor -->|Stream Decompressed Logs<br/>CloudWatch API Batching| Role_A
+    Processor -->|Stream Decompressed Logs<br/>CloudWatch API Batching| Role_B
     
-    %% Trust Validation
-    Trust_A -.->|Validate Session Tags| Role_A
-    Trust_B -.->|Validate Session Tags| Role_B
+    %% Final Delivery
+    Role_A -->|Create Log Groups/Streams<br/>Deliver Log Events| CWL_A
+    Role_B -->|Create Log Groups/Streams<br/>Deliver Log Events| CWL_B
     
-    %% Additional Flow Notes
-    %% S3 events trigger processing pipeline
-    %% Cross-account role assumption provides security
-
+    %% Container Build Flow
+    Collector -->|Base Container<br/>Vector Binary| Processor
+    Processor -->|Build & Push| ECR
+    ECR -->|Deploy Image| Lambda
+    
+    %% Trust and Validation
+    Trust_A -.->|Validate Session Tags<br/>ExternalId Check| Role_A
+    Trust_B -.->|Validate Session Tags<br/>ExternalId Check| Role_B
+    
     %% Styling
-    classDef customer fill:#e1f5fe
-    classDef central fill:#f3e5f5
-    classDef security fill:#fff3e0
-    classDef storage fill:#e8f5e8
-    classDef processing fill:#fce4ec
+    classDef customer fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef central fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef security fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storage fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef processing fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef container fill:#e3f2fd,stroke:#0d47a1,stroke-width:2px
     
     class K8s1,K8s2,K8s3,V1,V2,V3 customer
     class Lambda,SQS,SNS central
     class STS,CentralRole,S3WriterRole,Role_A,Role_B,Trust_A,Trust_B security
-    class S3,DDB storage
+    class S3,S3E,DDB storage
     class CWL_A,CWL_B processing
+    class ECR,Collector,Processor container
 ```
 
 ### Data Flow Summary
 
 1. **Collection**: Vector agents collect logs from Kubernetes pods and enrich with tenant metadata
-2. **Direct Write**: Vector writes logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
-3. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
-4. **Processing**: Lambda function processes SQS messages and delivers logs cross-account
-5. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
-6. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
+2. **Role Assumption**: Vector assumes S3WriterRole using base AWS credentials for secure S3 access
+3. **Direct Write**: Vector writes NDJSON logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
+4. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
+5. **Processing**: Container-based Lambda function processes SQS messages
+6. **Vector Integration**: Lambda spawns Vector subprocess with customer credentials for reliable delivery
+7. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
+8. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
 
 ## Repository Structure
 
@@ -145,15 +165,23 @@ graph TB
 │   ├── deploy.sh                          # CloudFormation deployment script with modular options
 │   └── README.md                          # CloudFormation-specific documentation
 ├── container/
-│   ├── Containerfile                      # Container definition for unified log processor
+│   ├── Containerfile.collector             # Base container with Vector binary installation
+│   ├── Containerfile.processor             # Log processor container that includes Vector
 │   ├── log_processor.py                   # Unified log processor (Lambda/SQS/manual modes)
 │   ├── entrypoint.sh                      # Multi-mode container entrypoint
+│   ├── vector_config_template.yaml        # Template for dynamic Vector configuration
 │   └── requirements.txt                   # Python dependencies
 ├── docs/
 │   └── README.md                          # This file
 ├── k8s/
 │   ├── vector-config.yaml                # Vector ConfigMap
 │   └── vector-daemonset.yaml             # Vector DaemonSet deployment
+├── test_container/
+│   ├── Containerfile                      # Fake log generator container
+│   ├── fake_log_generator.py              # Realistic log generator for testing
+│   └── requirements.txt                   # Test dependencies
+├── vector-local-test.yaml                # Vector configuration for local testing
+├── test-vector.sh                        # Automated Vector testing script
 ├── .env.sample                           # Environment variable template
 ├── .gitignore                            # Git ignore with security exclusions
 ├── CLAUDE.md                             # Local development and usage guide
@@ -167,7 +195,9 @@ graph TB
 - AWS CLI configured with appropriate permissions
 - S3 bucket for storing CloudFormation templates
 - kubectl configured for your Kubernetes clusters
-- Python 3.11+ (for Lambda development)
+- Python 3.13+ with pip
+- Podman for containerized testing
+- Access to deployed CloudFormation stack with SQS queue
 
 ### 1. Deploy Infrastructure
 
@@ -187,9 +217,14 @@ cd cloudformation/
 
 #### **Full Container-Based Lambda Processing**
 ```bash
-# First, build and push container to ECR
+# First, build containers with multi-stage build
 cd container/
-podman build -f Containerfile -t log-processor:latest .
+# Build collector container first (contains Vector)
+podman build -f Containerfile.collector -t log-collector:latest .
+# Build processor container (includes Vector from collector)
+podman build -f Containerfile.processor -t log-processor:latest .
+
+# Push to ECR
 aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
 podman tag log-processor:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
@@ -246,13 +281,18 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 
 #### **Container Testing**
 ```bash
-# Build container
+# Build containers with multi-stage build
 cd container/
-podman build -f Containerfile -t log-processor:latest .
+podman build -f Containerfile.collector -t log-collector:latest .
+podman build -f Containerfile.processor -t log-processor:latest .
 
 # Test with AWS profile
 podman run --rm \
   -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e AWS_REGION=YOUR_AWS_REGION \
+  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
+  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=sqs \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest
@@ -263,6 +303,9 @@ export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile
 podman run --rm \
   -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_REGION=YOUR_AWS_REGION \
+  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
   -e EXECUTION_MODE=manual \
   log-processor:latest
 ```
@@ -280,9 +323,11 @@ aws ecr describe-repositories --repository-names log-processor --region YOUR_AWS
 
 #### **Container Lifecycle Management**
 ```bash
-# Build and tag with version
+# Build with multi-stage build and tag with version
 cd container/
-podman build -f Containerfile -t log-processor:v1.0.0 .
+podman build -f Containerfile.collector -t log-collector:v1.0.0 .
+podman build -f Containerfile.processor -t log-processor:v1.0.0 .
+podman tag log-collector:v1.0.0 log-collector:latest
 podman tag log-processor:v1.0.0 log-processor:latest
 
 # Tag for ECR
@@ -316,12 +361,14 @@ This project uses CloudFormation for infrastructure deployment with a modular ne
 ### Recent Infrastructure Updates
 
 The CloudFormation templates have undergone major architectural improvements:
+- **Multi-Stage Container Builds**: Separate collector and processor containers with Vector integration
+- **Vector Integration**: Processor spawns Vector subprocess for reliable CloudWatch Logs delivery
 - **Container-Based Lambda**: Unified log processor using ECR container images with multi-mode execution
 - **Modular Deployment**: Optional SQS and Lambda stacks with `--include-sqs` and `--include-lambda` flags
 - **Native S3 Notifications**: Replaced custom Lambda functions with native AWS capabilities
 - **ECR Integration**: Container images stored in Amazon Elastic Container Registry for Lambda deployment
-- **Simplified Infrastructure**: Reduced complexity through container-based approach
-- **Enhanced Deployment**: Improved deployment script with conditional stack selection
+- **Vector Role Assumption**: S3WriterRole configuration for secure S3 access from Vector agents
+- **Enhanced Testing**: Fake log generator and comprehensive local testing infrastructure
 
 Previous fixes included:
 - **IAM Policy Fixes**: Corrected S3 bucket ARN format in IAM policies to use proper CloudFormation intrinsic functions
@@ -336,10 +383,20 @@ Previous fixes included:
 
 The following environment variables can be configured:
 
-- `AWS_REGION`: AWS region for deployment (default: us-east-1)
-- `S3_BUCKET_NAME`: Name of the central S3 bucket for logs
-- `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role for Vector
-- `TENANT_CONFIG_TABLE`: DynamoDB table name for tenant configurations
+#### **Container/Lambda Function**
+- `EXECUTION_MODE`: Mode of operation (`lambda`, `sqs`, `manual`)
+- `TENANT_CONFIG_TABLE`: DynamoDB table for tenant configurations
+- `MAX_BATCH_SIZE`: Maximum events per CloudWatch Logs batch (default: 1000)
+- `RETRY_ATTEMPTS`: Number of retry attempts for failed operations (default: 3)
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the central log distribution role for double-hop access
+- `SQS_QUEUE_URL`: URL of the SQS queue (for SQS polling mode)
+- `AWS_REGION`: AWS region for services
+
+#### **Vector ConfigMap**
+- `AWS_REGION`: AWS region for S3 bucket
+- `S3_BUCKET_NAME`: Name of the central S3 bucket
+- `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role
+- `CLUSTER_ID`: Cluster identifier for log metadata
 
 ### CloudFormation Parameters
 
@@ -473,11 +530,18 @@ aws cloudwatch get-metric-statistics \
 ```bash
 # Test unified log processor locally (direct Python)
 cd container/
+pip3 install --user -r requirements.txt
 python3 log_processor.py --mode manual
 
 # Test with container (SQS polling)
-podman build -f Containerfile -t log-processor:latest .
-podman run --rm -e EXECUTION_MODE=sqs -v ~/.aws:/home/logprocessor/.aws:ro log-processor:latest
+podman build -f Containerfile.collector -t log-collector:latest .
+podman build -f Containerfile.processor -t log-processor:latest .
+podman run --rm \
+  -e AWS_PROFILE=YOUR_AWS_PROFILE \
+  -e EXECUTION_MODE=sqs \
+  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/QUEUE-NAME \
+  -v ~/.aws:/home/logprocessor/.aws:ro \
+  log-processor:latest
 ```
 
 #### **Vector Pipeline Testing with Fake Log Generator**
@@ -486,28 +550,35 @@ podman run --rm -e EXECUTION_MODE=sqs -v ~/.aws:/home/logprocessor/.aws:ro log-p
 cd test_container/
 pip3 install -r requirements.txt
 
-# Basic Vector test with realistic fake logs
+# Set up environment for Vector role assumption (use test-vector.sh script)
+../test-vector.sh
+
+# Basic Vector test with realistic fake logs and role assumption
 python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
 
-# High-volume performance test
+# High-volume Vector performance test
 python3 fake_log_generator.py \
   --min-batch-size 50 --max-batch-size 100 \
   --min-sleep 0.1 --max-sleep 0.5 \
   --total-batches 100 | vector --config ../vector-local-test.yaml
 
-# Multi-tenant testing with specific metadata
+# Multi-tenant Vector test
 python3 fake_log_generator.py \
   --customer-id acme-corp \
   --cluster-id prod-cluster-1 \
   --application payment-service \
   --total-batches 20 | vector --config ../vector-local-test.yaml
 
-# Container-based testing
+# Container-based Vector test
 podman build -f Containerfile -t fake-log-generator .
 podman run --rm fake-log-generator --total-batches 10 | vector --config ../vector-local-test.yaml
 
-# Use automated test script
-./test-vector.sh
+# Manual role assumption setup (alternative to script)
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile scuppett-dev)
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile scuppett-dev)
+export S3_WRITER_ROLE_ARN=arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role
+export S3_BUCKET_NAME=multi-tenant-logging-development-central-12345678
+export AWS_REGION=us-east-2
 ```
 
 #### **Infrastructure Validation**
