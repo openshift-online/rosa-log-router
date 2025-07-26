@@ -4,5 +4,12 @@ kind: Kustomization
 resources:
   - ../base
   - scc.yaml
+  - imagestream.yaml
 
 namespace: logging
+
+patches:
+  - path: imagestream-patch.yaml
+    target:
+      kind: DaemonSet
+      name: vector-logs

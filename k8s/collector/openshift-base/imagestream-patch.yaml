@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-logs
+  annotations:
+    image.openshift.io/triggers: |
+      [{
+        "from": {
+          "kind": "ImageStreamTag",
+          "name": "collector:main",
+          "namespace": "logging"
+        },
+        "fieldPath": "spec.template.spec.containers[?(@.name==\"vector\")].image",
+        "paused": false
+      }]
+spec:
+  template:
+    spec:
+      containers:
+      - name: vector
+        image: image-registry.openshift-image-registry.svc:5000/logging/collector:main

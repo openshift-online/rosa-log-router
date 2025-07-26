@@ -1,0 +1,23 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: processor
+  namespace: logging
+  labels:
+    app: log-processor
+    app.kubernetes.io/name: log-processor
+    app.kubernetes.io/part-of: multi-tenant-logging
+    app.kubernetes.io/component: log-processor
+spec:
+  lookupPolicy:
+    local: false
+  tags:
+  - name: main
+    from:
+      kind: DockerImage
+      name: public.ecr.aws/d1w4s4o1/logdesign/processor:main
+    importPolicy:
+      scheduled: true
+      importMode: Legacy
+    referencePolicy:
+      type: Source

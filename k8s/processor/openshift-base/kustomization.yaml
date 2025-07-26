@@ -6,3 +6,10 @@ namespace: logging
 resources:
   - ../base
   - scc.yaml
+  - imagestream.yaml
+
+patches:
+  - path: imagestream-patch.yaml
+    target:
+      kind: Deployment
+      name: log-processor
