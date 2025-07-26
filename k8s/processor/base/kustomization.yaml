@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: logging
+
+resources:
+  - service-account.yaml
+  - config.yaml
+  - deployment.yaml
+  - role.yaml
+  - rolebinding.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: log-processor
+      app.kubernetes.io/part-of: multi-tenant-logging

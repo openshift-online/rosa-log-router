@@ -1,0 +1,23 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: collector
+  namespace: logging
+  labels:
+    app: vector-logs
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: multi-tenant-logging
+    app.kubernetes.io/component: log-collector
+spec:
+  lookupPolicy:
+    local: false
+  tags:
+  - name: main
+    from:
+      kind: DockerImage
+      name: public.ecr.aws/d1w4s4o1/logdesign/collector:main
+    importPolicy:
+      scheduled: true
+      importMode: Legacy
+    referencePolicy:
+      type: Source

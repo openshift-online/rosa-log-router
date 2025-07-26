@@ -39,35 +39,11 @@ Parameters:
     Description: URI of the ECR container image for the log processor (required if IncludeLambdaStack is true)
     
   # S3 Configuration
-  S3StandardIADays:
+  S3DeleteAfterDays:
     Type: Number
-    Default: 30
+    Default: 7
     MinValue: 1
-    Description: Days after which to transition S3 objects to Standard-IA
-    
-  S3GlacierDays:
-    Type: Number
-    Default: 90
-    MinValue: 1
-    Description: Days after which to transition S3 objects to Glacier
-    
-  S3DeepArchiveDays:
-    Type: Number
-    Default: 365
-    MinValue: 1
-    Description: Days after which to transition S3 objects to Deep Archive
-    
-  S3LogRetentionDays:
-    Type: Number
-    Default: 2555
-    MinValue: 1
-    Description: Number of days to retain logs in S3
-    
-  EnableS3IntelligentTiering:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable S3 Intelligent Tiering for cost optimization
+    Description: Number of days after which to delete logs from S3
     
   EnableS3Encryption:
     Type: String
@@ -101,11 +77,7 @@ Resources:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
         EksOidcIssuer: !Ref EksOidcIssuer
-        S3StandardIADays: !Ref S3StandardIADays
-        S3GlacierDays: !Ref S3GlacierDays
-        S3DeepArchiveDays: !Ref S3DeepArchiveDays
-        S3LogRetentionDays: !Ref S3LogRetentionDays
-        EnableS3IntelligentTiering: !Ref EnableS3IntelligentTiering
+        S3DeleteAfterDays: !Ref S3DeleteAfterDays
         EnableS3Encryption: !Ref EnableS3Encryption
         RandomSuffix: !Ref RandomSuffix
       Tags:

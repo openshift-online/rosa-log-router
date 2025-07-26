@@ -163,7 +163,7 @@ Customer log distribution roles must include:
 | ECRImageUri               | ECR container image URI         | ""                   | If Lambda enabled |
 | EksOidcIssuer             | OIDC issuer URL for EKS cluster | ""                   | No |
 | EnableS3Encryption        | Enable S3 encryption            | true                 | No |
-| EnableS3IntelligentTiering| Enable S3 intelligent tiering   | true                 | No |
+| S3DeleteAfterDays         | Days before deleting S3 objects | 7                    | No |
 
 ### Environment-Specific Parameters
 

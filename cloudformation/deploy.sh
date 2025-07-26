@@ -144,11 +144,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate required parameters
+# For stack updates, template bucket might come from existing stack
 if [[ -z "$TEMPLATE_BUCKET" ]]; then
-    print_error "Template bucket is required. Use -b or --template-bucket option."
-    usage
-    exit 1
+    # Check if stack exists
+    if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" &> /dev/null; then
+        # Try to get template bucket from existing stack
+        TEMPLATE_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Parameters[?ParameterKey==`TemplateBucket`].ParameterValue' --output text 2>/dev/null || echo "")
+        if [[ -n "$TEMPLATE_BUCKET" ]]; then
+            print_status "Using existing template bucket from stack: $TEMPLATE_BUCKET"
+        else
+            print_error "Template bucket is required. Use -b or --template-bucket option."
+            usage
+            exit 1
+        fi
+    else
+        print_error "Template bucket is required for new stacks. Use -b or --template-bucket option."
+        usage
+        exit 1
+    fi
 fi
 
 # Validate environment
@@ -195,6 +208,19 @@ check_aws_cli() {
     local account_id=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
     print_status "AWS Account: $account_id"
     print_status "Current region: $REGION"
+}
+
+# Function to check if jq is installed
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        print_error "jq is not installed. Please install it first."
+        print_error "  On macOS: brew install jq"
+        print_error "  On Ubuntu/Debian: sudo apt-get install jq"
+        print_error "  On RHEL/CentOS: sudo yum install jq"
+        print_error "  On Amazon Linux: sudo yum install jq"
+        exit 1
+    fi
+    print_status "jq is installed."
 }
 
 # Function to check if S3 bucket exists
@@ -356,44 +382,84 @@ deploy_stack() {
         print_status "Reading existing stack parameters..."
         local existing_params=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Parameters' --output json 2>/dev/null || echo '[]')
         
-        # Extract existing parameter values
+        # Use jq for parameter extraction (required)
         local random_suffix_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="RandomSuffix") | .ParameterValue // empty')
-        local eks_oidc_issuer=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EksOidcIssuer") | .ParameterValue // empty')
-        local enable_s3_encryption=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EnableS3Encryption") | .ParameterValue // "true"')
-        local s3_log_retention_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3LogRetentionDays") | .ParameterValue // "2555"')
-        local s3_deep_archive_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3DeepArchiveDays") | .ParameterValue // "365"')
-        local enable_s3_intelligent_tiering=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="EnableS3IntelligentTiering") | .ParameterValue // "true"')
-        local s3_standard_ia_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3StandardIADays") | .ParameterValue // "30"')
-        local s3_glacier_days=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="S3GlacierDays") | .ParameterValue // "90"')
+        local template_bucket_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="TemplateBucket") | .ParameterValue // empty')
         
         # Use existing RandomSuffix if it exists, otherwise generate new one
         if [[ -n "$random_suffix_existing" ]]; then
             random_suffix="$random_suffix_existing"
+            print_status "Using existing RandomSuffix: $random_suffix"
         fi
         
-        # Set all parameters with preserved or new values
-        parameters=(
-            "Environment=$ENVIRONMENT"
-            "ProjectName=$PROJECT_NAME"
-            "TemplateBucket=$TEMPLATE_BUCKET"
-            "RandomSuffix=$random_suffix"
-            "IncludeSQSStack=$INCLUDE_SQS"
-            "IncludeLambdaStack=$INCLUDE_LAMBDA"
-            "EksOidcIssuer=$eks_oidc_issuer"
-            "EnableS3Encryption=$enable_s3_encryption"
-            "S3LogRetentionDays=$s3_log_retention_days"
-            "S3DeepArchiveDays=$s3_deep_archive_days"
-            "EnableS3IntelligentTiering=$enable_s3_intelligent_tiering"
-            "S3StandardIADays=$s3_standard_ia_days"
-            "S3GlacierDays=$s3_glacier_days"
-        )
-        
-        # Add ECR image URI if Lambda is enabled
-        if [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
-            parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+        # Use existing TemplateBucket if not specified on command line
+        if [[ -z "$TEMPLATE_BUCKET" && -n "$template_bucket_existing" ]]; then
+            TEMPLATE_BUCKET="$template_bucket_existing"
+            print_status "Using existing TemplateBucket: $TEMPLATE_BUCKET"
         fi
         
-        print_status "Using existing RandomSuffix: $random_suffix"
+        # Build parameters array with values from command line or defaults
+        parameters=()
+        
+        # Add all possible parameters - CloudFormation will ignore any that don't exist in the template
+        parameters+=("Environment=$ENVIRONMENT")
+        parameters+=("ProjectName=$PROJECT_NAME")
+        parameters+=("TemplateBucket=$TEMPLATE_BUCKET")
+        parameters+=("RandomSuffix=$random_suffix")
+        parameters+=("IncludeSQSStack=$INCLUDE_SQS")
+        parameters+=("IncludeLambdaStack=$INCLUDE_LAMBDA")
+        
+        # Add new S3DeleteAfterDays parameter with default if not in existing params
+        local s3_delete_days_found=false
+        
+        # Process each existing parameter to preserve values not specified on command line
+        while IFS= read -r param_entry; do
+            local param_key=$(echo "$param_entry" | jq -r '.ParameterKey')
+            local param_value=$(echo "$param_entry" | jq -r '.ParameterValue')
+            
+            # Skip parameters we've already set from command line
+            case "$param_key" in
+                Environment|ProjectName|TemplateBucket|RandomSuffix|IncludeSQSStack|IncludeLambdaStack)
+                    continue
+                    ;;
+                ECRImageUri)
+                    # Only add if Lambda is enabled and not provided on command line
+                    if [[ "$INCLUDE_LAMBDA" == true && -z "$ECR_IMAGE_URI" && -n "$param_value" ]]; then
+                        ECR_IMAGE_URI="$param_value"
+                        parameters+=("ECRImageUri=$param_value")
+                    elif [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
+                        parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+                    fi
+                    ;;
+                *)
+                    # Skip removed parameters that no longer exist in template
+                    case "$param_key" in
+                        S3StandardIADays|S3GlacierDays|S3DeepArchiveDays|S3LogRetentionDays|EnableS3IntelligentTiering)
+                            print_status "Skipping removed parameter: $param_key"
+                            ;;
+                        S3DeleteAfterDays)
+                            # Track that we found this parameter
+                            s3_delete_days_found=true
+                            if [[ -n "$param_value" ]]; then
+                                parameters+=("${param_key}=${param_value}")
+                            fi
+                            ;;
+                        *)
+                            # Preserve all other parameters with their existing values
+                            if [[ -n "$param_value" ]]; then
+                                parameters+=("${param_key}=${param_value}")
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+        done < <(echo "$existing_params" | jq -c '.[]')
+        
+        # Add S3DeleteAfterDays with default if not found
+        if [[ "$s3_delete_days_found" != true ]]; then
+            parameters+=("S3DeleteAfterDays=7")
+            print_status "Adding new parameter S3DeleteAfterDays with default value: 7"
+        fi
         
     else
         # For create operations, use all parameters with defaults/specified values
@@ -418,9 +484,9 @@ deploy_stack() {
         print_status "Using parameters file: $param_file"
         local param_option="--parameters file://$param_file"
     else
-        local param_option=""
+        local param_option="--parameters"
         for param in "${parameters[@]}"; do
-            param_option="$param_option --parameters ParameterKey=${param%=*},ParameterValue=${param#*=}"
+            param_option="$param_option ParameterKey=${param%=*},ParameterValue=${param#*=}"
         done
     fi
     
@@ -436,9 +502,9 @@ deploy_stack() {
         "DeployedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     )
     
-    local tag_options=""
+    local tag_options="--tags"
     for tag in "${tags[@]}"; do
-        tag_options="$tag_options --tags Key=${tag%=*},Value=${tag#*=}"
+        tag_options="$tag_options Key=${tag%=*},Value=${tag#*=}"
     done
     
     if [[ "$DRY_RUN" == true ]]; then
@@ -521,6 +587,7 @@ main() {
     
     # Step 1: Check prerequisites
     check_aws_cli
+    check_jq
     check_template_bucket
     
     # Step 2: Validate templates

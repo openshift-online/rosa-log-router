@@ -8,9 +8,13 @@ This document presents a comprehensive architectural design for a high-throughpu
 
 The recommended blueprint follows a "Direct Ingestion, Staged Processing, and Decentralized Delivery" model. At the source, the high-performance log forwarder, **Vector**, is deployed as a DaemonSet within each Kubernetes/OpenShift cluster. Vector agents identify target pods via specific labels (e.g., rosa\_export\_logs), automatically enrich logs with other pod metadata (e.g., customer\_id, cluster\_id), and write them directly to a central **Amazon S3** bucket. This direct-to-S3 approach simplifies the pipeline by removing intermediate services, giving the Vector agent full control over batching, compression, and dynamic object key formatting.
 
-The S3 bucket acts as a durable, structured staging area, with logs automatically segregated into tenant-specific prefixes based on the metadata provided by Vector. This staging layer serves as a clean, decoupled interface to the final delivery mechanism.
+The S3 bucket acts as a temporary staging area for downstream processing, with logs automatically segregated into tenant-specific prefixes based on the metadata provided by Vector. Files are automatically deleted after a configurable retention period (default 7 days) to minimize storage costs. This staging layer serves as a clean, decoupled interface to the final delivery mechanism.
 
-The delivery pipeline is an event-driven, "hub and spoke" workflow. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Vector. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and triggers a processing array (such as an AWS Lambda function) that remains within your AWS account. This processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This end-to-end architecture provides a robust, automated, and cost-optimized solution for large-scale, multi-tenant logging on AWS.
+The delivery pipeline is an event-driven, "hub and spoke" workflow. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Vector. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and triggers a processing component that remains within your AWS account. This processor can be deployed as either:
+- **AWS Lambda function** for serverless, auto-scaling processing
+- **Kubernetes pod** running in the same cluster as Vector for better cost control in high-volume scenarios
+
+Both deployment options use the same container image and processing logic. The processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This end-to-end architecture provides a robust, automated, and cost-optimized solution for large-scale, multi-tenant logging on AWS.
 
 ### **1.2. Deconstructing the Core Requirements**
 
@@ -31,7 +35,7 @@ To satisfy these multifaceted requirements, the proposed architecture is structu
   1. Filter for pods with a specific label (e.g., rosa\_export\_logs=true).  
   2. Extract metadata from other pod labels (customer\_id, cluster\_id, etc.).  
   3. Batch, compress, and write log data directly to a central Amazon S3 bucket, using the extracted metadata to dynamically construct the object key prefix.  
-* **Stage 2: Staging & Segregation (Your AWS Account):** The central Amazon S3 bucket acts as a durable and cost-effective staging area. The dynamic object keys created by Vector automatically organize the incoming logs into a predictable, tenant-segregated prefix structure (e.g., /customer\_id/cluster\_id/...).  
+* **Stage 2: Staging & Segregation (Your AWS Account):** The central Amazon S3 bucket acts as a temporary and cost-effective staging area with automatic deletion after 7 days. The dynamic object keys created by Vector automatically organize the incoming logs into a predictable, tenant-segregated prefix structure (e.g., /customer\_id/cluster\_id/...).  
 * **Stage 3: Notification and Queuing (Your AWS Account):** The delivery of new log files to the S3 staging bucket triggers an event notification to a central **Amazon SNS topic**. This acts as a "hub" in a hub-and-spoke model. An **Amazon SQS queue** subscribes to this topic, receiving the notifications and placing them in a durable queue that triggers the final processing step. This fan-out pattern allows other downstream systems to also subscribe to new log payload notifications.  
 * **Stage 4: Cross-Account Routing and Delivery (Your AWS Account to Customer Account):** An AWS Lambda function (or an array of compute resources) is triggered by messages in the SQS queue. This processing logic, which lives in your account, assumes a specialized **"log distribution" role** in the target customer's AWS account. Using the temporary credentials from this role, the function pushes the log records into the customer's designated Amazon CloudWatch Logs log group, completing the delivery.
 
@@ -80,7 +84,7 @@ By removing the Kinesis Data Firehose middleware, the architecture becomes more 
 
 ### **3.1. The S3 Staging Area**
 
-The central S3 bucket is the durable, long-term staging area for all log data. The object key structure, now created directly by Vector, is the foundation of the multi-tenant segregation. A typical object path would look like:
+The central S3 bucket is the temporary staging area for all log data, with automatic deletion after a configurable period (default 7 days). The object key structure, now created directly by Vector, is the foundation of the multi-tenant segregation. A typical object path would look like:
 
 s3://your-central-logging-bucket/acme-corp/prod-cluster-1/payment-app/pod-xyz-123/1672531200-a1b2c3d4.json.gz
 
@@ -158,8 +162,10 @@ The diagram is split into two main sections: **"Your AWS Environment (per Region
   * Inside the S3 bucket icon, a folder structure is depicted: /customer-A/cluster-1/, /customer-B/cluster-2/.  
 * The S3 bucket has a trigger icon labeled **"S3 Event Notification"** pointing to an **"Amazon SNS Topic (Log Payloads Hub)"**.  
 * The SNS Topic has an arrow fanning out to an **"Amazon SQS Queue (Log Delivery)"**.  
-* The SQS Queue triggers an **"AWS Lambda Function (Log Distributor)"**.  
-* The Lambda function has a two-way arrow labeled **"sts:AssumeRole"** pointing towards the boundary of "Your AWS Environment".
+* The SQS Queue has two processing options:
+  * **Option A**: Triggers an **"AWS Lambda Function (Log Distributor)"** for serverless processing
+  * **Option B**: Polled by a **"Kubernetes Pod (Log Processor)"** running in the same cluster as Vector
+* Both processors have a two-way arrow labeled **"sts:AssumeRole"** pointing towards the boundary of "Your AWS Environment".
 
 **2\. Customer AWS Environment (e.g., eu-west-1)**
 
@@ -196,7 +202,7 @@ The security model remains robust. The primary change is in the permissions requ
 
 * **Primary Cost Levers:** With the removal of Kinesis Data Firehose, the primary cost components are now Vector's compute overhead (which is minimal), S3 storage and requests, and the Lambda delivery function.  
 * **Batching is Critical:** The most important cost optimization lever is now the **batching configuration within Vector's S3 sink**. Configuring a large buffer size (batch.max\_bytes) and a long buffer interval (batch.timeout\_secs) is essential. This strategy creates larger files in S3, which drastically reduces the number of S3 PUT requests and the corresponding downstream SNS/SQS/Lambda invocations, leading to significant cost savings. 23  
-* **Storage Cost Trade-off:** This architecture loses the ability to easily convert logs to Apache Parquet, which was a feature of Kinesis Data Firehose. Storing gzipped JSON is generally less space-efficient than Parquet, which may lead to slightly higher S3 storage costs over time. This is a trade-off for the architectural simplicity of the direct-to-S3 approach. 16
+* **Storage Cost Management:** This architecture uses S3 as a temporary staging area rather than long-term storage. With automatic deletion after 7 days and Vector's efficient GZIP compression (achieving ~30-35:1 compression ratios), storage costs are minimal. The simplicity of the direct-to-S3 approach outweighs the loss of Parquet conversion capability from Kinesis Data Firehose. 16
 
 ## **Section 6: CloudFormation Implementation and Recent Architectural Improvements**
 
@@ -338,10 +344,10 @@ NotificationConfiguration:
 
 The CloudFormation implementation includes several cost optimization features:
 
-* **S3 Intelligent Tiering:** Automatic cost optimization for infrequently accessed data
-* **S3 Lifecycle Policies:** Automated transitions to cheaper storage classes
+* **S3 Lifecycle Policy:** Simple deletion rule after N days (default 7) minimizes storage costs for temporary staging
 * **Lambda Batch Processing:** SQS batch processing reduces Lambda invocations
 * **Direct S3 Writes:** Elimination of Kinesis Data Firehose saves ~$50/TB in data processing costs
+* **GZIP Compression:** Vector's compression achieves ~30-35:1 ratios, significantly reducing storage and transfer costs
 
 ### **6.4. Security Model Implementation**
 
@@ -515,7 +521,7 @@ kubectl kustomize k8s/base/
 #### **Vector Output Format**
 Vector produces compressed files containing a JSON array on a single line:
 ```json
-[{"timestamp":"2024-01-01T00:00:00Z","message":"Log line 1","customer_id":"acme",...},{"timestamp":"2024-01-01T00:00:01Z","message":"Log line 2",...}]
+[{"timestamp":"2024-01-01T00:00:00Z","message":"Log line 1","customer_id":"acme","cluster_id":"prod-1"},{"timestamp":"2024-01-01T00:00:01Z","message":"Log line 2","customer_id":"acme","cluster_id":"prod-1"}]
 ```
 
 #### **Lambda Processing Flow**
@@ -532,7 +538,68 @@ Vector produces compressed files containing a JSON array on a single line:
 - **Message Format**: Only the log message content is sent, without Vector metadata
 - **Permissions**: Customer roles must include `logs:DescribeLogGroups` for Vector healthchecks
 
-### **6.10. Future Considerations**
+### **6.10. Kubernetes-Based Processing Architecture**
+
+#### **6.10.1. Alternative to Lambda: Kubernetes Deployment**
+
+While the Lambda-based processing works well for serverless scenarios, a Kubernetes-based deployment option has been implemented to provide better control and potentially lower costs for high-volume environments:
+
+**Architecture Components:**
+- **Log Processor Deployment**: Single-replica Kubernetes Deployment running the same container image
+- **SQS Polling Mode**: Processor runs in `EXECUTION_MODE=sqs` to continuously poll the SQS queue
+- **IRSA Integration**: Uses IAM Roles for Service Accounts for secure AWS access
+- **OpenShift Support**: Includes SecurityContextConstraints for OpenShift deployments
+
+**Key Benefits:**
+- **Cost Optimization**: Eliminates Lambda invocation costs for high-volume processing
+- **Better Control**: Direct management of processing resources and scaling
+- **Unified Codebase**: Same container image works for both Lambda and Kubernetes
+- **Local Development**: Easier debugging and testing in Kubernetes environments
+
+**Deployment Structure:**
+```
+k8s/
+├── collector/          # Vector log collector (DaemonSet)
+│   ├── base/          # Base Kubernetes resources
+│   ├── openshift-base/# OpenShift-specific (includes SCC)
+│   └── overlays/      # Environment-specific patches
+└── processor/          # Log processor (Deployment)
+    ├── base/          # Base Kubernetes resources
+    ├── openshift-base/# OpenShift-specific (includes SCC)
+    └── overlays/      # Environment-specific patches
+```
+
+#### **6.10.2. Vector Performance Observations**
+
+During implementation, several important findings about Vector's behavior were documented:
+
+**Compression Performance:**
+- Vector's GZIP compression is working correctly with excellent ratios (~30-35:1)
+- Example: 5.6MB uncompressed logs → 156KB compressed
+
+**Batching Limitations:**
+- Vector's S3 sink has known issues where batch settings (`max_bytes`, `timeout_secs`) are not strictly honored
+- Files are typically created every 2-3 minutes regardless of configured settings
+- This is a well-documented issue in the Vector community with no current workaround
+- While this increases S3 PUT requests, the compression efficiency partially offsets the cost impact
+
+**Health Check Considerations:**
+- The minimal container images lack common utilities like `ps`
+- Health checks were adapted to use `/proc/1/cmdline` for process verification
+
+### **6.11. S3 Lifecycle Management Update**
+
+**Recent Enhancement (July 2025):**
+The S3 lifecycle configuration has been simplified to align with the temporary staging nature of the bucket:
+
+- **Previous Configuration:** Complex lifecycle rules with transitions to Standard-IA (30 days), Glacier (90 days), Deep Archive (365 days), and eventual deletion (2555 days)
+- **New Configuration:** Single deletion rule after N days (configurable, default 7 days)
+- **Rationale:** Since logs are delivered to customer accounts immediately after staging, long-term storage in the central bucket is unnecessary. The simplified lifecycle reduces complexity and storage costs.
+- **Parameter:** `S3DeleteAfterDays` in CloudFormation allows customization of the retention period
+
+This change reflects the true purpose of the S3 bucket as a temporary staging area for the delivery pipeline, not a long-term archive.
+
+### **6.12. Future Considerations**
 
 **Potential Enhancements:**
 - **Multi-Region Replication:** S3 Cross-Region Replication for disaster recovery

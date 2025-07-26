@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor
+  annotations:
+    image.openshift.io/triggers: |
+      [{
+        "from": {
+          "kind": "ImageStreamTag",
+          "name": "processor:main",
+          "namespace": "logging"
+        },
+        "fieldPath": "spec.template.spec.containers[?(@.name==\"processor\")].image",
+        "paused": false
+      }]
+spec:
+  template:
+    spec:
+      containers:
+      - name: processor
+        image: image-registry.openshift-image-registry.svc:5000/logging/processor:main
