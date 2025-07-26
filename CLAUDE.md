@@ -131,11 +131,14 @@ podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:l
 # Deploy Vector to Kubernetes/OpenShift using Kustomize
 kubectl create namespace logging
 
-# For standard Kubernetes
-kubectl apply -k k8s/base
+# Deploy Vector collector (for standard Kubernetes)
+kubectl apply -k k8s/collector/base
 
-# For OpenShift with SecurityContextConstraints
-kubectl apply -k k8s/overlays/openshift
+# Deploy Vector collector (for OpenShift with SecurityContextConstraints)
+kubectl apply -k k8s/collector/overlays/development
+
+# Deploy log processor to Kubernetes/OpenShift
+kubectl apply -k k8s/processor/overlays/development
 
 # Deploy core infrastructure only (no SQS or Lambda)
 ./cloudformation/deploy.sh -b TEMPLATE_BUCKET
@@ -260,15 +263,16 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Key Components
 
-### Vector Configuration (`k8s/base/vector-config.yaml`, `vector-local-test.yaml`)
+### Vector Configuration (`k8s/collector/base/vector-config.yaml`, `vector-local-test.yaml`)
 - Collects logs from `/var/log/pods/**/*.log` in production
 - **Namespace Filtering**: Uses `extra_namespace_label_selector` to only collect from namespaces with `hypershift.openshift.io/hosted-control-plane=true`
 - Enriches logs with metadata: cluster_id, namespace, application (from pod label), pod_name
 - Writes directly to S3 with dynamic key prefixing: `cluster_id/namespace/application/pod_name/`
 - Output format: NDJSON (newline-delimited JSON) with all logs in a single JSON array per file
 - Uses disk-based buffering for reliability (10GB max)
-- Batch settings: 10MB / 5 minutes
+- Batch settings: 64MB / 5 minutes (Note: Vector has known issues with batch sizing)
 - **Role Assumption**: Uses IRSA or base AWS credentials to assume S3WriterRole for secure S3 access
+- **Compression**: GZIP compression is properly working with ~30-35:1 compression ratios
 
 ### Unified Log Processor (`container/log_processor.py`)
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
@@ -426,8 +430,19 @@ The architecture prioritizes cost efficiency:
 # Deploy core + SQS for external consumers
 ./cloudformation/deploy.sh --include-sqs
 
-# Run external processor with podman
+# Option 1: Run external processor with podman
 podman run -e SQS_QUEUE_URL=... -e EXECUTION_MODE=sqs log-processor:latest
+
+# Option 2: Deploy processor to Kubernetes/OpenShift
+# First, create processor IAM role:
+aws cloudformation create-stack \
+  --stack-name processor-role-CLUSTER_NAME \
+  --template-body file://cloudformation/cluster-processor-role.yaml \
+  --parameters ... \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# Then deploy to Kubernetes:
+kubectl apply -k k8s/processor/overlays/development
 ```
 
 ### Lambda Container Processing
@@ -451,3 +466,26 @@ podman push ECR_URI/log-processor:latest
 1. **Lambda Mode** (`EXECUTION_MODE=lambda`): Default mode for AWS Lambda runtime
 2. **SQS Polling Mode** (`EXECUTION_MODE=sqs`): Continuously polls SQS queue for messages
 3. **Manual Mode** (`EXECUTION_MODE=manual`): Reads JSON input from stdin for testing
+
+## Kubernetes Deployment Structure
+
+The Kubernetes manifests are organized as:
+```
+k8s/
+├── collector/          # Vector log collector (DaemonSet)
+│   ├── base/          # Base Kubernetes resources
+│   ├── openshift-base/# OpenShift-specific (includes SCC)
+│   └── overlays/      # Environment-specific patches
+└── processor/          # Log processor (Deployment)
+    ├── base/          # Base Kubernetes resources
+    ├── openshift-base/# OpenShift-specific (includes SCC)
+    └── overlays/      # Environment-specific patches
+```
+
+### Known Issues and Workarounds
+
+1. **Vector Batching**: Vector's S3 sink has known issues where batch settings (`max_bytes`, `timeout_secs`) are not strictly honored. Files are typically created every 2-3 minutes regardless of settings. The compression works correctly with ~30-35:1 ratios.
+
+2. **Processor Health Checks**: The processor container uses `/proc/1/cmdline` for health checks as the `ps` command is not available in the minimal container image.
+
+3. **IRSA Configuration**: Both Vector and processor use IAM Roles for Service Accounts (IRSA). Ensure the OIDC provider is registered in AWS IAM before deploying.

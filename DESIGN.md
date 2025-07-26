@@ -10,7 +10,11 @@ The recommended blueprint follows a "Direct Ingestion, Staged Processing, and De
 
 The S3 bucket acts as a durable, structured staging area, with logs automatically segregated into tenant-specific prefixes based on the metadata provided by Vector. This staging layer serves as a clean, decoupled interface to the final delivery mechanism.
 
-The delivery pipeline is an event-driven, "hub and spoke" workflow. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Vector. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and triggers a processing array (such as an AWS Lambda function) that remains within your AWS account. This processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This end-to-end architecture provides a robust, automated, and cost-optimized solution for large-scale, multi-tenant logging on AWS.
+The delivery pipeline is an event-driven, "hub and spoke" workflow. An S3 event notification publishes a message to a central **Amazon SNS topic** whenever a new log file is delivered by Vector. An **Amazon SQS queue**, subscribed to this topic, receives these notifications and triggers a processing component that remains within your AWS account. This processor can be deployed as either:
+- **AWS Lambda function** for serverless, auto-scaling processing
+- **Kubernetes pod** running in the same cluster as Vector for better cost control in high-volume scenarios
+
+Both deployment options use the same container image and processing logic. The processor reads the tenant-specific log file, securely assumes a specialized **"log distribution" role** in the corresponding customer's AWS account, and delivers the log records to the customer's Amazon CloudWatch Logs service. This end-to-end architecture provides a robust, automated, and cost-optimized solution for large-scale, multi-tenant logging on AWS.
 
 ### **1.2. Deconstructing the Core Requirements**
 
@@ -158,8 +162,10 @@ The diagram is split into two main sections: **"Your AWS Environment (per Region
   * Inside the S3 bucket icon, a folder structure is depicted: /customer-A/cluster-1/, /customer-B/cluster-2/.  
 * The S3 bucket has a trigger icon labeled **"S3 Event Notification"** pointing to an **"Amazon SNS Topic (Log Payloads Hub)"**.  
 * The SNS Topic has an arrow fanning out to an **"Amazon SQS Queue (Log Delivery)"**.  
-* The SQS Queue triggers an **"AWS Lambda Function (Log Distributor)"**.  
-* The Lambda function has a two-way arrow labeled **"sts:AssumeRole"** pointing towards the boundary of "Your AWS Environment".
+* The SQS Queue has two processing options:
+  * **Option A**: Triggers an **"AWS Lambda Function (Log Distributor)"** for serverless processing
+  * **Option B**: Polled by a **"Kubernetes Pod (Log Processor)"** running in the same cluster as Vector
+* Both processors have a two-way arrow labeled **"sts:AssumeRole"** pointing towards the boundary of "Your AWS Environment".
 
 **2\. Customer AWS Environment (e.g., eu-west-1)**
 
@@ -515,7 +521,7 @@ kubectl kustomize k8s/base/
 #### **Vector Output Format**
 Vector produces compressed files containing a JSON array on a single line:
 ```json
-[{"timestamp":"2024-01-01T00:00:00Z","message":"Log line 1","customer_id":"acme",...},{"timestamp":"2024-01-01T00:00:01Z","message":"Log line 2",...}]
+[{"timestamp":"2024-01-01T00:00:00Z","message":"Log line 1","customer_id":"acme","cluster_id":"prod-1"},{"timestamp":"2024-01-01T00:00:01Z","message":"Log line 2","customer_id":"acme","cluster_id":"prod-1"}]
 ```
 
 #### **Lambda Processing Flow**
@@ -532,7 +538,56 @@ Vector produces compressed files containing a JSON array on a single line:
 - **Message Format**: Only the log message content is sent, without Vector metadata
 - **Permissions**: Customer roles must include `logs:DescribeLogGroups` for Vector healthchecks
 
-### **6.10. Future Considerations**
+### **6.10. Kubernetes-Based Processing Architecture**
+
+#### **6.10.1. Alternative to Lambda: Kubernetes Deployment**
+
+While the Lambda-based processing works well for serverless scenarios, a Kubernetes-based deployment option has been implemented to provide better control and potentially lower costs for high-volume environments:
+
+**Architecture Components:**
+- **Log Processor Deployment**: Single-replica Kubernetes Deployment running the same container image
+- **SQS Polling Mode**: Processor runs in `EXECUTION_MODE=sqs` to continuously poll the SQS queue
+- **IRSA Integration**: Uses IAM Roles for Service Accounts for secure AWS access
+- **OpenShift Support**: Includes SecurityContextConstraints for OpenShift deployments
+
+**Key Benefits:**
+- **Cost Optimization**: Eliminates Lambda invocation costs for high-volume processing
+- **Better Control**: Direct management of processing resources and scaling
+- **Unified Codebase**: Same container image works for both Lambda and Kubernetes
+- **Local Development**: Easier debugging and testing in Kubernetes environments
+
+**Deployment Structure:**
+```
+k8s/
+├── collector/          # Vector log collector (DaemonSet)
+│   ├── base/          # Base Kubernetes resources
+│   ├── openshift-base/# OpenShift-specific (includes SCC)
+│   └── overlays/      # Environment-specific patches
+└── processor/          # Log processor (Deployment)
+    ├── base/          # Base Kubernetes resources
+    ├── openshift-base/# OpenShift-specific (includes SCC)
+    └── overlays/      # Environment-specific patches
+```
+
+#### **6.10.2. Vector Performance Observations**
+
+During implementation, several important findings about Vector's behavior were documented:
+
+**Compression Performance:**
+- Vector's GZIP compression is working correctly with excellent ratios (~30-35:1)
+- Example: 5.6MB uncompressed logs → 156KB compressed
+
+**Batching Limitations:**
+- Vector's S3 sink has known issues where batch settings (`max_bytes`, `timeout_secs`) are not strictly honored
+- Files are typically created every 2-3 minutes regardless of configured settings
+- This is a well-documented issue in the Vector community with no current workaround
+- While this increases S3 PUT requests, the compression efficiency partially offsets the cost impact
+
+**Health Check Considerations:**
+- The minimal container images lack common utilities like `ps`
+- Health checks were adapted to use `/proc/1/cmdline` for process verification
+
+### **6.11. Future Considerations**
 
 **Potential Enhancements:**
 - **Multi-Region Replication:** S3 Cross-Region Replication for disaster recovery
