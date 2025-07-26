@@ -18,35 +18,11 @@ Parameters:
     Default: ""
     Description: OIDC issuer URL for the EKS cluster (without https://)
 
-  S3StandardIADays:
+  S3DeleteAfterDays:
     Type: Number
-    Default: 30
+    Default: 7
     MinValue: 1
-    Description: Days after which to transition S3 objects to Standard-IA
-
-  S3GlacierDays:
-    Type: Number
-    Default: 90
-    MinValue: 1
-    Description: Days after which to transition S3 objects to Glacier
-
-  S3DeepArchiveDays:
-    Type: Number
-    Default: 365
-    MinValue: 1
-    Description: Days after which to transition S3 objects to Deep Archive
-
-  S3LogRetentionDays:
-    Type: Number
-    Default: 2555
-    MinValue: 1
-    Description: Number of days to retain logs in S3
-
-  EnableS3IntelligentTiering:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: Enable S3 Intelligent Tiering for cost optimization
+    Description: Number of days after which to delete logs from S3
 
   EnableS3Encryption:
     Type: String
@@ -62,7 +38,6 @@ Parameters:
 
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
-  IsS3IntelligentTieringEnabled: !Equals [!Ref EnableS3IntelligentTiering, "true"]
   IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
 
 Resources:
@@ -134,21 +109,9 @@ Resources:
         RestrictPublicBuckets: true
       LifecycleConfiguration:
         Rules:
-          - Id: LogRetentionAndTransition
+          - Id: DeleteAfterNDays
             Status: Enabled
-            Transitions:
-              - TransitionInDays: !Ref S3StandardIADays
-                StorageClass: STANDARD_IA
-              - TransitionInDays: !Ref S3GlacierDays
-                StorageClass: GLACIER
-              - TransitionInDays: !Ref S3DeepArchiveDays
-                StorageClass: DEEP_ARCHIVE
-            ExpirationInDays: !Ref S3LogRetentionDays
-          - Id: IntelligentTiering
-            Status: !If [IsS3IntelligentTieringEnabled, Enabled, Disabled]
-            Transitions:
-              - TransitionInDays: 1
-                StorageClass: INTELLIGENT_TIERING
+            ExpirationInDays: !Ref S3DeleteAfterDays
       NotificationConfiguration:
         TopicConfigurations:
           - Topic: !Ref LogDeliveryTopic
