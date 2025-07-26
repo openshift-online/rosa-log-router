@@ -210,6 +210,19 @@ check_aws_cli() {
     print_status "Current region: $REGION"
 }
 
+# Function to check if jq is installed
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        print_error "jq is not installed. Please install it first."
+        print_error "  On macOS: brew install jq"
+        print_error "  On Ubuntu/Debian: sudo apt-get install jq"
+        print_error "  On RHEL/CentOS: sudo yum install jq"
+        print_error "  On Amazon Linux: sudo yum install jq"
+        exit 1
+    fi
+    print_status "jq is installed."
+}
+
 # Function to check if S3 bucket exists
 check_template_bucket() {
     if ! aws s3api head-bucket --bucket "$TEMPLATE_BUCKET" --region "$REGION" 2>/dev/null; then
@@ -369,17 +382,9 @@ deploy_stack() {
         print_status "Reading existing stack parameters..."
         local existing_params=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Parameters' --output json 2>/dev/null || echo '[]')
         
-        # Check if jq is available
-        if ! command -v jq &> /dev/null; then
-            print_warning "jq is not installed. Using fallback parameter extraction method."
-            # Extract RandomSuffix and TemplateBucket using grep/sed as fallback
-            local random_suffix_existing=$(echo "$existing_params" | grep -A1 'RandomSuffix' | grep 'ParameterValue' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/')
-            local template_bucket_existing=$(echo "$existing_params" | grep -A1 'TemplateBucket' | grep 'ParameterValue' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/')
-        else
-            # Use jq for cleaner extraction
-            local random_suffix_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="RandomSuffix") | .ParameterValue // empty')
-            local template_bucket_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="TemplateBucket") | .ParameterValue // empty')
-        fi
+        # Use jq for parameter extraction (required)
+        local random_suffix_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="RandomSuffix") | .ParameterValue // empty')
+        local template_bucket_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="TemplateBucket") | .ParameterValue // empty')
         
         # Use existing RandomSuffix if it exists, otherwise generate new one
         if [[ -n "$random_suffix_existing" ]]; then
@@ -408,74 +413,52 @@ deploy_stack() {
         local s3_delete_days_found=false
         
         # Process each existing parameter to preserve values not specified on command line
-        if command -v jq &> /dev/null; then
-            # Use jq to process all parameters
-            while IFS= read -r param_entry; do
-                local param_key=$(echo "$param_entry" | jq -r '.ParameterKey')
-                local param_value=$(echo "$param_entry" | jq -r '.ParameterValue')
-                
-                # Skip parameters we've already set from command line
-                case "$param_key" in
-                    Environment|ProjectName|TemplateBucket|RandomSuffix|IncludeSQSStack|IncludeLambdaStack)
-                        continue
-                        ;;
-                    ECRImageUri)
-                        # Only add if Lambda is enabled and not provided on command line
-                        if [[ "$INCLUDE_LAMBDA" == true && -z "$ECR_IMAGE_URI" && -n "$param_value" ]]; then
-                            ECR_IMAGE_URI="$param_value"
-                            parameters+=("ECRImageUri=$param_value")
-                        elif [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
-                            parameters+=("ECRImageUri=$ECR_IMAGE_URI")
-                        fi
-                        ;;
-                    *)
-                        # Skip removed parameters that no longer exist in template
-                        case "$param_key" in
-                            S3StandardIADays|S3GlacierDays|S3DeepArchiveDays|S3LogRetentionDays|EnableS3IntelligentTiering)
-                                print_status "Skipping removed parameter: $param_key"
-                                ;;
-                            S3DeleteAfterDays)
-                                # Track that we found this parameter
-                                s3_delete_days_found=true
-                                if [[ -n "$param_value" ]]; then
-                                    parameters+=("${param_key}=${param_value}")
-                                fi
-                                ;;
-                            *)
-                                # Preserve all other parameters with their existing values
-                                if [[ -n "$param_value" ]]; then
-                                    parameters+=("${param_key}=${param_value}")
-                                fi
-                                ;;
-                        esac
-                        ;;
-                esac
-            done < <(echo "$existing_params" | jq -c '.[]')
+        while IFS= read -r param_entry; do
+            local param_key=$(echo "$param_entry" | jq -r '.ParameterKey')
+            local param_value=$(echo "$param_entry" | jq -r '.ParameterValue')
             
-            # Add S3DeleteAfterDays with default if not found
-            if [[ "$s3_delete_days_found" != true ]]; then
-                parameters+=("S3DeleteAfterDays=7")
-                print_status "Adding new parameter S3DeleteAfterDays with default value: 7"
-            fi
-        else
-            # Fallback: manually preserve critical parameters
-            local eks_oidc_issuer=$(echo "$existing_params" | grep -A1 'EksOidcIssuer' | grep 'ParameterValue' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/')
-            local enable_s3_encryption=$(echo "$existing_params" | grep -A1 'EnableS3Encryption' | grep 'ParameterValue' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/')
-            local s3_delete_after_days=$(echo "$existing_params" | grep -A1 'S3DeleteAfterDays' | grep 'ParameterValue' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/')
-            
-            [[ -n "$eks_oidc_issuer" ]] && parameters+=("EksOidcIssuer=$eks_oidc_issuer")
-            [[ -n "$enable_s3_encryption" ]] && parameters+=("EnableS3Encryption=$enable_s3_encryption")
-            
-            # Add S3DeleteAfterDays - use existing value or default
-            if [[ -n "$s3_delete_after_days" ]]; then
-                parameters+=("S3DeleteAfterDays=$s3_delete_after_days")
-            else
-                parameters+=("S3DeleteAfterDays=7")
-            fi
-            
-            if [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
-                parameters+=("ECRImageUri=$ECR_IMAGE_URI")
-            fi
+            # Skip parameters we've already set from command line
+            case "$param_key" in
+                Environment|ProjectName|TemplateBucket|RandomSuffix|IncludeSQSStack|IncludeLambdaStack)
+                    continue
+                    ;;
+                ECRImageUri)
+                    # Only add if Lambda is enabled and not provided on command line
+                    if [[ "$INCLUDE_LAMBDA" == true && -z "$ECR_IMAGE_URI" && -n "$param_value" ]]; then
+                        ECR_IMAGE_URI="$param_value"
+                        parameters+=("ECRImageUri=$param_value")
+                    elif [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
+                        parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+                    fi
+                    ;;
+                *)
+                    # Skip removed parameters that no longer exist in template
+                    case "$param_key" in
+                        S3StandardIADays|S3GlacierDays|S3DeepArchiveDays|S3LogRetentionDays|EnableS3IntelligentTiering)
+                            print_status "Skipping removed parameter: $param_key"
+                            ;;
+                        S3DeleteAfterDays)
+                            # Track that we found this parameter
+                            s3_delete_days_found=true
+                            if [[ -n "$param_value" ]]; then
+                                parameters+=("${param_key}=${param_value}")
+                            fi
+                            ;;
+                        *)
+                            # Preserve all other parameters with their existing values
+                            if [[ -n "$param_value" ]]; then
+                                parameters+=("${param_key}=${param_value}")
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+        done < <(echo "$existing_params" | jq -c '.[]')
+        
+        # Add S3DeleteAfterDays with default if not found
+        if [[ "$s3_delete_days_found" != true ]]; then
+            parameters+=("S3DeleteAfterDays=7")
+            print_status "Adding new parameter S3DeleteAfterDays with default value: 7"
         fi
         
     else
@@ -604,6 +587,7 @@ main() {
     
     # Step 1: Check prerequisites
     check_aws_cli
+    check_jq
     check_template_bucket
     
     # Step 2: Validate templates
