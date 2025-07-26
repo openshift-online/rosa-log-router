@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor
+  namespace: logging
+  labels:
+    app: log-processor
+    app.kubernetes.io/name: log-processor
+    app.kubernetes.io/part-of: multi-tenant-logging
+    app.kubernetes.io/component: log-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-processor
+  template:
+    metadata:
+      labels:
+        app: log-processor
+    spec:
+      serviceAccountName: log-processor
+      containers:
+      - name: processor
+        image: public.ecr.aws/d1w4s4o1/logdesign/processor:main
+        imagePullPolicy: Always
+        env:
+        - name: AWS_STS_REGIONAL_ENDPOINTS
+          value: "regional"
+        - name: AWS_DEFAULT_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: log-processor-config
+              key: AWS_REGION
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: log-processor-config
+              key: AWS_REGION
+        - name: EXECUTION_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: log-processor-config
+              key: EXECUTION_MODE
+        - name: MAX_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: log-processor-config
+              key: MAX_BATCH_SIZE
+        - name: RETRY_ATTEMPTS
+          valueFrom:
+            configMapKeyRef:
+              name: log-processor-config
+              key: RETRY_ATTEMPTS
+        # These will be provided by overlay patches
+        - name: SQS_QUEUE_URL
+          value: ""
+        - name: TENANT_CONFIG_TABLE
+          value: ""
+        - name: CENTRAL_LOG_DISTRIBUTION_ROLE_ARN
+          value: ""
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "test -f /proc/1/cmdline && grep -q python3 /proc/1/cmdline"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "test -f /proc/1/cmdline && grep -q python3 /proc/1/cmdline"
+          initialDelaySeconds: 10
+          periodSeconds: 10

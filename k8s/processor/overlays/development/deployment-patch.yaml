@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor
+spec:
+  template:
+    spec:
+      containers:
+      - name: processor
+        env:
+        - name: SQS_QUEUE_URL
+          value: "https://sqs.us-east-2.amazonaws.com/641875867446/multi-tenant-logging-development-log-delivery-queue"
+        - name: TENANT_CONFIG_TABLE
+          value: "multi-tenant-logging-development-tenant-configs"
+        - name: CENTRAL_LOG_DISTRIBUTION_ROLE_ARN
+          value: "arn:aws:iam::641875867446:role/ROSA-CentralLogDistributionRole-12345678"

@@ -1,31 +1,62 @@
-# Vector Deployment with Kustomize
+# Multi-Tenant Logging Kubernetes Components
 
-This directory contains Kustomize-based deployment configurations for Vector log collection agents in OpenShift/EKS clusters.
+This directory contains Kustomize-based deployment configurations for the multi-tenant logging pipeline components in OpenShift/EKS clusters.
 
 ## Directory Structure
 
 ```
 k8s/
-├── base/                      # Base Vector deployment resources
-│   ├── kustomization.yaml
-│   ├── vector-namespace.yaml  # Logging namespace
-│   ├── vector-serviceaccount.yaml   # Vector service account
-│   ├── vector-config.yaml     # Vector ConfigMap
-│   └── vector-daemonset.yaml  # Vector DaemonSet
-└── overlays/                  # Environment-specific configurations
-    └── production/
-        ├── kustomization.yaml
-        └── vector-config-patch.yaml  # Production config overrides
+├── README.md                  # This file
+├── collector/                 # Vector log collection agent
+│   ├── base/                  # Base Vector deployment resources
+│   │   ├── kustomization.yaml
+│   │   ├── service-account.yaml      # Vector service account
+│   │   ├── vector-config.yaml        # Vector ConfigMap
+│   │   ├── vector-daemonset.yaml     # Vector DaemonSet
+│   │   ├── vector-clusterrole.yaml   # RBAC permissions
+│   │   └── vector-clusterrolebinding.yaml
+│   ├── openshift-base/        # OpenShift-specific resources
+│   │   ├── kustomization.yaml
+│   │   └── scc.yaml          # SecurityContextConstraints
+│   └── overlays/             # Environment-specific configurations
+│       ├── development/
+│       ├── staging/
+│       └── production/
+└── processor/                 # Log processing application
+    ├── base/                  # Base processor deployment resources
+    │   ├── kustomization.yaml
+    │   ├── service-account.yaml      # Processor service account
+    │   ├── config.yaml              # Processor ConfigMap
+    │   ├── deployment.yaml          # Processor Deployment
+    │   ├── role.yaml               # RBAC permissions
+    │   └── rolebinding.yaml
+    ├── openshift-base/        # OpenShift-specific resources
+    │   ├── kustomization.yaml
+    │   └── scc.yaml          # SecurityContextConstraints
+    └── overlays/             # Environment-specific configurations
+        └── development/
 ```
+
+## Overview
+
+The multi-tenant logging pipeline consists of two main components:
+
+1. **Collector (Vector)**: A DaemonSet that runs on every node, collecting logs from pods and writing them directly to S3
+2. **Processor**: A Deployment that polls SQS for S3 events and distributes logs to customer CloudWatch Logs
 
 ## Prerequisites
 
 1. **Deploy Core Infrastructure**
    ```bash
    cd ../cloudformation
-   ./deploy.sh -b your-templates-bucket
+   ./deploy.sh -b your-templates-bucket --include-sqs
    ```
-   Note the `VectorAssumeRolePolicyArn` and `CentralS3WriterRoleArn` from the stack outputs.
+   Note these outputs:
+   - `VectorAssumeRolePolicyArn`: Policy for Vector to assume S3 writer role
+   - `CentralS3WriterRoleArn`: S3 writer role ARN
+   - `LogDeliveryQueueUrl`: SQS queue URL for processor
+   - `TenantConfigTableName`: DynamoDB table name
+   - `CentralLogDistributionRoleArn`: Central distribution role ARN
 
 2. **Create OIDC Provider in AWS IAM** (if not already exists)
    ```bash
@@ -38,44 +69,85 @@ k8s/
      --client-id-list openshift
    ```
 
-3. **Deploy Cluster-Specific IAM Role**
+3. **Deploy Cluster-Specific IAM Roles**
+   
+   For the Vector collector:
    ```bash
    aws cloudformation create-stack \
-     --stack-name vector-role-dev-cluster-1 \
+     --stack-name vector-role-CLUSTER_NAME \
      --template-body file://../cloudformation/cluster-vector-role.yaml \
      --parameters \
-       ParameterKey=ClusterName,ParameterValue=dev-cluster-1 \
+       ParameterKey=ClusterName,ParameterValue=CLUSTER_NAME \
        ParameterKey=OIDCProviderURL,ParameterValue=${OIDC_URL} \
        ParameterKey=OIDCAudience,ParameterValue=openshift \
        ParameterKey=ServiceAccountNamespace,ParameterValue=logging \
        ParameterKey=ServiceAccountName,ParameterValue=vector-logs \
-       ParameterKey=VectorAssumeRolePolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/POLICY_NAME \
+       ParameterKey=VectorAssumeRolePolicyArn,ParameterValue=VECTOR_ASSUME_ROLE_POLICY_ARN \
      --capabilities CAPABILITY_NAMED_IAM
    ```
-   Note the `ClusterVectorRoleArn` from the stack outputs.
+   
+   For the log processor:
+   ```bash
+   aws cloudformation create-stack \
+     --stack-name processor-role-CLUSTER_NAME \
+     --template-body file://../cloudformation/cluster-processor-role.yaml \
+     --parameters \
+       ParameterKey=ClusterName,ParameterValue=CLUSTER_NAME \
+       ParameterKey=OIDCProviderURL,ParameterValue=${OIDC_URL} \
+       ParameterKey=OIDCAudience,ParameterValue=openshift \
+       ParameterKey=ServiceAccountNamespace,ParameterValue=logging \
+       ParameterKey=ServiceAccountName,ParameterValue=log-processor \
+       ParameterKey=TenantConfigTableArn,ParameterValue=TENANT_CONFIG_TABLE_ARN \
+       ParameterKey=CentralLoggingBucketArn,ParameterValue=CENTRAL_LOGGING_BUCKET_ARN \
+       ParameterKey=CentralLogDistributionRoleArn,ParameterValue=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN \
+     --capabilities CAPABILITY_NAMED_IAM
+   ```
+   
+   Note the role ARNs from both stack outputs.
 
 ## Deployment
 
-### Using Kustomize
+### Deploy the Collector (Vector)
 
-1. **Deploy Vector to development/testing** (uses base configuration):
+1. **Update the service account annotation** with your Vector role ARN:
    ```bash
-   kubectl apply -k k8s/base/
+   # Edit k8s/collector/overlays/development/service-account-patch.yaml
+   # Replace REPLACE_WITH_VECTOR_ROLE_ARN with your actual role ARN
    ```
 
-2. **Deploy Vector to production** (applies production overlays):
+2. **Deploy Vector to OpenShift**:
    ```bash
-   kubectl apply -k k8s/overlays/production/
+   kubectl apply -k k8s/collector/overlays/development/
    ```
 
-3. **Preview changes before applying**:
+3. **Verify Vector deployment**:
    ```bash
-   kubectl kustomize k8s/base/
+   kubectl get pods -n logging -l app=vector-logs
+   kubectl logs -n logging daemonset/vector-logs
    ```
 
-The base configuration creates the logging namespace automatically.
+### Deploy the Processor
 
-### Key Configuration Updates
+1. **Update the service account annotation** with your processor role ARN:
+   ```bash
+   # Edit k8s/processor/overlays/development/service-account-patch.yaml
+   # Replace REPLACE_WITH_PROCESSOR_ROLE_ARN with your actual role ARN
+   ```
+
+2. **Deploy the processor to OpenShift**:
+   ```bash
+   kubectl apply -k k8s/processor/overlays/development/
+   ```
+
+3. **Verify processor deployment**:
+   ```bash
+   kubectl get pods -n logging -l app=log-processor
+   kubectl logs -n logging deployment/log-processor
+   ```
+
+## Component Configuration
+
+### Vector Collector Configuration
 
 #### Namespace Label Filtering
 Vector is configured to collect logs only from namespaces with specific labels:
@@ -96,22 +168,40 @@ Vector extracts metadata from pod annotations:
 - `application`: Application name
 - `environment`: Environment (production, staging, etc.)
 
-## Configuration
+### Log Processor Configuration
 
-### Environment Variables in ConfigMap
+#### Execution Modes
+The processor supports three execution modes:
+- `sqs`: Polls SQS queue for S3 events (used in Kubernetes)
+- `lambda`: AWS Lambda runtime mode
+- `manual`: Manual input for testing
 
-The base configuration uses environment variable substitution:
+#### Environment Variables
+- `EXECUTION_MODE`: Set to "sqs" for Kubernetes deployment
+- `SQS_QUEUE_URL`: URL of the SQS queue from infrastructure
+- `TENANT_CONFIG_TABLE`: DynamoDB table for tenant configurations
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: Role for cross-account access
+- `MAX_BATCH_SIZE`: Maximum events per CloudWatch batch (default: 1000)
+- `RETRY_ATTEMPTS`: Number of retry attempts (default: 3)
 
+### Environment Variables
+
+#### Vector Collector Environment Variables
 - `AWS_REGION`: AWS region where S3 bucket exists
 - `S3_BUCKET_NAME`: Central S3 bucket name from core infrastructure
 - `S3_WRITER_ROLE_ARN`: S3 writer role ARN from core infrastructure
 - `CLUSTER_ID`: Unique identifier for this cluster
 
-These can be set as ConfigMap literals in overlays or provided at deployment time.
+#### Processor Environment Variables
+- `AWS_REGION`: AWS region for services
+- `EXECUTION_MODE`: "sqs" for Kubernetes deployment
+- `SQS_QUEUE_URL`: SQS queue URL from infrastructure
+- `TENANT_CONFIG_TABLE`: DynamoDB table name
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: Central distribution role ARN
 
-### Service Account Annotation
+### Service Account Annotations
 
-The service account must be annotated with the IAM role ARN:
+Both service accounts must be annotated with their respective IAM role ARNs:
 ```yaml
 annotations:
   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/ROLE_NAME
@@ -119,9 +209,11 @@ annotations:
 
 ## Verification
 
+### Verify Vector Collector
+
 1. **Check Vector pods are running**:
    ```bash
-   kubectl get pods -n logging
+   kubectl get pods -n logging -l app=vector-logs
    ```
 
 2. **Check Vector logs**:
@@ -137,6 +229,30 @@ annotations:
 4. **Check S3 for logs**:
    ```bash
    aws s3 ls s3://YOUR_BUCKET_NAME/ --recursive
+   ```
+
+### Verify Log Processor
+
+1. **Check processor pod is running**:
+   ```bash
+   kubectl get pods -n logging -l app=log-processor
+   ```
+
+2. **Check processor logs**:
+   ```bash
+   kubectl logs -n logging deployment/log-processor
+   ```
+
+3. **Monitor SQS queue depth**:
+   ```bash
+   aws sqs get-queue-attributes \
+     --queue-url YOUR_QUEUE_URL \
+     --attribute-names ApproximateNumberOfMessages
+   ```
+
+4. **Check CloudWatch Logs delivery**:
+   ```bash
+   aws logs describe-log-groups --log-group-name-prefix /aws/logs/
    ```
 
 ## Troubleshooting
@@ -190,13 +306,13 @@ annotations:
    # Then visit http://localhost:8686/metrics
    ```
 
-## Creating New Overlays
+## Creating New Environment Overlays
 
-To create a new environment overlay:
+### For Vector Collector
 
 1. **Create overlay directory**:
    ```bash
-   mkdir -p overlays/new-environment
+   mkdir -p k8s/collector/overlays/new-environment
    ```
 
 2. **Create kustomization.yaml**:
@@ -204,43 +320,70 @@ To create a new environment overlay:
    apiVersion: kustomize.config.k8s.io/v1beta1
    kind: Kustomization
    
+   namespace: logging
+   
    resources:
-     - ../../base
+     - ../../openshift-base
    
-   patchesStrategicMerge:
-     - vector-config-patch.yaml
-   
-   configMapGenerator:
-     - name: vector-config
-       behavior: merge
-       literals:
-         - AWS_REGION=YOUR_REGION
-         - S3_BUCKET_NAME=YOUR_BUCKET
-         - S3_WRITER_ROLE_ARN=YOUR_S3_WRITER_ROLE
-         - CLUSTER_ID=YOUR_CLUSTER_ID
+   patches:
+     - path: service-account-patch.yaml
+       target:
+         kind: ServiceAccount
+         name: vector-logs
    ```
 
-3. **Create vector-config-patch.yaml** for environment-specific Vector configuration:
+3. **Create service-account-patch.yaml** with your IAM role:
    ```yaml
    apiVersion: v1
-   kind: ConfigMap
+   kind: ServiceAccount
    metadata:
-     name: vector-config
-     namespace: logging
-   data:
-     vector.yaml: |
-       # Environment-specific Vector configuration overrides
-       # For example, different batching settings or additional transforms
+     name: vector-logs
+     annotations:
+       eks.amazonaws.com/role-arn: YOUR_VECTOR_ROLE_ARN
    ```
+
+### For Log Processor
+
+1. **Create overlay directory**:
+   ```bash
+   mkdir -p k8s/processor/overlays/new-environment
+   ```
+
+2. **Create kustomization.yaml**:
+   ```yaml
+   apiVersion: kustomize.config.k8s.io/v1beta1
+   kind: Kustomization
+   
+   namespace: logging
+   
+   resources:
+     - ../../openshift-base
+   
+   patches:
+     - path: service-account-patch.yaml
+       target:
+         kind: ServiceAccount
+         name: log-processor
+     - path: deployment-patch.yaml
+       target:
+         kind: Deployment
+         name: log-processor
+   ```
+
+3. **Create patches for environment-specific configuration**
 
 ## Security Considerations
 
+- Both service accounts use IRSA (IAM Roles for Service Accounts) - no long-lived credentials
 - Vector service account only has permission to assume the S3 writer role
-- S3 writer role only has permission to write to the central logging bucket with appropriate prefix restrictions
-- Each cluster has its own Vector IAM role with OIDC trust
-- No long-lived credentials are used
+- S3 writer role only has permission to write to the central logging bucket
+- Processor service account has permissions for:
+  - Reading from S3 bucket
+  - Accessing DynamoDB tenant configuration table
+  - Assuming the central log distribution role for cross-account access
+- Each cluster has its own IAM roles with OIDC trust
 - S3 encryption is enforced with KMS
-- Vector uses double-hop role assumption for enhanced security
+- Both components use role assumption for enhanced security boundaries
 
 ## Performance Tuning
 
