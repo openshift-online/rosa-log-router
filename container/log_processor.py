@@ -190,6 +190,11 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
             # Get tenant configuration
             tenant_config = get_tenant_configuration(tenant_info['tenant_id'])
             
+            # Check if this application should be processed based on desired_logs filtering
+            if not should_process_application(tenant_config, tenant_info['application']):
+                logger.info(f"Skipping processing for application '{tenant_info['application']}' due to desired_logs filtering")
+                continue
+            
             # Download and process the log file
             log_events = download_and_process_log_file(bucket_name, object_key)
             
@@ -242,12 +247,54 @@ def get_tenant_configuration(tenant_id: str) -> Dict[str, Any]:
             raise ValueError(f"No configuration found for tenant: {tenant_id}")
         
         config = response['Item']
-        logger.info(f"Retrieved config for tenant {tenant_id}")
+        
+        # Log tenant configuration details including desired_logs if present
+        desired_logs = config.get('desired_logs')
+        if desired_logs:
+            logger.info(f"Retrieved config for tenant {tenant_id} with desired_logs filtering: {desired_logs}")
+        else:
+            logger.info(f"Retrieved config for tenant {tenant_id} (no desired_logs filtering - all applications will be processed)")
+        
         return config
         
     except Exception as e:
         logger.error(f"Failed to get tenant configuration for {tenant_id}: {str(e)}")
         raise
+
+def should_process_application(tenant_config: Dict[str, Any], application_name: str) -> bool:
+    """
+    Check if the application should be processed based on tenant's desired_logs configuration
+    
+    Args:
+        tenant_config: Tenant configuration from DynamoDB
+        application_name: Name of the application from S3 object key
+    
+    Returns:
+        True if application should be processed, False if it should be filtered out
+    """
+    desired_logs = tenant_config.get('desired_logs')
+    
+    # If no desired_logs specified, process all applications (backward compatibility)
+    if not desired_logs:
+        return True
+    
+    # If desired_logs is not a list, log warning and process all applications
+    if not isinstance(desired_logs, list):
+        logger.warning(f"desired_logs is not a list: {type(desired_logs)}. Processing all applications.")
+        return True
+    
+    # Case-insensitive matching for robustness
+    desired_logs_lower = [log.lower() for log in desired_logs if isinstance(log, str)]
+    application_lower = application_name.lower()
+    
+    should_process = application_lower in desired_logs_lower
+    
+    if should_process:
+        logger.info(f"Application '{application_name}' is in desired_logs list - will process")
+    else:
+        logger.info(f"Application '{application_name}' is NOT in desired_logs list {desired_logs} - will skip processing")
+    
+    return should_process
 
 def download_and_process_log_file(bucket_name: str, object_key: str) -> List[Dict[str, Any]]:
     """
