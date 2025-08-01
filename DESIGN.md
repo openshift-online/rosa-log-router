@@ -182,7 +182,64 @@ The diagram is split into two main sections: **"Your AWS Environment (per Region
 3. **Notification (Hub):** The creation of the S3 object triggers an event notification to the central SNS topic.  
 4. **Queuing (Spoke):** The SNS topic fans out the notification to the SQS queue for log delivery.  
 5. **Invocation & Routing:** The Log Distributor Lambda is triggered by the SQS message. It parses the object key to identify the tenant as "acme-corp".  
-6. **Cross-Account Delivery:** The Lambda assumes the "log distribution" role in the acme-corp account, reads the log file from S3, and pushes the events to the customer's CloudWatch Logs.
+6. **Application Filtering (Optional):** The processor checks the tenant's configuration for an optional `desired_logs` field. If present, it verifies that the application from the S3 object key is in the allowed list. If not in the list, processing is skipped for cost optimization.
+7. **Cross-Account Delivery:** The Lambda assumes the "log distribution" role in the acme-corp account, reads the log file from S3, and pushes the events to the customer's CloudWatch Logs.
+
+### **4.3. Application-Level Log Filtering**
+
+The log processor supports optional application-level filtering through the `desired_logs` configuration field in the tenant's DynamoDB record. This feature allows tenants to specify exactly which applications they want to receive logs for, reducing processing costs and noise while maintaining backward compatibility.
+
+#### **Configuration Schema**
+
+Tenants can optionally include a `desired_logs` field in their DynamoDB configuration record:
+
+```json
+{
+  "tenant_id": "acme-corp",
+  "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
+  "log_group_name": "/aws/logs/acme-corp",
+  "target_region": "us-east-1",
+  "desired_logs": ["payment-service", "user-service", "api-gateway"]
+}
+```
+
+#### **Filtering Behavior**
+
+The filtering logic operates as follows:
+
+* **No `desired_logs` field**: All application logs are processed (full backward compatibility)
+* **`desired_logs` present**: Only applications listed in the array are processed
+* **Case-insensitive matching**: Application names are matched without regard to case for robustness
+* **Early filtering**: Filtering occurs before expensive S3 download operations, minimizing processing costs
+
+#### **Processing Examples**
+
+Given the configuration above with `desired_logs: ["payment-service", "user-service", "api-gateway"]`:
+
+* **S3 Object**: `acme-corp/prod-cluster-1/payment-service/pod-123/20240101-abc.json.gz`  
+  **Result**: ✅ **PROCESSED** (payment-service is in desired_logs)
+
+* **S3 Object**: `acme-corp/prod-cluster-1/logging-service/pod-456/20240101-def.json.gz`  
+  **Result**: ❌ **FILTERED** (logging-service is not in desired_logs)
+
+* **S3 Object**: `acme-corp/prod-cluster-1/API-Gateway/pod-789/20240101-ghi.json.gz`  
+  **Result**: ✅ **PROCESSED** (API-Gateway matches api-gateway case-insensitively)
+
+#### **Cost Benefits**
+
+Application filtering provides significant cost optimization:
+
+* **Reduced S3 Operations**: Filtered applications skip expensive S3 downloads entirely
+* **Lower Processing Costs**: Fewer Lambda invocations and shorter execution times
+* **Minimized Data Transfer**: Only relevant logs are transferred cross-account
+* **Reduced CloudWatch Costs**: Fewer log events sent to customer accounts
+
+#### **Operational Advantages**
+
+* **Noise Reduction**: Customers receive only the logs they actually need
+* **Compliance Support**: Easier to maintain data governance by excluding sensitive applications
+* **Incremental Adoption**: Customers can start with all logs, then gradually refine their desired_logs list
+* **Debugging Capability**: Clear logging indicates which applications are processed vs. filtered
 
 ## **Section 5: Security, Operations, and Cost**
 
@@ -201,6 +258,7 @@ The security model remains robust. The primary change is in the permissions requ
 ### **5.3. Cost Optimization**
 
 * **Primary Cost Levers:** With the removal of Kinesis Data Firehose, the primary cost components are now Vector's compute overhead (which is minimal), S3 storage and requests, and the Lambda delivery function.  
+* **Application-Level Filtering:** The optional `desired_logs` configuration provides significant cost optimization by filtering applications before expensive S3 downloads and processing. This reduces Lambda execution time, S3 operations, and cross-account data transfer costs.
 * **Batching is Critical:** The most important cost optimization lever is now the **batching configuration within Vector's S3 sink**. Configuring a large buffer size (batch.max\_bytes) and a long buffer interval (batch.timeout\_secs) is essential. This strategy creates larger files in S3, which drastically reduces the number of S3 PUT requests and the corresponding downstream SNS/SQS/Lambda invocations, leading to significant cost savings. 23  
 * **Storage Cost Management:** This architecture uses S3 as a temporary staging area rather than long-term storage. With automatic deletion after 7 days and Vector's efficient GZIP compression (achieving ~30-35:1 compression ratios), storage costs are minimal. The simplicity of the direct-to-S3 approach outweighs the loss of Parquet conversion capability from Kinesis Data Firehose. 16
 
@@ -242,11 +300,12 @@ Complete serverless processing using container-based Lambda functions with ECR i
 The log processing component has been redesigned as a unified, container-based solution that supports multiple execution modes:
 
 #### **Unified Log Processor**
-The core processing logic is implemented in a single Python script (`container/log_processor.py`) that supports three execution modes:
+The core processing logic is implemented in a single Python script (`container/log_processor.py`) that supports three execution modes with optional application-level filtering:
 
 * **Lambda Runtime Mode** (`EXECUTION_MODE=lambda`): Handles AWS Lambda events for serverless processing
 * **SQS Polling Mode** (`EXECUTION_MODE=sqs`): Continuously polls SQS queue for external processing scenarios  
 * **Manual Input Mode** (`EXECUTION_MODE=manual`): Accepts JSON input via stdin for development and testing
+* **Application Filtering**: Optional `desired_logs` configuration in tenant DynamoDB records enables selective log processing for cost optimization
 
 #### **Container Architecture**
 ```dockerfile
