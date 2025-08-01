@@ -175,21 +175,34 @@ graph TB
 │   └── README.md                          # This file
 ├── k8s/
 │   ├── README.md                          # Kubernetes deployment documentation
-│   ├── base/                              # Base Kustomize resources
-│   │   ├── kustomization.yaml             # Base Kustomize configuration
-│   │   ├── service-account.yaml           # Vector service account
-│   │   ├── vector-clusterrole.yaml        # Vector cluster role with log access
-│   │   ├── vector-clusterrolebinding.yaml # Role binding for service account
-│   │   ├── vector-config.yaml             # Vector ConfigMap with environment variables
-│   │   └── vector-daemonset.yaml          # Vector DaemonSet deployment
-│   ├── openshift-base/                    # OpenShift-specific resources
-│   │   ├── kustomization.yaml             # OpenShift Kustomize configuration
-│   │   └── scc.yaml                       # SecurityContextConstraints for OpenShift
-│   └── overlays/                          # Environment-specific overrides
-│       └── development/                   # Development environment overlay
-│           ├── kustomization.yaml         # Development Kustomize configuration
-│           ├── service-account-patch.yaml # IAM role annotation patch
-│           └── daemonset-patch.yaml       # Development-specific DaemonSet patches
+│   ├── collector/                         # Vector log collection agent
+│   │   ├── base/                          # Base Vector deployment resources
+│   │   │   ├── kustomization.yaml
+│   │   │   ├── service-account.yaml       # Vector service account
+│   │   │   ├── vector-config.yaml         # Vector ConfigMap
+│   │   │   ├── vector-daemonset.yaml      # Vector DaemonSet
+│   │   │   ├── vector-clusterrole.yaml    # RBAC permissions
+│   │   │   └── vector-clusterrolebinding.yaml
+│   │   ├── openshift-base/                # OpenShift-specific resources
+│   │   │   ├── kustomization.yaml
+│   │   │   └── scc.yaml                   # SecurityContextConstraints
+│   │   └── overlays/                      # Environment-specific configurations
+│   │       ├── development/
+│   │       ├── staging/
+│   │       └── production/
+│   └── processor/                         # Log processing application
+│       ├── base/                          # Base processor deployment resources
+│       │   ├── kustomization.yaml
+│       │   ├── service-account.yaml       # Processor service account
+│       │   ├── config.yaml                # Processor ConfigMap
+│       │   ├── deployment.yaml            # Processor Deployment
+│       │   ├── role.yaml                  # RBAC permissions
+│       │   └── rolebinding.yaml
+│       ├── openshift-base/                # OpenShift-specific resources
+│       │   ├── kustomization.yaml
+│       │   └── scc.yaml                   # SecurityContextConstraints
+│       └── overlays/                      # Environment-specific configurations
+│           └── development/
 ├── test_container/
 │   ├── Containerfile                      # Fake log generator container
 │   ├── fake_log_generator.py              # Realistic log generator for testing
@@ -301,7 +314,7 @@ The project uses Kustomize for flexible Kubernetes deployments with support for 
 kubectl create namespace logging
 
 # Deploy using Kustomize base configuration
-kubectl apply -k k8s/base
+kubectl apply -k k8s/collector/base
 
 # Verify deployment
 kubectl get pods -n logging
@@ -314,7 +327,7 @@ kubectl logs -n logging daemonset/vector-logs
 kubectl create namespace logging
 
 # Deploy using OpenShift overlay with SecurityContextConstraints
-kubectl apply -k k8s/overlays/development
+kubectl apply -k k8s/collector/overlays/development
 
 # Verify deployment
 kubectl get pods -n logging
@@ -326,17 +339,17 @@ For production or custom environments, create overlays with environment-specific
 
 ```bash
 # Deploy with environment-specific settings
-kubectl apply -k k8s/overlays/production
+kubectl apply -k k8s/collector/overlays/production
 
 # Or customize on-the-fly with kustomize
-kubectl kustomize k8s/base | kubectl apply -f -
+kubectl kustomize k8s/collector/base | kubectl apply -f -
 ```
 
 #### **Configuration Updates**
 Update the Vector ConfigMap with your environment-specific values:
 
 ```yaml
-# In k8s/overlays/YOUR-ENV/vector-config-patch.yaml
+# In k8s/collector/overlays/YOUR-ENV/vector-config-patch.yaml
 configMapGenerator:
   - name: vector-config
     behavior: merge
@@ -351,7 +364,7 @@ configMapGenerator:
 Ensure the Vector service account is annotated with your cluster-specific IAM role:
 
 ```yaml
-# In k8s/overlays/YOUR-ENV/service-account-patch.yaml
+# In k8s/collector/overlays/YOUR-ENV/service-account-patch.yaml
 - op: add
   path: /metadata/annotations/eks.amazonaws.com~1role-arn
   value: arn:aws:iam::ACCOUNT:role/your-cluster-vector-role
