@@ -486,7 +486,7 @@ def deliver_logs_to_customer(
         
         # Prepare log group and stream names
         log_group_name = tenant_config['log_group_name']
-        log_stream_name = f"{tenant_info['application']}-{tenant_info['pod_name']}-{datetime.now().strftime('%Y-%m-%d')}"
+        log_stream_name = tenant_info['pod_name']
         
         # Use Vector to deliver logs
         deliver_logs_with_vector(
@@ -595,12 +595,19 @@ def deliver_logs_with_vector(
         
         # Send all events as one write to avoid BrokenPipe issues
 
-        # Send only the message content to Vector, not the full event structure
+        # Send JSON objects to Vector, each on a separate line (NDJSON format)
         all_events = ""
         for event in log_events:
-            # Extract just the message content
+            # Extract just the message content and create a simple JSON object
             message = event.get('message', '')
-            all_events += message + '\n'
+            timestamp = event.get('timestamp', int(datetime.now().timestamp() * 1000))
+            
+            # Create simple JSON object for Vector
+            json_event = {
+                'message': message,
+                'timestamp': timestamp
+            }
+            all_events += json.dumps(json_event) + '\n'
         
         # Use communicate to send input and wait for completion
         logger.info("Waiting for Vector to complete log delivery")
