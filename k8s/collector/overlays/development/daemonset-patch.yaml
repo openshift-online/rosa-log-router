@@ -18,12 +18,12 @@ spec:
         - name: VECTOR_LOG
           value: "DEBUG"
         - name: AWS_REGION
-          value: "us-east-2"
+          value: "us-east-1"
         - name: AWS_DEFAULT_REGION
           value: "us-east-2"
         - name: S3_BUCKET_NAME
-          value: "multi-tenant-logging-development-central-12345678"
+          value: "cp-logs-test"
         - name: S3_WRITER_ROLE_ARN
-          value: "arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role"
+          value: "arn:aws:iam::692859910892:role/ManagedOpenShift-Observability"
         - name: CLUSTER_ID
           value: "scuppett-oepz"
