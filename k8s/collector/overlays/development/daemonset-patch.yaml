@@ -26,4 +26,4 @@ spec:
         - name: S3_WRITER_ROLE_ARN
           value: "arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role"
         - name: CLUSTER_ID
-          value: "scuppett-oepz"
+          value: "ocp-cluster"
