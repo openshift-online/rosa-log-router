@@ -104,7 +104,7 @@ Resources:
   ClusterProcessorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${ClusterName}-processor-role'
+      RoleName: !Sub 'mtl-${AWS::Region}-${Environment}-${ClusterName}-processor'
       Description: !Sub 'Role for log processor in ${ClusterName} cluster'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -169,6 +169,8 @@ Resources:
           Value: !Ref Environment
         - Key: 'Cluster'
           Value: !Ref ClusterName
+        - Key: 'Region'
+          Value: !Ref 'AWS::Region'
         - Key: 'ManagedBy'
           Value: 'CloudFormation'
         - Key: 'Purpose'

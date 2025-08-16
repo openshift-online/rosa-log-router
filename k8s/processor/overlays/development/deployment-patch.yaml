@@ -13,4 +13,4 @@ spec:
         - name: TENANT_CONFIG_TABLE
           value: "multi-tenant-logging-development-tenant-configs"
         - name: CENTRAL_LOG_DISTRIBUTION_ROLE_ARN
-          value: "arn:aws:iam::641875867446:role/ROSA-CentralLogDistributionRole-12345678"
+          value: "arn:aws:iam::641875867446:role/ROSA-CentralLogDistributionRole-4417f757"
