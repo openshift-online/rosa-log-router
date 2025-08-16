@@ -22,6 +22,7 @@ CENTRAL_ROLE_ARN=""
 CLUSTER_NAME=""
 OIDC_PROVIDER=""
 OIDC_AUDIENCE="openshift"
+CLUSTER_TEMPLATE=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -68,6 +69,7 @@ OPTIONS:
     --cluster-name NAME         Cluster name (required for cluster deployments)
     --oidc-provider URL         OIDC provider URL without https:// (required for cluster deployments)
     --oidc-audience AUD         OIDC audience (default: openshift for cluster deployments)
+    --cluster-template TYPE     Cluster template type: vector, processor, or both (required for cluster deployments)
     --include-sqs               Include SQS stack for log processing (regional only)
     --include-lambda            Include Lambda stack for container-based processing (regional only)
     --ecr-image-uri URI         ECR container image URI (required if --include-lambda)
@@ -88,11 +90,14 @@ EXAMPLES:
     # Deploy customer role
     $0 -t customer --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
 
-    # Deploy cluster roles (Vector)
-    $0 -t cluster --cluster-name my-cluster --oidc-provider oidc.op1.openshiftapps.com/abc123 --vector-assume-role-policy-arn arn:aws:iam::123456789012:policy/multi-tenant-logging-development-vector-assume-role-policy
+    # Deploy cluster Vector role
+    $0 -t cluster --cluster-template vector --cluster-name my-cluster --oidc-provider oidc.op1.openshiftapps.com/abc123
 
-    # Deploy cluster roles (Processor) 
-    $0 -t cluster --cluster-name my-cluster --oidc-provider oidc.op1.openshiftapps.com/abc123 --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --tenant-config-table-arn arn:aws:dynamodb:us-east-2:123456789012:table/tenant-configs
+    # Deploy cluster processor role
+    $0 -t cluster --cluster-template processor --cluster-name my-cluster --oidc-provider oidc.op1.openshiftapps.com/abc123 --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
+
+    # Deploy both cluster roles
+    $0 -t cluster --cluster-template both --cluster-name my-cluster --oidc-provider oidc.op1.openshiftapps.com/abc123
 
     # Validate templates only
     $0 -t regional --validate-only -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
@@ -145,6 +150,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --oidc-audience)
             OIDC_AUDIENCE="$2"
+            shift 2
+            ;;
+        --cluster-template)
+            CLUSTER_TEMPLATE="$2"
             shift 2
             ;;
         --include-sqs)
@@ -272,6 +281,16 @@ case "$DEPLOYMENT_TYPE" in
             print_error "OIDC provider URL is required for cluster deployment. Use --oidc-provider option."
             exit 1
         fi
+        
+        if [[ -z "$CLUSTER_TEMPLATE" ]]; then
+            print_error "Cluster template type is required for cluster deployment. Use --cluster-template option."
+            exit 1
+        fi
+        
+        if [[ ! "$CLUSTER_TEMPLATE" =~ ^(vector|processor|both)$ ]]; then
+            print_error "Cluster template type must be one of: vector, processor, both"
+            exit 1
+        fi
         ;;
 esac
 
@@ -302,6 +321,61 @@ check_aws_cli() {
     local account_id=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
     print_status "AWS Account: $account_id"
     print_status "Current region: $REGION"
+}
+
+# Function to generate cluster templates using Jinja2
+generate_cluster_templates() {
+    if [[ "$DEPLOYMENT_TYPE" != "cluster" ]]; then
+        return 0
+    fi
+    
+    print_status "Generating cluster templates using Jinja2..."
+    
+    local template_script="$(dirname "$0")/cluster/generate_templates.py"
+    if [[ ! -f "$template_script" ]]; then
+        print_error "Template generator script not found: $template_script"
+        exit 1
+    fi
+    
+    # Check if Python 3 is available
+    if ! command -v python3 &> /dev/null; then
+        print_error "Python 3 is required for template generation but is not installed."
+        exit 1
+    fi
+    
+    # Check if jinja2 is available
+    if ! python3 -c "import jinja2" &> /dev/null; then
+        print_status "Installing jinja2 dependency..."
+        pip3 install --user jinja2 || {
+            print_error "Failed to install jinja2. Please install manually: pip3 install jinja2"
+            exit 1
+        }
+    fi
+    
+    # Build template generation command
+    local generate_cmd="python3 \"$template_script\" \"$CLUSTER_TEMPLATE\""
+    generate_cmd="$generate_cmd --cluster-name \"$CLUSTER_NAME\""
+    generate_cmd="$generate_cmd --oidc-provider \"$OIDC_PROVIDER\""
+    generate_cmd="$generate_cmd --oidc-audience \"$OIDC_AUDIENCE\""
+    
+    # Add optional parameters
+    if [[ -n "$PROJECT_NAME" ]]; then
+        generate_cmd="$generate_cmd --project-name \"$PROJECT_NAME\""
+    fi
+    
+    if [[ -n "$ENVIRONMENT" ]]; then
+        generate_cmd="$generate_cmd --environment \"$ENVIRONMENT\""
+    fi
+    
+    print_status "Running: $generate_cmd"
+    
+    # Execute template generation
+    if eval "$generate_cmd"; then
+        print_success "Template generation completed successfully."
+    else
+        print_error "Template generation failed."
+        exit 1
+    fi
 }
 
 # Function to check if jq is installed
@@ -408,7 +482,12 @@ validate_templates() {
             templates=("customer/customer-log-distribution-role.yaml")
             ;;
         cluster)
-            templates=("cluster/cluster-vector-role.yaml" "cluster/cluster-processor-role.yaml")
+            # For cluster deployment, validate the rendered templates based on type
+            if [[ "$CLUSTER_TEMPLATE" == "both" ]]; then
+                templates=("cluster/rendered/cluster-vector-role.yaml" "cluster/rendered/cluster-processor-role.yaml")
+            else
+                templates=("cluster/rendered/cluster-${CLUSTER_TEMPLATE}-role.yaml")
+            fi
             ;;
     esac
     
@@ -487,9 +566,13 @@ deploy_stack() {
             main_template="$template_dir/customer/customer-log-distribution-role.yaml"
             ;;
         cluster)
-            # For cluster deployment, we need to determine which template to use
-            # This is a simplified approach - in practice you might want separate commands
-            main_template="$template_dir/cluster/cluster-vector-role.yaml"
+            # For cluster deployment, use the generated template based on type
+            if [[ "$CLUSTER_TEMPLATE" == "both" ]]; then
+                # For "both", default to processor template (primary template)
+                main_template="$template_dir/cluster/rendered/cluster-processor-role.yaml"
+            else
+                main_template="$template_dir/cluster/rendered/cluster-${CLUSTER_TEMPLATE}-role.yaml"
+            fi
             ;;
     esac
     
@@ -551,7 +634,7 @@ deploy_stack() {
             )
             ;;
         cluster)
-            # Cluster deployment parameters
+            # Cluster deployment parameters - common for all cluster types
             parameters=(
                 "ClusterName=$CLUSTER_NAME"
                 "OIDCProviderURL=$OIDC_PROVIDER"
@@ -560,9 +643,96 @@ deploy_stack() {
                 "Environment=$ENVIRONMENT"
             )
             
-            # Add deployment-specific parameters based on available environment variables
-            if [[ -n "$CENTRAL_ROLE_ARN" ]]; then
-                parameters+=("CentralLogDistributionRoleArn=$CENTRAL_ROLE_ARN")
+            # Try to get regional stack outputs automatically (needed for both vector and processor)
+            local regional_stack_name=""
+            # Look for a regional stack (main stack, not nested stacks)
+            regional_stack_name=$(aws cloudformation list-stacks --region "$REGION" \
+                --query "StackSummaries[?StackName == 'multi-tenant-logging-${ENVIRONMENT}' && StackStatus != 'DELETE_COMPLETE'].StackName" \
+                --output text 2>/dev/null | head -1 || echo "")
+            
+            # Add template-specific parameters
+            if [[ "$CLUSTER_TEMPLATE" == "processor" || "$CLUSTER_TEMPLATE" == "both" ]]; then
+                # Processor role requires additional ARNs
+                if [[ -n "$CENTRAL_ROLE_ARN" ]]; then
+                    parameters+=("CentralLogDistributionRoleArn=$CENTRAL_ROLE_ARN")
+                fi
+                
+                if [[ -n "$regional_stack_name" ]]; then
+                    print_status "Found regional stack: $regional_stack_name"
+                    print_status "Retrieving outputs for processor role parameters..."
+                    
+                    # Get required outputs from regional stack
+                    local tenant_table_arn=$(aws cloudformation describe-stacks --stack-name "$regional_stack_name" --region "$REGION" \
+                        --query 'Stacks[0].Outputs[?OutputKey==`TenantConfigTableArn`].OutputValue' --output text 2>/dev/null || echo "")
+                    local bucket_arn=$(aws cloudformation describe-stacks --stack-name "$regional_stack_name" --region "$REGION" \
+                        --query 'Stacks[0].Outputs[?OutputKey==`CentralLoggingBucketArn`].OutputValue' --output text 2>/dev/null || echo "")
+                    
+                    # Try to get from nested core infrastructure stack if not found
+                    if [[ -z "$tenant_table_arn" || -z "$bucket_arn" ]]; then
+                        local core_stack_arn=$(aws cloudformation list-stack-resources --stack-name "$regional_stack_name" --region "$REGION" \
+                            --query 'StackResourceSummaries[?LogicalResourceId==`CoreInfrastructureStack`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+                        
+                        if [[ -n "$core_stack_arn" ]]; then
+                            local core_stack_name=$(echo "$core_stack_arn" | awk -F'/' '{print $2}')
+                            
+                            if [[ -z "$tenant_table_arn" ]]; then
+                                tenant_table_arn=$(aws cloudformation describe-stacks --stack-name "$core_stack_name" --region "$REGION" \
+                                    --query 'Stacks[0].Outputs[?OutputKey==`TenantConfigTableArn`].OutputValue' --output text 2>/dev/null || echo "")
+                            fi
+                            
+                            if [[ -z "$bucket_arn" ]]; then
+                                bucket_arn=$(aws cloudformation describe-stacks --stack-name "$core_stack_name" --region "$REGION" \
+                                    --query 'Stacks[0].Outputs[?OutputKey==`CentralLoggingBucketArn`].OutputValue' --output text 2>/dev/null || echo "")
+                            fi
+                        fi
+                    fi
+                    
+                    # Add parameters if found
+                    if [[ -n "$tenant_table_arn" ]]; then
+                        parameters+=("TenantConfigTableArn=$tenant_table_arn")
+                        print_status "Using TenantConfigTableArn: $tenant_table_arn"
+                    fi
+                    
+                    if [[ -n "$bucket_arn" ]]; then
+                        parameters+=("CentralLoggingBucketArn=$bucket_arn")
+                        print_status "Using CentralLoggingBucketArn: $bucket_arn"
+                    fi
+                else
+                    print_warning "Could not automatically find regional stack. You may need to provide ARNs manually."
+                fi
+            fi
+            
+            if [[ "$CLUSTER_TEMPLATE" == "vector" || "$CLUSTER_TEMPLATE" == "both" ]]; then
+                # Vector role requires assume role policy ARN
+                if [[ -n "$regional_stack_name" ]]; then
+                    print_status "Retrieving VectorAssumeRolePolicyArn for vector role..."
+                    
+                    # Get VectorAssumeRolePolicyArn from regional stack
+                    local vector_policy_arn=$(aws cloudformation describe-stacks --stack-name "$regional_stack_name" --region "$REGION" \
+                        --query 'Stacks[0].Outputs[?OutputKey==`VectorAssumeRolePolicyArn`].OutputValue' --output text 2>/dev/null || echo "")
+                    
+                    # Try to get from nested core infrastructure stack if not found
+                    if [[ -z "$vector_policy_arn" ]]; then
+                        local core_stack_arn=$(aws cloudformation list-stack-resources --stack-name "$regional_stack_name" --region "$REGION" \
+                            --query 'StackResourceSummaries[?LogicalResourceId==`CoreInfrastructureStack`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+                        
+                        if [[ -n "$core_stack_arn" ]]; then
+                            local core_stack_name=$(echo "$core_stack_arn" | awk -F'/' '{print $2}')
+                            vector_policy_arn=$(aws cloudformation describe-stacks --stack-name "$core_stack_name" --region "$REGION" \
+                                --query 'Stacks[0].Outputs[?OutputKey==`VectorAssumeRolePolicyArn`].OutputValue' --output text 2>/dev/null || echo "")
+                        fi
+                    fi
+                    
+                    # Add parameter if found
+                    if [[ -n "$vector_policy_arn" ]]; then
+                        parameters+=("VectorAssumeRolePolicyArn=$vector_policy_arn")
+                        print_status "Using VectorAssumeRolePolicyArn: $vector_policy_arn"
+                    else
+                        print_warning "Could not find VectorAssumeRolePolicyArn. Vector role deployment may require manual parameter."
+                    fi
+                else
+                    print_warning "No regional stack found. Vector role deployment may require manual VectorAssumeRolePolicyArn parameter."
+                fi
             fi
             ;;
         regional)
@@ -836,7 +1006,10 @@ main() {
     check_jq
     check_template_bucket
     
-    # Step 2: Validate templates
+    # Step 2: Generate cluster templates (if needed)
+    generate_cluster_templates
+    
+    # Step 3: Validate templates
     validate_templates
     
     if [[ "$VALIDATE_ONLY" == true ]]; then
@@ -844,10 +1017,10 @@ main() {
         exit 0
     fi
     
-    # Step 3: Upload nested templates
+    # Step 4: Upload nested templates
     upload_templates
     
-    # Step 4: Deploy stack
+    # Step 5: Deploy stack
     if deploy_stack; then
         print_success "Deployment completed successfully!"
         

@@ -30,17 +30,57 @@ Before deploying cluster roles, ensure:
 2. **OIDC Provider Registered**: Your cluster's OIDC provider must be registered in AWS IAM
 3. **Service Accounts Created**: Kubernetes service accounts must exist in the target namespace
 
+## Template Generation
+
+This directory uses **Jinja2 template generation** to solve CloudFormation YAML limitations with dynamic OIDC provider substitution. Templates are generated before deployment using the `generate_templates.py` script.
+
+### Prerequisites
+
+```bash
+# Install Python dependencies (handled automatically by deploy.sh)
+cd cluster/
+pip3 install -r requirements.txt
+```
+
+### Manual Template Generation
+
+```bash
+# Generate processor role template
+python3 generate_templates.py processor \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+
+# Generate vector role template  
+python3 generate_templates.py vector \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+
+# Generate both templates
+python3 generate_templates.py both \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+
+# Validate generated templates
+python3 generate_templates.py processor \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123 \
+  --validate
+```
+
+**Generated templates are saved to:** `rendered/cluster-{type}-role.yaml`
+
 ## Deployment
+
+**Note:** Template generation is automatically handled by `deploy.sh` - you don't need to run `generate_templates.py` manually.
 
 ### Deploy Vector Role
 
 ```bash
 # Deploy Vector role for log collection
-./deploy.sh -t cluster \
+./deploy.sh -t cluster --cluster-template vector \
   --cluster-name my-cluster \
   --oidc-provider oidc.op1.openshiftapps.com/abc123 \
-  --oidc-audience openshift \
-  --vector-assume-role-policy-arn arn:aws:iam::123456789012:policy/multi-tenant-logging-development-vector-assume-role-policy
+  --oidc-audience openshift
 
 # Stack name will be: multi-tenant-logging-cluster-my-cluster
 ```
@@ -48,24 +88,42 @@ Before deploying cluster roles, ensure:
 ### Deploy Processor Role
 
 ```bash
-# Deploy processor role for log processing
-./deploy.sh -t cluster \
+# Deploy processor role for log processing  
+./deploy.sh -t cluster --cluster-template processor \
   --cluster-name my-cluster \
   --oidc-provider oidc.op1.openshiftapps.com/abc123 \
   --oidc-audience openshift \
-  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 \
-  --tenant-config-table-arn arn:aws:dynamodb:us-east-2:123456789012:table/multi-tenant-logging-development-tenant-configs
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
+
+# You'll provide additional parameters during deployment for:
+# - TenantConfigTableArn (from regional stack outputs)
+# - CentralLoggingBucketArn (from regional stack outputs)
+```
+
+### Deploy Both Roles
+
+```bash
+# Deploy both Vector and processor roles (creates separate stacks)
+./deploy.sh -t cluster --cluster-template both \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123 \
+  --oidc-audience openshift
 ```
 
 ### Parameters
 
-| Parameter | Description | Required | Example |
-|-----------|-------------|----------|---------|
-| `--cluster-name` | Unique cluster identifier | Yes | `my-cluster` |
-| `--oidc-provider` | OIDC provider URL (without https://) | Yes | `oidc.op1.openshiftapps.com/abc123` |
-| `--oidc-audience` | OIDC audience | No (default: openshift) | `openshift` or `sts.amazonaws.com` |
-| `--central-role-arn` | Central log distribution role ARN | For processor only | See [global docs](../global/) |
-| `--vector-assume-role-policy-arn` | Vector assume role policy ARN | For vector only | From regional stack outputs |
+| Parameter            | Description                                | Required                | Example                             |
+|----------------------|--------------------------------------------|-------------------------|-------------------------------------|
+| `--cluster-template` | Template type: vector, processor, or both  | Yes                     | `processor`                         |
+| `--cluster-name`     | Unique cluster identifier                  | Yes                     | `my-cluster`                        |
+| `--oidc-provider`    | OIDC provider URL (without https://)       | Yes                     | `oidc.op1.openshiftapps.com/abc123` |
+| `--oidc-audience`    | OIDC audience                              | No (default: openshift) | `openshift` or `sts.amazonaws.com`  |
+| `--central-role-arn` | Central log distribution role ARN          | For processor only      | See [global docs](../global/)       |
+
+**Runtime Parameters** (provided during CloudFormation deployment):
+- `TenantConfigTableArn`: From regional stack outputs
+- `CentralLoggingBucketArn`: From regional stack outputs  
+- `VectorAssumeRolePolicyArn`: From regional stack outputs (vector only)
 
 ## Integration Steps
 

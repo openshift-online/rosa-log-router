@@ -1,48 +1,48 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'IAM role for Vector agents running in a specific OpenShift/EKS cluster with OIDC provider'
+Description: 'IAM role for Vector agents running in {{ cluster_name }} cluster with OIDC provider'
 
 Parameters:
   ClusterName:
     Type: String
+    Default: '{{ cluster_name }}'
     Description: 'Name of the OpenShift/EKS cluster (used for role naming)'
     AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$'
     ConstraintDescription: 'Must be a valid cluster name (alphanumeric and hyphens only)'
     
   OIDCProviderURL:
     Type: String
+    Default: '{{ oidc_provider_url }}'
     Description: 'OIDC provider URL for the cluster (without https://)'
-    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9]$'
-    ConstraintDescription: 'Must be a valid OIDC provider URL without https://'
     
   OIDCAudience:
     Type: String
-    Default: 'openshift'
+    Default: '{{ oidc_audience }}'
     Description: 'OIDC audience for the cluster (use "openshift" for OpenShift, "sts.amazonaws.com" for EKS)'
     AllowedValues: ['openshift', 'sts.amazonaws.com']
     
   ServiceAccountNamespace:
     Type: String
-    Default: 'logging'
+    Default: '{{ service_account_namespace }}'
     Description: 'Kubernetes namespace where Vector service account exists'
     
   ServiceAccountName:
     Type: String
-    Default: 'vector'
+    Default: '{{ service_account_name }}'
     Description: 'Name of the Vector service account'
     
   VectorAssumeRolePolicyArn:
     Type: String
-    Description: 'ARN of the managed policy allowing Vector to assume S3 writer role'
+    Description: 'ARN of the managed policy for Vector agents to assume S3 writer role'
     AllowedPattern: '^arn:aws:iam::[0-9]{12}:policy/.+$'
     
   ProjectName:
     Type: String
-    Default: 'multi-tenant-logging'
+    Default: '{{ project_name }}'
     Description: 'Name of the project for resource tagging'
     
   Environment:
     Type: String
-    Default: 'development'
+    Default: '{{ environment }}'
     AllowedValues: ['production', 'staging', 'development']
     Description: 'Environment name'
 
@@ -99,10 +99,8 @@ Resources:
             Action: 'sts:AssumeRoleWithWebIdentity'
             Condition:
               StringEquals:
-                ? !Sub '${OIDCProviderURL}:aud'
-                : !Ref OIDCAudience
-                ? !Sub '${OIDCProviderURL}:sub'
-                : !Sub 'system:serviceaccount:${ServiceAccountNamespace}:${ServiceAccountName}'
+                '{{ oidc_provider_url }}:aud': !Ref OIDCAudience
+                '{{ oidc_provider_url }}:sub': !Sub 'system:serviceaccount:${ServiceAccountNamespace}:${ServiceAccountName}'
       ManagedPolicyArns:
         - !Ref VectorAssumeRolePolicyArn
       Tags:
@@ -151,7 +149,4 @@ Outputs:
          kubectl annotate serviceaccount -n ${ServiceAccountNamespace} ${ServiceAccountName} \
            eks.amazonaws.com/role-arn=${ClusterVectorRole.Arn}
            
-      3. Configure Vector with:
-         - S3_WRITER_ROLE_ARN from core infrastructure stack
-         - AWS_REGION=${AWS::Region}
-         - Use IRSA authentication (no explicit credentials needed)
+      3. Configure Vector to use IRSA authentication (no explicit credentials needed)

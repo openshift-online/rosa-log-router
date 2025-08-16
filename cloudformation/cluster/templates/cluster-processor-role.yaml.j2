@@ -1,33 +1,33 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'IAM role for log processor running in a specific OpenShift/EKS cluster with OIDC provider'
+Description: 'IAM role for log processor running in {{ cluster_name }} cluster with OIDC provider'
 
 Parameters:
   ClusterName:
     Type: String
+    Default: '{{ cluster_name }}'
     Description: 'Name of the OpenShift/EKS cluster (used for role naming)'
     AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$'
     ConstraintDescription: 'Must be a valid cluster name (alphanumeric and hyphens only)'
     
   OIDCProviderURL:
     Type: String
+    Default: '{{ oidc_provider_url }}'
     Description: 'OIDC provider URL for the cluster (without https://)'
-    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9]$'
-    ConstraintDescription: 'Must be a valid OIDC provider URL without https://'
     
   OIDCAudience:
     Type: String
-    Default: 'openshift'
+    Default: '{{ oidc_audience }}'
     Description: 'OIDC audience for the cluster (use "openshift" for OpenShift, "sts.amazonaws.com" for EKS)'
     AllowedValues: ['openshift', 'sts.amazonaws.com']
     
   ServiceAccountNamespace:
     Type: String
-    Default: 'logging'
+    Default: '{{ service_account_namespace }}'
     Description: 'Kubernetes namespace where processor service account exists'
     
   ServiceAccountName:
     Type: String
-    Default: 'log-processor'
+    Default: '{{ service_account_name }}'
     Description: 'Name of the processor service account'
     
   TenantConfigTableArn:
@@ -47,12 +47,12 @@ Parameters:
     
   ProjectName:
     Type: String
-    Default: 'multi-tenant-logging'
+    Default: '{{ project_name }}'
     Description: 'Name of the project for resource tagging'
     
   Environment:
     Type: String
-    Default: 'development'
+    Default: '{{ environment }}'
     AllowedValues: ['production', 'staging', 'development']
     Description: 'Environment name'
 
@@ -115,14 +115,8 @@ Resources:
             Action: 'sts:AssumeRoleWithWebIdentity'
             Condition:
               StringEquals:
-                Fn::Sub: 
-                  - '${Issuer}:aud'
-                  - Issuer: !Ref OIDCProviderURL
-                  : !Ref OIDCAudience
-                Fn::Sub:
-                  - '${Issuer}:sub'
-                  - Issuer: !Ref OIDCProviderURL
-                  : !Sub 'system:serviceaccount:${ServiceAccountNamespace}:${ServiceAccountName}'
+                '{{ oidc_provider_url }}:aud': !Ref OIDCAudience
+                '{{ oidc_provider_url }}:sub': !Sub 'system:serviceaccount:${ServiceAccountNamespace}:${ServiceAccountName}'
       Policies:
         - PolicyName: LogProcessorPolicy
           PolicyDocument:
