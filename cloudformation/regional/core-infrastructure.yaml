@@ -36,6 +36,12 @@ Parameters:
     AllowedPattern: '^[a-f0-9]{8}$'
     ConstraintDescription: Must be an 8-character hexadecimal string
 
+  CentralLogDistributionRoleArn:
+    Type: String
+    Description: ARN of the central log distribution role from global stack
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$'
+    ConstraintDescription: Must be a valid IAM role ARN matching pattern
+
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
   IsS3EncryptionEnabled: !Equals [!Ref EnableS3Encryption, "true"]
@@ -324,27 +330,27 @@ Resources:
               - sts:AssumeRole
             Resource: !GetAtt CentralS3WriterRole.Arn
 
-  # IAM Role for Log Distributor Lambda
-  LogDistributorRole:
+  # Regional IAM Role for accessing regional resources
+  RegionalLogProcessorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'ROSA-CentralLogDistributionRole-${RandomSuffix}'
+      RoleName: !Sub '${ProjectName}-${Environment}-regional-processor-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
           - Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+              AWS: !Ref CentralLogDistributionRoleArn
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
       Policies:
-        - PolicyName: LogDistributorPolicy
+        - PolicyName: RegionalProcessorPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -362,65 +368,6 @@ Resources:
                 Action:
                   - s3:GetObject
                 Resource: !Sub '${CentralLoggingBucket.Arn}/*'
-              - Effect: Allow
-                Action:
-                  - sts:AssumeRole
-                Resource: 'arn:aws:iam::*:role/CustomerLogDistribution'
-                Condition:
-                  StringEquals:
-                    'sts:ExternalId': !Ref 'AWS::AccountId'
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:GenerateDataKey
-                Resource: !GetAtt LoggingKMSKey.Arn
-              - Effect: Allow
-                Action:
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                Resource: '*'
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # IAM Role for DLQ Processor Lambda
-  DLQProcessorRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-dlq-processor-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-          - Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
-      Policies:
-        - PolicyName: DLQProcessorPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                Resource: !GetAtt TenantConfigTable.Arn
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-*'
               - Effect: Allow
                 Action:
                   - kms:Decrypt
@@ -501,23 +448,17 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-VectorAssumeRolePolicyArn'
 
-  LogDistributorRoleArn:
-    Description: ARN of the log distributor Lambda IAM role
-    Value: !GetAtt LogDistributorRole.Arn
+  RegionalLogProcessorRoleArn:
+    Description: ARN of the regional log processor IAM role
+    Value: !GetAtt RegionalLogProcessorRole.Arn
     Export:
-      Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
+      Name: !Sub '${AWS::StackName}-RegionalLogProcessorRoleArn'
 
   CentralLogDistributionRoleArn:
-    Description: ARN of the central log distribution role (same as LogDistributorRole)
-    Value: !GetAtt LogDistributorRole.Arn
+    Description: ARN of the central log distribution role (from global stack)
+    Value: !Ref CentralLogDistributionRoleArn
     Export:
       Name: !Sub '${AWS::StackName}-CentralLogDistributionRoleArn'
-
-  DLQProcessorRoleArn:
-    Description: ARN of the DLQ processor Lambda IAM role
-    Value: !GetAtt DLQProcessorRole.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-DLQProcessorRoleArn'
 
   RandomSuffix:
     Description: Random suffix used for resource naming

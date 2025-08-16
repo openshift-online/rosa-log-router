@@ -61,6 +61,12 @@ Parameters:
     AllowedPattern: '^[a-f0-9]{8}$'
     ConstraintDescription: Must be an 8-character hexadecimal string
 
+  CentralLogDistributionRoleArn:
+    Type: String
+    Description: ARN of the central log distribution role from global stack
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$'
+    ConstraintDescription: Must be a valid IAM role ARN matching pattern
+
 Conditions:
   HasEksOidcIssuer: !Not [!Equals [!Ref EksOidcIssuer, ""]]
   ShouldIncludeSQSStack: !Equals [!Ref IncludeSQSStack, "true"]
@@ -80,6 +86,7 @@ Resources:
         S3DeleteAfterDays: !Ref S3DeleteAfterDays
         EnableS3Encryption: !Ref EnableS3Encryption
         RandomSuffix: !Ref RandomSuffix
+        CentralLogDistributionRoleArn: !Ref CentralLogDistributionRoleArn
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -126,7 +133,7 @@ Resources:
         SQSQueueArn: !If [ShouldIncludeSQSStack, !GetAtt SQSStack.Outputs.LogDeliveryQueueArn, ""]
         SQSQueueUrl: !If [ShouldIncludeSQSStack, !GetAtt SQSStack.Outputs.LogDeliveryQueueUrl, ""]
         ECRImageUri: !Ref ECRImageUri
-        CentralLogDistributionRoleArn: !GetAtt CoreInfrastructureStack.Outputs.CentralLogDistributionRoleArn
+        CentralLogDistributionRoleArn: !Ref CentralLogDistributionRoleArn
         CentralLoggingBucketArn: !GetAtt CoreInfrastructureStack.Outputs.CentralLoggingBucketArn
       Tags:
         - Key: Project
@@ -190,11 +197,17 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-VectorRoleArn'
   
-  LogDistributorRoleArn:
-    Description: ARN of the log distributor Lambda role
-    Value: !GetAtt CoreInfrastructureStack.Outputs.LogDistributorRoleArn
+  RegionalLogProcessorRoleArn:
+    Description: ARN of the regional log processor role
+    Value: !GetAtt CoreInfrastructureStack.Outputs.RegionalLogProcessorRoleArn
     Export:
-      Name: !Sub '${AWS::StackName}-LogDistributorRoleArn'
+      Name: !Sub '${AWS::StackName}-RegionalLogProcessorRoleArn'
+
+  CentralLogDistributionRoleArn:
+    Description: ARN of the central log distribution role (from global stack)
+    Value: !Ref CentralLogDistributionRoleArn
+    Export:
+      Name: !Sub '${AWS::StackName}-CentralLogDistributionRoleArn'
   
   # SNS Outputs
   LogDeliveryTopicArn:
