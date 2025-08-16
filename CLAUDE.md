@@ -18,6 +18,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - AWS CLI configured with your AWS profile
 - Access to deployed CloudFormation stack with SQS queue
 
+#### Environment Configuration
+
+The project includes a `.env.sample` file for simplified environment variable management:
+
+```bash
+# Copy the sample environment file and customize with your values
+cp .env.sample .env
+
+# Edit the .env file with your AWS configuration
+vim .env  # or use your preferred editor
+
+# Source the environment variables for the current session
+source .env
+
+# Verify configuration
+echo "AWS Profile: $AWS_PROFILE"
+echo "AWS Region: $AWS_REGION"
+echo "Template Bucket: $TEMPLATE_BUCKET"
+```
+
+**Key Environment Variables in .env:**
+- `AWS_PROFILE`: Your AWS CLI profile name
+- `AWS_REGION`: Target AWS region for deployment
+- `AWS_ACCOUNT_ID`: Your AWS account ID
+- `TEMPLATE_BUCKET`: S3 bucket for CloudFormation templates
+- `ENVIRONMENT`: Environment name (development, staging, production)
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the global central role
+- `ECR_IMAGE_URI`: Container image URI for Lambda deployment
+
+**Security Note**: Never commit the `.env` file to version control. It's included in `.gitignore`.
+
 #### Direct Python Execution
 
 First, install dependencies locally:
@@ -27,14 +58,10 @@ pip3 install --user -r requirements.txt
 ```
 
 **SQS Polling Mode** (polls live queue for messages):
-> Note: Replace `XXXXXXXX` with the actual 8-character RandomSuffix from your CloudFormation stack deployment.
 ```bash
 cd container/
-export AWS_PROFILE=YOUR_AWS_PROFILE
-export AWS_REGION=YOUR_AWS_REGION
-export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
-export SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue
+# Source environment variables from .env file
+source ../.env
 
 python3 log_processor.py --mode sqs
 ```
@@ -42,10 +69,8 @@ python3 log_processor.py --mode sqs
 **Manual Mode** (test with sample S3 event):
 ```bash
 cd container/
-export AWS_PROFILE=YOUR_AWS_PROFILE
-export AWS_REGION=YOUR_AWS_REGION
-export TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs
-export CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX
+# Source environment variables from .env file
+source ../.env
 
 # Test with sample S3 event
 echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
@@ -64,32 +89,38 @@ podman build -f Containerfile.processor -t log-processor:latest .
 
 **Option 1: AWS Profile with Volume Mount**
 ```bash
+# Source environment variables
+source .env
+
 podman run --rm \
-  -e AWS_PROFILE=YOUR_AWS_PROFILE \
-  -e AWS_REGION=YOUR_AWS_REGION \
-  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
-  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
-  -e EXECUTION_MODE=sqs \
+  -e AWS_PROFILE="$AWS_PROFILE" \
+  -e AWS_REGION="$AWS_REGION" \
+  -e SQS_QUEUE_URL="$SQS_QUEUE_URL" \
+  -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
+  -e EXECUTION_MODE="$EXECUTION_MODE" \
   -v ~/.aws:/home/logprocessor/.aws:ro \
   log-processor:latest
 ```
 
 **Option 2: AWS Credentials via Environment Variables**
 ```bash
+# Source environment variables
+source .env
+
 # Extract credentials (do not save these in files!)
-export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile YOUR_AWS_PROFILE)
-export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile YOUR_AWS_PROFILE)
+export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile "$AWS_PROFILE")
+export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile "$AWS_PROFILE")
 
 # Run container with explicit credentials
 podman run --rm \
   -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-  -e AWS_REGION=YOUR_AWS_REGION \
-  -e SQS_QUEUE_URL=https://sqs.YOUR_AWS_REGION.amazonaws.com/AWS_ACCOUNT_ID/multi-tenant-logging-development-log-delivery-queue \
-  -e TENANT_CONFIG_TABLE=multi-tenant-logging-development-tenant-configs \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=arn:aws:iam::AWS_ACCOUNT_ID:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
-  -e EXECUTION_MODE=sqs \
+  -e AWS_REGION="$AWS_REGION" \
+  -e SQS_QUEUE_URL="$SQS_QUEUE_URL" \
+  -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
+  -e EXECUTION_MODE="$EXECUTION_MODE" \
   log-processor:latest
 ```
 
@@ -127,6 +158,45 @@ podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:l
 ```
 
 ### Infrastructure Management
+
+#### Regional Deployment Workflow
+
+The regional deployment model requires deploying in a specific order:
+
+```bash
+# Source environment variables
+source .env
+
+# 1. Deploy global infrastructure (one-time per AWS account)
+./cloudformation/deploy.sh -t global
+
+# Capture the global role ARN for regional deployments
+CENTRAL_ROLE_ARN=$(aws cloudformation describe-stacks \
+  --stack-name multi-tenant-logging-global \
+  --query 'Stacks[0].Outputs[?OutputKey==`CentralLogDistributionRoleArn`].OutputValue' \
+  --output text)
+
+# 2. Deploy regional core infrastructure only (no SQS or Lambda)
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_ROLE_ARN"
+
+# 3. Deploy regional with SQS stack for external processing
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_ROLE_ARN" --include-sqs
+
+# 4. Deploy regional with both SQS and Lambda container-based processing
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_ROLE_ARN" \
+  --include-sqs --include-lambda --ecr-image-uri "$ECR_IMAGE_URI"
+
+# 5. Deploy cluster IAM roles for IRSA (optional)
+./cloudformation/deploy.sh -t cluster \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+```
+
+#### Kubernetes/OpenShift Deployment
+
 ```bash
 # Deploy Vector to Kubernetes/OpenShift using Kustomize
 kubectl create namespace logging
@@ -139,26 +209,28 @@ kubectl apply -k k8s/collector/overlays/development
 
 # Deploy log processor to Kubernetes/OpenShift
 kubectl apply -k k8s/processor/overlays/development
-
-# Deploy core infrastructure only (no SQS or Lambda)
-./cloudformation/deploy.sh -b TEMPLATE_BUCKET
-
-# Deploy with SQS stack for external processing
-./cloudformation/deploy.sh -b TEMPLATE_BUCKET --include-sqs
-
-# Deploy with both SQS and Lambda container-based processing
-./cloudformation/deploy.sh -b TEMPLATE_BUCKET --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 ```
 
 ### Customer Onboarding
+
+Customers deploy cross-account roles in their AWS accounts to enable log delivery:
+
 ```bash
-# Customer deploys their logging infrastructure
-aws cloudformation create-stack \
-  --stack-name customer-logging-infrastructure \
-  --template-body file://cloudformation/customer-log-distribution-role.yaml \
-  --parameters ParameterKey=CentralLogDistributionRoleArn,ParameterValue=arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX \
-               ParameterKey=LogRetentionDays,ParameterValue=90 \
-  --capabilities CAPABILITY_NAMED_IAM
+# Customer deploys their log distribution role using the deploy script
+./cloudformation/deploy.sh -t customer \
+  --central-role-arn arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX
+
+# Alternative: Multi-region customer deployment
+for region in us-east-2 us-west-2 eu-west-1; do
+  ./cloudformation/deploy.sh -t customer -r $region \
+    --central-role-arn arn:aws:iam::CENTRAL-ACCOUNT:role/ROSA-CentralLogDistributionRole-XXXXXXXX
+done
+
+# Customer provides role ARN back to logging service provider
+aws cloudformation describe-stacks \
+  --stack-name multi-tenant-logging-customer-us-east-2 \
+  --query 'Stacks[0].Outputs[?OutputKey==`CustomerLogDistributionRoleArn`].OutputValue' \
+  --output text
 ```
 
 ### Testing and Validation
@@ -256,9 +328,19 @@ The system consists of 5 main stages with flexible processing options:
 
 ### Component Architecture
 
-- **Core Infrastructure**: S3, DynamoDB, SNS, IAM roles (always deployed)
-- **SQS Stack**: Optional SQS queue and DLQ for message processing
-- **Lambda Stack**: Optional container-based Lambda function for serverless processing
+The regional deployment model organizes infrastructure into four deployment types:
+
+- **Global Infrastructure**: Central log distribution role (deployed once per AWS account)
+  - `global/central-log-distribution-role.yaml`: Cross-account IAM role
+- **Regional Infrastructure**: Per-region core resources
+  - `regional/core-infrastructure.yaml`: S3, DynamoDB, SNS, IAM roles
+  - `regional/sqs-stack.yaml`: Optional SQS queue and DLQ for message processing  
+  - `regional/lambda-stack.yaml`: Optional container-based Lambda function for serverless processing
+- **Customer Infrastructure**: Customer-deployed cross-account roles
+  - `customer/customer-log-distribution-role.yaml`: Regional customer roles
+- **Cluster Infrastructure**: Cluster-specific IRSA roles
+  - `cluster/cluster-vector-role.yaml`: Vector IAM role for log collection
+  - `cluster/cluster-processor-role.yaml`: Processor IAM role for log processing
 - **Container**: Unified Python processor supporting Lambda, SQS polling, and manual modes
 
 ## Key Components
@@ -312,12 +394,30 @@ The system consists of 5 main stages with flexible processing options:
 
 ## Security Model
 
-The system uses a double-hop role assumption architecture for cross-account access:
-- Lambda/Container execution role in central account (assumes central log distribution role)
-- Central log distribution role in central account (assumes customer roles)
-- Customer-specific "log distribution" roles in customer accounts
-- ExternalId validation for additional security
-- Two-step role assumption provides security boundaries and audit trail
+The regional deployment model implements a secure double-hop role assumption architecture for cross-account access:
+
+### Role Hierarchy and Access Chain
+```
+Regional Processor → Global Central Role → Customer Regional Role → CloudWatch Logs
+```
+
+1. **Regional Processor Role**: Lambda or container execution role in regional infrastructure
+2. **Global Central Role**: `ROSA-CentralLogDistributionRole-{suffix}` deployed once globally
+3. **Customer Regional Role**: `CustomerLogDistribution-{region}` deployed per customer per region
+4. **CloudWatch Logs**: Target destination in customer account
+
+### Security Features
+- **ExternalId Validation**: Customer roles require ExternalId matching central account ID
+- **Regional Isolation**: Customer roles scoped to specific AWS regions
+- **Double-Hop Access**: Two-step role assumption provides security boundaries and audit trail
+- **Least Privilege**: Minimal permissions with resource-specific restrictions
+- **IRSA Integration**: Kubernetes service accounts use IAM Roles for Service Accounts
+
+### Regional Security Benefits
+- **Isolated Permissions**: Each regional customer role only grants access to that region's CloudWatch Logs
+- **Independent Trust Policies**: Customer roles can be managed independently per region
+- **Compliance Support**: Supports data residency requirements through regional role deployment
+- **Fault Isolation**: Security issues in one region don't affect others
 
 ## Vector Authentication Configuration
 
@@ -346,20 +446,46 @@ auth:
 
 ## Environment Variables
 
+The project uses a `.env` file for centralized configuration management. All environment variables can be sourced from this file:
+
+### AWS Configuration
+- `AWS_PROFILE`: Your AWS CLI profile name
+- `AWS_REGION`: Target AWS region for deployment
+- `AWS_ACCOUNT_ID`: Your AWS account ID
+- `AWS_ACCESS_KEY_ID`: AWS access key (optional, prefer AWS_PROFILE)
+- `AWS_SECRET_ACCESS_KEY`: AWS secret key (optional, prefer AWS_PROFILE)
+
+### Infrastructure Configuration
+- `TEMPLATE_BUCKET`: S3 bucket for CloudFormation templates
+- `ENVIRONMENT`: Environment name (development, staging, production)
+- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the global central role
+- `ECR_IMAGE_URI`: Container image URI for Lambda deployment
+
 ### Container/Lambda Function
 - `EXECUTION_MODE`: Mode of operation (`lambda`, `sqs`, `manual`)
 - `TENANT_CONFIG_TABLE`: DynamoDB table for tenant configurations
 - `MAX_BATCH_SIZE`: Maximum events per CloudWatch Logs batch (default: 1000)
 - `RETRY_ATTEMPTS`: Number of retry attempts for failed operations (default: 3)
-- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the central log distribution role for double-hop access
 - `SQS_QUEUE_URL`: URL of the SQS queue (for SQS polling mode)
-- `AWS_REGION`: AWS region for services
 
 ### Vector ConfigMap
-- `AWS_REGION`: AWS region for S3 bucket
 - `S3_BUCKET_NAME`: Name of the central S3 bucket
 - `S3_WRITER_ROLE_ARN`: ARN of the S3 writer role
 - `CLUSTER_ID`: Cluster identifier for log metadata
+
+### Usage Example
+```bash
+# Copy and configure environment file
+cp .env.sample .env
+vim .env  # Edit with your values
+
+# Source variables for current session
+source .env
+
+# Use variables in commands
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN"
+```
 
 ## Cost Optimization
 
@@ -419,46 +545,83 @@ The architecture prioritizes cost efficiency:
 
 ## Deployment Patterns
 
-### Core Infrastructure Only
+The regional deployment model supports multiple deployment patterns with proper dependency management:
+
+### Global + Regional Core Infrastructure Only
 ```bash
-# Deploy just S3, DynamoDB, SNS, IAM - use external processing
-./cloudformation/deploy.sh
+# Source environment variables
+source .env
+
+# Deploy global infrastructure (one-time)
+./cloudformation/deploy.sh -t global
+
+# Deploy regional core only - use external processing
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN"
 ```
 
-### SQS-based Processing
+### Regional SQS-based Processing
 ```bash
-# Deploy core + SQS for external consumers
-./cloudformation/deploy.sh --include-sqs
+# Source environment variables
+source .env
+
+# Deploy global + regional + SQS for external consumers
+./cloudformation/deploy.sh -t global
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" --include-sqs
 
 # Option 1: Run external processor with podman
-podman run -e SQS_QUEUE_URL=... -e EXECUTION_MODE=sqs log-processor:latest
+podman run -e SQS_QUEUE_URL="$SQS_QUEUE_URL" -e EXECUTION_MODE=sqs log-processor:latest
 
 # Option 2: Deploy processor to Kubernetes/OpenShift
 # First, create processor IAM role:
-aws cloudformation create-stack \
-  --stack-name processor-role-CLUSTER_NAME \
-  --template-body file://cloudformation/cluster-processor-role.yaml \
-  --parameters ... \
-  --capabilities CAPABILITY_NAMED_IAM
+./cloudformation/deploy.sh -t cluster \
+  --cluster-name CLUSTER_NAME \
+  --oidc-provider OIDC_PROVIDER_URL
 
 # Then deploy to Kubernetes:
 kubectl apply -k k8s/processor/overlays/development
 ```
 
-### Lambda Container Processing
+### Regional Lambda Container Processing
 ```bash
-# Build containers
+# Source environment variables
+source .env
+
+# Build and push containers
 cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
 podman build -f Containerfile.processor -t log-processor:latest .
 
 # Push to ECR
-aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
-podman tag log-processor:latest ECR_URI/log-processor:latest
-podman push ECR_URI/log-processor:latest
+aws ecr get-login-password --region "$AWS_REGION" | \
+  podman login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+podman tag log-processor:latest "$ECR_IMAGE_URI"
+podman push "$ECR_IMAGE_URI"
 
-# Deploy with Lambda
-./cloudformation/deploy.sh --include-sqs --include-lambda --ecr-image-uri ECR_URI/log-processor:latest
+# Deploy global + regional + SQS + Lambda
+./cloudformation/deploy.sh -t global
+./cloudformation/deploy.sh -t regional -b "$TEMPLATE_BUCKET" \
+  --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
+  --include-sqs --include-lambda --ecr-image-uri "$ECR_IMAGE_URI"
+```
+
+### Multi-Region Deployment
+```bash
+# Source environment variables
+source .env
+
+# Deploy global infrastructure once
+./cloudformation/deploy.sh -t global
+
+# Deploy to multiple regions
+for region in us-east-2 us-west-2 eu-west-1; do
+  ./cloudformation/deploy.sh -t regional -r $region \
+    -b "templates-bucket-$region" \
+    --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
+    --include-sqs --include-lambda \
+    --ecr-image-uri "${AWS_ACCOUNT_ID}.dkr.ecr.${region}.amazonaws.com/log-processor:latest"
+done
 ```
 
 ## Container Execution Modes

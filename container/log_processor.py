@@ -196,10 +196,10 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
                 continue
             
             # Download and process the log file
-            log_events = download_and_process_log_file(bucket_name, object_key)
+            log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
             
             # Deliver logs to customer account
-            deliver_logs_to_customer(log_events, tenant_config, tenant_info)
+            deliver_logs_to_customer(log_events, tenant_config, tenant_info, s3_timestamp)
             
     except Exception as e:
         logger.error(f"Error processing SQS record: {str(e)}")
@@ -296,14 +296,20 @@ def should_process_application(tenant_config: Dict[str, Any], application_name: 
     
     return should_process
 
-def download_and_process_log_file(bucket_name: str, object_key: str) -> List[Dict[str, Any]]:
+def download_and_process_log_file(bucket_name: str, object_key: str) -> tuple[List[Dict[str, Any]], int]:
     """
     Download log file from S3 and extract log events
+    Returns tuple of (log_events, s3_timestamp_ms)
     """
     try:
         s3_client = boto3.client('s3', region_name=AWS_REGION)
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         file_content = response['Body'].read()
+        
+        # Extract S3 object timestamp for more accurate fallback timestamp
+        s3_last_modified = response['LastModified']
+        s3_timestamp_ms = int(s3_last_modified.timestamp() * 1000)
+        logger.info(f"S3 object timestamp: {s3_last_modified} ({s3_timestamp_ms}ms)")
         
         logger.info(f"Downloaded file size: {len(file_content)} bytes (compressed)")
         
@@ -316,7 +322,8 @@ def download_and_process_log_file(bucket_name: str, object_key: str) -> List[Dic
         sample = file_content[:500].decode('utf-8', errors='replace')
         logger.info(f"File content sample (first 500 chars): {sample}")
         
-        return process_json_file(file_content)
+        log_events = process_json_file(file_content)
+        return log_events, s3_timestamp_ms
         
     except Exception as e:
         logger.error(f"Failed to download/process file s3://{bucket_name}/{object_key}: {str(e)}")
@@ -446,7 +453,8 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
 def deliver_logs_to_customer(
     log_events: List[Dict[str, Any]], 
     tenant_config: Dict[str, Any],
-    tenant_info: Dict[str, str]
+    tenant_info: Dict[str, str],
+    s3_timestamp: int
 ) -> None:
     """
     Deliver log events to customer's CloudWatch Logs using Vector with double-hop cross-account role assumption
@@ -486,7 +494,7 @@ def deliver_logs_to_customer(
         
         # Prepare log group and stream names
         log_group_name = tenant_config['log_group_name']
-        log_stream_name = f"{tenant_info['application']}-{tenant_info['pod_name']}-{datetime.now().strftime('%Y-%m-%d')}"
+        log_stream_name = tenant_info['pod_name']
         
         # Use Vector to deliver logs
         deliver_logs_with_vector(
@@ -495,7 +503,8 @@ def deliver_logs_to_customer(
             region=tenant_config['target_region'],
             log_group=log_group_name,
             log_stream=log_stream_name,
-            session_id=session_id
+            session_id=session_id,
+            s3_timestamp=s3_timestamp
         )
         
         logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} using Vector")
@@ -510,7 +519,8 @@ def deliver_logs_with_vector(
     region: str,
     log_group: str,
     log_stream: str,
-    session_id: str
+    session_id: str,
+    s3_timestamp: int
 ) -> None:
     """
     Use Vector subprocess to deliver logs to CloudWatch
@@ -595,12 +605,20 @@ def deliver_logs_with_vector(
         
         # Send all events as one write to avoid BrokenPipe issues
 
-        # Send only the message content to Vector, not the full event structure
+        # Send JSON objects to Vector, each on a separate line (NDJSON format)
         all_events = ""
+        timestamp = s3_timestamp
         for event in log_events:
-            # Extract just the message content
+            # Extract just the message content and create a simple JSON object
             message = event.get('message', '')
-            all_events += message + '\n'
+            timestamp = event.get('timestamp', timestamp)
+            
+            # Create simple JSON object for Vector
+            json_event = {
+                'message': message,
+                'timestamp': timestamp
+            }
+            all_events += json.dumps(json_event) + '\n'
         
         # Use communicate to send input and wait for completion
         logger.info("Waiting for Vector to complete log delivery")

@@ -24,8 +24,8 @@ Resources:
   CustomerLogDistributionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: 'CustomerLogDistribution'
-      Description: 'Customer-side role for cross-account log delivery'
+      RoleName: !Sub 'CustomerLogDistribution-${AWS::Region}'
+      Description: !Sub 'Customer-side role for cross-account log delivery in ${AWS::Region}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

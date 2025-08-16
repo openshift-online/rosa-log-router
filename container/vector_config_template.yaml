@@ -14,7 +14,8 @@ sinks:
     group_name: "{log_group}"
     stream_name: "{log_stream}"
     encoding:
-      codec: "json"
+      codec: "text"
+      only_fields: ["message"]
     auth:
       access_key_id: "{access_key_id}"
       secret_access_key: "{secret_access_key}"

@@ -266,36 +266,154 @@ The security model remains robust. The primary change is in the permissions requ
 
 ### **6.1. Infrastructure as Code Implementation**
 
-The multi-tenant logging architecture has been fully implemented using AWS CloudFormation with a modular nested stack approach, providing a complete Infrastructure as Code (IaC) solution. The implementation uses a flexible, container-based architecture with three main deployment options:
+The multi-tenant logging architecture has been fully implemented using AWS CloudFormation with a regional deployment model, providing a complete Infrastructure as Code (IaC) solution. The implementation is organized into four deployment types that support multi-region, scalable infrastructure:
 
-* **Main Template** (`main.yaml`): Orchestrates the entire deployment with parameter management and conditional stack inclusion
-* **Core Infrastructure** (`core-infrastructure.yaml`): Deploys foundational resources including S3, DynamoDB, KMS, IAM roles, and native S3 event notifications
-* **SQS Stack** (`sqs-stack.yaml`): Optional SQS queue infrastructure for message processing
-* **Lambda Stack** (`lambda-stack.yaml`): Optional container-based Lambda functions using ECR images for log processing
+#### **Regional Deployment Architecture**
+
+The CloudFormation infrastructure is organized into separate deployment types that can be deployed independently:
+
+* **Global Templates** (`global/`): One-time deployment creating central cross-account IAM role
+  * `central-log-distribution-role.yaml`: Creates the central log distribution role for cross-account access
+* **Regional Templates** (`regional/`): Per-region infrastructure deployment
+  * `main.yaml`: Orchestrates regional deployment with parameter management and conditional stack inclusion
+  * `core-infrastructure.yaml`: Deploys foundational resources including S3, DynamoDB, KMS, IAM roles, and native S3 event notifications
+  * `sqs-stack.yaml`: Optional SQS queue infrastructure for message processing
+  * `lambda-stack.yaml`: Optional container-based Lambda functions using ECR images for log processing
+* **Customer Templates** (`customer/`): Customer-deployed roles for cross-account log delivery
+  * `customer-log-distribution-role.yaml`: Creates customer-side IAM role with regional naming
+* **Cluster Templates** (`cluster/`): Cluster-specific IAM roles for IRSA integration
+  * `cluster-vector-role.yaml`: Vector IAM role for log collection
+  * `cluster-processor-role.yaml`: Processor IAM role for log processing
+
+This modular structure enables independent deployment, regional scaling, and flexible processing options while maintaining security and operational simplicity.
 
 ### **6.1.1. Modular Deployment Architecture**
 
-The CloudFormation implementation supports three deployment patterns to accommodate different processing requirements:
+The CloudFormation implementation supports four deployment types with multiple configuration options:
 
-#### **Core Infrastructure Only**
+#### **Global Deployment (One-time)**
 ```bash
-./cloudformation/deploy.sh -b templates-bucket
+./cloudformation/deploy.sh -t global
 ```
-Deploys only S3, DynamoDB, SNS, and IAM resources. Suitable for external log processing systems.
+Deploys the central log distribution role that enables cross-account access across all regions. This must be deployed first and only once per AWS account.
 
-#### **Core + SQS Processing**
+#### **Regional Core Infrastructure**
 ```bash
-./cloudformation/deploy.sh -b templates-bucket --include-sqs
+./cloudformation/deploy.sh -t regional -b templates-bucket \
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
+```
+Deploys S3, DynamoDB, SNS, and IAM resources in a specific region. Suitable for external log processing systems.
+
+#### **Regional + SQS Processing**
+```bash
+./cloudformation/deploy.sh -t regional -b templates-bucket \
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 \
+  --include-sqs
 ```
 Adds SQS queue and DLQ for message buffering. Enables external applications to poll for log processing events.
 
-#### **Full Container-Based Processing**
+#### **Full Regional Container-Based Processing**
 ```bash
-./cloudformation/deploy.sh -b templates-bucket --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+./cloudformation/deploy.sh -t regional -b templates-bucket \
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 \
+  --include-sqs --include-lambda \
+  --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
 ```
 Complete serverless processing using container-based Lambda functions with ECR image deployment.
 
-### **6.1.2. Container-Based Lambda Architecture**
+#### **Customer Role Deployment**
+```bash
+./cloudformation/deploy.sh -t customer \
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
+```
+Customers deploy this in their AWS accounts to enable log delivery. Role names include the region for proper isolation.
+
+#### **Cluster IRSA Role Deployment**
+```bash
+./cloudformation/deploy.sh -t cluster \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+```
+Deploys cluster-specific IAM roles for Vector and processor service accounts using IRSA.
+
+### **6.1.2. Regional Deployment Architecture and Dependencies**
+
+The regional deployment model implements a hierarchical infrastructure pattern that supports multi-region scalability while maintaining security and operational simplicity:
+
+#### **Deployment Hierarchy**
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Global    │    │  Regional   │    │  Customer   │    │  Cluster    │
+│             │    │             │    │             │    │             │
+│ Central IAM │───▶│Core Infra-  │───▶│Cross-Account│    │Cluster IAM  │
+│ Role        │    │structure    │    │Roles        │    │Roles (IRSA) │
+│             │    │S3, DynamoDB │    │             │    │             │
+│(Deploy Once │    │SNS, Optional│    │(Per Customer│    │(Per Cluster)│
+│   Global)   │    │SQS, Lambda) │    │   Region)   │    │             │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+```
+
+#### **Deployment Dependencies and Order**
+
+1. **Global Deployment** (Prerequisites: None)
+   - Creates central log distribution role: `ROSA-CentralLogDistributionRole-{suffix}`
+   - Enables cross-account access to customer roles globally
+   - **Stack Name**: `multi-tenant-logging-global`
+   - **Deployed Once**: Per AWS account (not per region)
+
+2. **Regional Deployment** (Prerequisites: Global role ARN)
+   - Creates regional infrastructure: S3, DynamoDB, SNS, optional SQS/Lambda
+   - References global role ARN via parameter
+   - **Stack Name**: `multi-tenant-logging-{environment}-{region}`
+   - **Deployed Per**: Target region
+
+3. **Customer Deployment** (Prerequisites: Global role ARN)
+   - Creates customer-side role with regional naming: `CustomerLogDistribution-{region}`
+   - Trusts global central role with ExternalId validation
+   - **Stack Name**: `multi-tenant-logging-customer-{region}`
+   - **Deployed Per**: Customer account, per region
+
+4. **Cluster Deployment** (Prerequisites: OIDC provider setup)
+   - Creates IRSA roles for Vector and processor service accounts
+   - Integrates with regional infrastructure via role ARNs
+   - **Stack Name**: `multi-tenant-logging-cluster-{cluster-name}`
+   - **Deployed Per**: Kubernetes/OpenShift cluster
+
+#### **Cross-Account Security Model**
+
+The regional architecture maintains a secure double-hop role assumption pattern:
+
+```
+Regional Processor → Global Central Role → Customer Regional Role → CloudWatch Logs
+```
+
+**Security Features**:
+- **ExternalId Validation**: Prevents confused deputy attacks
+- **Regional Isolation**: Customer roles scoped to specific regions
+- **Least Privilege**: Minimal permissions with resource-specific restrictions
+- **Audit Trail**: All role assumptions logged via CloudTrail
+
+#### **Regional Scaling Benefits**
+
+- **Independent Regional Operation**: Each region operates independently
+- **Regional Fault Isolation**: Issues in one region don't affect others
+- **Cost Optimization**: Resources deployed only where needed
+- **Compliance**: Supports data residency requirements per region
+- **Gradual Rollout**: New regions can be added incrementally
+
+#### **Stack Naming Conventions**
+
+The regional model uses consistent, predictable stack naming:
+
+| Deployment Type | Stack Name Pattern | Example |
+|----------------|-------------------|---------|
+| Global | `{project}-global` | `multi-tenant-logging-global` |
+| Regional | `{project}-{env}-{region}` | `multi-tenant-logging-production-us-east-2` |
+| Customer | `{project}-customer-{region}` | `multi-tenant-logging-customer-us-east-2` |
+| Cluster | `{project}-cluster-{cluster}` | `multi-tenant-logging-cluster-my-cluster` |
+
+### **6.1.3. Container-Based Lambda Architecture**
 
 The log processing component has been redesigned as a unified, container-based solution that supports multiple execution modes:
 
@@ -503,34 +621,59 @@ The Vector deployment on Kubernetes/OpenShift uses Kustomize for flexible, envir
 #### **Kustomize Structure**
 ```
 k8s/
-├── base/
-│   ├── kustomization.yaml
-│   ├── vector-config.yaml
-│   ├── vector-daemonset.yaml
-│   ├── vector-namespace.yaml
-│   └── vector-serviceaccount.yaml
-└── overlays/
-    └── production/
-        ├── kustomization.yaml
-        └── vector-config-patch.yaml
+├── collector/          # Vector log collector (DaemonSet)
+│   ├── base/          # Base Kubernetes resources
+│   ├── openshift-base/# OpenShift-specific (includes SCC)
+│   └── overlays/      # Environment-specific patches
+│       ├── development/
+│       └── production/
+└── processor/          # Log processor (Deployment)
+    ├── base/          # Base Kubernetes resources
+    ├── openshift-base/# OpenShift-specific (includes SCC)
+    └── overlays/      # Environment-specific patches
+        ├── development/
+        └── production/
 ```
 
 #### **Deployment Commands**
 ```bash
-# Deploy to development (uses base configuration)
-kubectl apply -k k8s/base/
+# Deploy Vector collector to development (uses base configuration)
+kubectl apply -k k8s/collector/base/
 
-# Deploy to production (applies production overlays)
-kubectl apply -k k8s/overlays/production/
+# Deploy Vector collector to production (applies production overlays)
+kubectl apply -k k8s/collector/overlays/production/
+
+# Deploy log processor to development
+kubectl apply -k k8s/processor/base/
+
+# Deploy log processor to production
+kubectl apply -k k8s/processor/overlays/production/
 
 # Preview changes before applying
-kubectl kustomize k8s/base/
+kubectl kustomize k8s/collector/base/
+kubectl kustomize k8s/processor/base/
 ```
 
 ### **6.8. Complete Deployment Workflow**
 
-#### **Full System Deployment**
-1. **Build and Push Containers:**
+#### **Regional Deployment Workflow**
+
+The regional deployment model requires a specific deployment order to establish proper dependencies:
+
+1. **Deploy Global Infrastructure (One-time):**
+   ```bash
+   cd cloudformation/
+   # Deploy central log distribution role (one-time per AWS account)
+   ./deploy.sh -t global
+   
+   # Capture the role ARN for regional deployments
+   CENTRAL_ROLE_ARN=$(aws cloudformation describe-stacks \
+     --stack-name multi-tenant-logging-global \
+     --query 'Stacks[0].Outputs[?OutputKey==`CentralLogDistributionRoleArn`].OutputValue' \
+     --output text)
+   ```
+
+2. **Build and Push Containers (if using Lambda processing):**
    ```bash
    cd container/
    # Build collector container first (contains Vector)
@@ -539,40 +682,86 @@ kubectl kustomize k8s/base/
    podman build -f Containerfile.processor -t log-processor:latest .
    
    # Push to ECR
-   aws ecr get-login-password | podman login --username AWS --password-stdin ECR_URI
+   aws ecr get-login-password --region YOUR_REGION | podman login --username AWS --password-stdin ECR_URI
    podman tag log-processor:latest ECR_URI/log-processor:latest
    podman push ECR_URI/log-processor:latest
    ```
 
-2. **Deploy Infrastructure:**
+3. **Deploy Regional Infrastructure:**
    ```bash
    cd cloudformation/
-   ./deploy.sh --include-sqs --include-lambda --ecr-image-uri ECR_URI/log-processor:latest
+   # Deploy core + SQS + Lambda processing
+   ./deploy.sh -t regional -b templates-bucket \
+     --central-role-arn $CENTRAL_ROLE_ARN \
+     --include-sqs --include-lambda \
+     --ecr-image-uri ECR_URI/log-processor:latest
    ```
 
-3. **Deploy Vector with Kustomize:**
+4. **Customer Role Deployment (customers deploy in their accounts):**
+   ```bash
+   # Customers deploy this in their AWS accounts
+   ./deploy.sh -t customer --central-role-arn $CENTRAL_ROLE_ARN
+   
+   # Customers provide their role ARN back to logging service provider
+   CUSTOMER_ROLE_ARN=$(aws cloudformation describe-stacks \
+     --stack-name multi-tenant-logging-customer-us-east-2 \
+     --query 'Stacks[0].Outputs[?OutputKey==`CustomerLogDistributionRoleArn`].OutputValue' \
+     --output text)
+   ```
+
+5. **Cluster IAM Role Deployment (optional, for IRSA):**
+   ```bash
+   # Deploy Vector role for specific cluster
+   ./deploy.sh -t cluster \
+     --cluster-name my-cluster \
+     --oidc-provider oidc.op1.openshiftapps.com/abc123
+   ```
+
+6. **Deploy Vector with Kustomize:**
    ```bash
    # For development/testing
-   kubectl apply -k k8s/base/
+   kubectl apply -k k8s/collector/base/
    
    # For production with custom settings
-   kubectl apply -k k8s/overlays/production/
+   kubectl apply -k k8s/collector/overlays/production/
    
    # Verify deployment
    kubectl get pods -n logging
    kubectl logs -n logging daemonset/vector-logs
    ```
 
+#### **Multi-Region Deployment**
+For multi-region deployments, repeat steps 3-6 for each target region:
+
+```bash
+# Deploy to multiple regions
+for region in us-east-2 us-west-2 eu-west-1; do
+  # Deploy regional infrastructure
+  ./deploy.sh -t regional -r $region -b templates-bucket-$region \
+    --central-role-arn $CENTRAL_ROLE_ARN \
+    --include-sqs --include-lambda \
+    --ecr-image-uri $region.amazonaws.com/ECR_URI/log-processor:latest
+  
+  # Customers deploy regional roles in their accounts
+  ./deploy.sh -t customer -r $region --central-role-arn $CENTRAL_ROLE_ARN
+done
+```
+
 #### **Environment-Specific Deployments**
 ```bash
 # Development
-./deploy.sh -e development --include-sqs --ecr-image-uri ECR_URI
+./deploy.sh -t regional -e development -b templates-bucket \
+  --central-role-arn $CENTRAL_ROLE_ARN --include-sqs
 
 # Staging with full Lambda processing
-./deploy.sh -e staging --include-sqs --include-lambda --ecr-image-uri ECR_URI
+./deploy.sh -t regional -e staging -b templates-bucket \
+  --central-role-arn $CENTRAL_ROLE_ARN --include-sqs --include-lambda \
+  --ecr-image-uri ECR_URI/log-processor:latest
 
 # Production with enhanced monitoring
-./deploy.sh -e production --include-sqs --include-lambda --ecr-image-uri ECR_URI
+./deploy.sh -t regional -e production -b templates-bucket \
+  --central-role-arn $CENTRAL_ROLE_ARN --include-sqs --include-lambda \
+  --ecr-image-uri ECR_URI/log-processor:latest
 ```
 
 ### **6.9. Log Processing Architecture Details**
@@ -669,6 +858,48 @@ This change reflects the true purpose of the S3 bucket as a temporary staging ar
 - **Batch Processing:** Enhanced batch processing for high-volume scenarios
 
 The CloudFormation implementation provides a robust, scalable, and maintainable foundation for the multi-tenant logging architecture, significantly improving upon the original design through the use of native AWS capabilities, container-based processing, and comprehensive Infrastructure as Code best practices.
+
+## **Section 7: Implementation Documentation and Resources**
+
+### **7.1. Comprehensive Documentation Structure**
+
+The regional deployment model includes comprehensive documentation organized by deployment type:
+
+#### **Main Architecture Documentation**
+- **[CloudFormation Overview](cloudformation/README.md)** - Complete architecture overview, quick start guide, and deployment patterns
+- **[Development Guide](CLAUDE.md)** - Development commands, container management, and testing procedures
+
+#### **Deployment-Specific Documentation**
+- **[Global Deployment Guide](cloudformation/global/README.md)** - Central log distribution role deployment and management
+- **[Regional Deployment Guide](cloudformation/regional/README.md)** - Core infrastructure, processing options, and regional architecture
+- **[Customer Deployment Guide](cloudformation/customer/README.md)** - Customer-side role configuration and cross-account setup
+- **[Cluster Deployment Guide](cloudformation/cluster/README.md)** - IRSA setup, cluster integration, and service account configuration
+
+#### **Implementation Resources**
+- **[Container Documentation](container/README.md)** - Container builds, ECR deployment, and multi-mode execution
+- **[Kubernetes Manifests](k8s/README.md)** - Vector and processor deployment with Kustomize
+
+### **7.2. Getting Started Workflow**
+
+For new implementations, follow this workflow using the comprehensive documentation:
+
+1. **Architecture Understanding**: Start with [CloudFormation Overview](cloudformation/README.md) for complete architecture understanding
+2. **Global Setup**: Follow [Global Deployment Guide](cloudformation/global/README.md) for one-time central role creation
+3. **Regional Infrastructure**: Use [Regional Deployment Guide](cloudformation/regional/README.md) for per-region infrastructure
+4. **Customer Onboarding**: Direct customers to [Customer Deployment Guide](cloudformation/customer/README.md)
+5. **Cluster Integration**: Reference [Cluster Deployment Guide](cloudformation/cluster/README.md) for IRSA setup
+6. **Development**: Use [Development Guide](CLAUDE.md) for local development and testing
+
+### **7.3. Support and Troubleshooting**
+
+Each deployment guide includes:
+- **Prerequisites and validation steps**
+- **Common issues and solutions**
+- **Debugging commands and techniques**
+- **Cross-references to related documentation**
+- **Integration examples and workflows**
+
+For comprehensive troubleshooting across all deployment types, refer to the deployment-specific README files which include detailed troubleshooting sections and debugging procedures.
 
 #### **Works cited**
 
