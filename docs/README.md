@@ -156,12 +156,23 @@ graph TB
 
 ```
 ├── cloudformation/
-│   ├── main.yaml                          # Main CloudFormation orchestration template
-│   ├── core-infrastructure.yaml           # S3, DynamoDB, KMS, IAM resources
-│   ├── sqs-stack.yaml                     # Optional SQS queue and DLQ
-│   ├── lambda-stack.yaml                  # Optional container-based Lambda functions
-│   ├── customer-log-distribution-role.yaml # Customer account CloudFormation template
-│   ├── cluster-vector-role.yaml           # Cluster-specific Vector IAM role for OIDC
+│   ├── global/
+│   │   └── central-log-distribution-role.yaml  # Global central IAM role
+│   ├── regional/
+│   │   ├── main.yaml                       # Main regional orchestration template
+│   │   ├── core-infrastructure.yaml       # S3, DynamoDB, KMS, IAM resources
+│   │   ├── sqs-stack.yaml                 # Optional SQS queue and DLQ
+│   │   └── lambda-stack.yaml              # Optional container-based Lambda functions
+│   ├── customer/
+│   │   └── customer-log-distribution-role.yaml # Customer account CloudFormation template
+│   ├── cluster/
+│   │   ├── templates/                     # Jinja2 templates for dynamic generation
+│   │   │   ├── cluster-vector-role.yaml.j2    # Vector IAM role template
+│   │   │   └── cluster-processor-role.yaml.j2 # Processor IAM role template
+│   │   ├── rendered/                      # Generated CloudFormation templates
+│   │   ├── generate_templates.py          # Jinja2 template generator
+│   │   ├── requirements.txt               # Python dependencies for template generation
+│   │   └── README.md                      # Cluster template documentation
 │   ├── deploy.sh                          # CloudFormation deployment script with modular options
 │   └── README.md                          # CloudFormation-specific documentation
 ├── container/
@@ -293,18 +304,50 @@ The project uses Kustomize for flexible Kubernetes deployments with support for 
      --client-id-list openshift  # or "sts.amazonaws.com" for EKS
    ```
 
-3. **Deploy Cluster-Specific IAM Role**:
+3. **Deploy Cluster-Specific IAM Roles**:
+
+   **New Jinja2-Based Template System**: The cluster roles now use Jinja2 templates for dynamic OIDC provider URL substitution to solve CloudFormation YAML limitations.
+
    ```bash
+   # Deploy Vector collector role using the new template system
+   cd cloudformation/
+   ./deploy.sh -t cluster \
+     --cluster-template vector \
+     --cluster-name YOUR-CLUSTER \
+     --oidc-provider ${OIDC_URL} \
+     --oidc-audience openshift
+
+   # Deploy log processor role (if deploying processor to cluster)
+   ./deploy.sh -t cluster \
+     --cluster-template processor \
+     --cluster-name YOUR-CLUSTER \
+     --oidc-provider ${OIDC_URL} \
+     --oidc-audience openshift
+
+   # Deploy both roles in one command
+   ./deploy.sh -t cluster \
+     --cluster-template both \
+     --cluster-name YOUR-CLUSTER \
+     --oidc-provider ${OIDC_URL} \
+     --oidc-audience openshift
+   ```
+
+   **Legacy Manual Method** (deprecated):
+   ```bash
+   # Manual template generation and deployment (not recommended)
+   cd cloudformation/cluster/
+   python3 generate_templates.py vector \
+     --cluster-name YOUR-CLUSTER \
+     --oidc-provider ${OIDC_URL} \
+     --validate
+
    aws cloudformation create-stack \
      --stack-name vector-role-YOUR-CLUSTER \
-     --template-body file://cloudformation/cluster-vector-role.yaml \
+     --template-body file://cluster/rendered/cluster-vector-role.yaml \
      --parameters \
        ParameterKey=ClusterName,ParameterValue=YOUR-CLUSTER \
        ParameterKey=OIDCProviderURL,ParameterValue=${OIDC_URL} \
        ParameterKey=OIDCAudience,ParameterValue=openshift \
-       ParameterKey=ServiceAccountNamespace,ParameterValue=logging \
-       ParameterKey=ServiceAccountName,ParameterValue=vector-logs \
-       ParameterKey=VectorAssumeRolePolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/POLICY_FROM_CORE_STACK \
      --capabilities CAPABILITY_NAMED_IAM
    ```
 
@@ -472,6 +515,56 @@ aws cloudformation create-stack \
 
 This project uses CloudFormation for infrastructure deployment with a modular nested stack architecture providing comprehensive parameter management, validation, and rollback capabilities. See [cloudformation/README.md](../cloudformation/README.md) for detailed deployment documentation.
 
+### Jinja2 Template System for Cluster Roles
+
+**Problem Solved**: CloudFormation YAML has limitations when using intrinsic functions as keys in StringEquals conditions, which are required for OIDC provider URL substitution in IAM trust policies.
+
+**Solution**: A Jinja2-based template generation system that pre-processes templates with dynamic OIDC provider URLs before CloudFormation deployment.
+
+#### Template System Components
+
+1. **Jinja2 Templates** (`cloudformation/cluster/templates/`):
+   - `cluster-vector-role.yaml.j2`: Vector collector IAM role template
+   - `cluster-processor-role.yaml.j2`: Log processor IAM role template
+
+2. **Template Generator** (`cloudformation/cluster/generate_templates.py`):
+   - Python script that renders Jinja2 templates with provided parameters
+   - Automatic CloudFormation template validation
+   - Support for both individual and batch template generation
+
+3. **Deploy Integration** (`cloudformation/deploy.sh`):
+   - Automatic template generation with `--cluster-template` parameter
+   - Seamless integration with existing deployment workflow
+   - Parameter auto-resolution from regional stack outputs
+
+#### Usage Examples
+
+```bash
+# Generate and deploy Vector role
+./deploy.sh -t cluster --cluster-template vector \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+
+# Generate and deploy both roles
+./deploy.sh -t cluster --cluster-template both \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123
+
+# Manual template generation for testing
+cd cloudformation/cluster/
+python3 generate_templates.py both \
+  --cluster-name my-cluster \
+  --oidc-provider oidc.op1.openshiftapps.com/abc123 \
+  --validate
+```
+
+#### Template Validation
+
+The system includes automatic CloudFormation template validation:
+- Templates validated before deployment
+- Jinja2 dependency auto-installation
+- Clear error messages for template issues
+
 ### Recent Infrastructure Updates
 
 The CloudFormation templates have undergone major architectural improvements:
@@ -607,6 +700,16 @@ The infrastructure provides basic observability through AWS native services:
    - Review Vector batch settings
    - Check S3 lifecycle policies
    - Monitor CloudWatch billing alerts
+
+4. **Jinja2 template generation errors**
+   - Install jinja2: `pip3 install --user jinja2`
+   - Check template syntax in `cloudformation/cluster/templates/`
+   - Validate rendered templates: `aws cloudformation validate-template --template-body file://cluster/rendered/template.yaml`
+
+5. **Cluster role deployment issues**
+   - Verify OIDC provider exists in AWS IAM
+   - Check regional stack outputs for required ARNs
+   - Ensure cluster name matches OIDC provider configuration
 
 ### Debug Commands
 
