@@ -226,6 +226,11 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
                 # Get tenant configuration
                 tenant_config = get_tenant_configuration(tenant_info['tenant_id'])
                 
+                # Check if this tenant should be processed based on enabled status
+                if not should_process_tenant(tenant_config, tenant_info['tenant_id']):
+                    logger.info(f"Skipping processing for tenant '{tenant_info['tenant_id']}' because tenant is disabled")
+                    continue
+                
                 # Check if this application should be processed based on desired_logs filtering
                 if not should_process_application(tenant_config, tenant_info['application']):
                     logger.info(f"Skipping processing for application '{tenant_info['application']}' due to desired_logs filtering")
@@ -300,12 +305,14 @@ def get_tenant_configuration(tenant_id: str) -> Dict[str, Any]:
         
         config = response['Item']
         
-        # Log tenant configuration details including desired_logs if present
+        # Log tenant configuration details including desired_logs and enabled status
         desired_logs = config.get('desired_logs')
+        enabled = config.get('enabled', True)  # Default to True if not present for backward compatibility
+        
         if desired_logs:
-            logger.info(f"Retrieved config for tenant {tenant_id} with desired_logs filtering: {desired_logs}")
+            logger.info(f"Retrieved config for tenant {tenant_id} with desired_logs filtering: {desired_logs}, enabled: {enabled}")
         else:
-            logger.info(f"Retrieved config for tenant {tenant_id} (no desired_logs filtering - all applications will be processed)")
+            logger.info(f"Retrieved config for tenant {tenant_id} (no desired_logs filtering - all applications will be processed), enabled: {enabled}")
         
         return config
         
@@ -347,6 +354,26 @@ def should_process_application(tenant_config: Dict[str, Any], application_name: 
         logger.info(f"Application '{application_name}' is NOT in desired_logs list {desired_logs} - will skip processing")
     
     return should_process
+
+def should_process_tenant(tenant_config: Dict[str, Any], tenant_id: str) -> bool:
+    """
+    Check if the tenant should be processed based on tenant's enabled configuration
+    
+    Args:
+        tenant_config: Tenant configuration from DynamoDB
+        tenant_id: ID of the tenant
+    
+    Returns:
+        True if tenant should be processed, False if it should be filtered out
+    """
+    enabled = tenant_config.get('enabled', True)  # Default to True if not present
+    
+    if enabled:
+        logger.info(f"Tenant '{tenant_id}' is enabled - will process logs")
+    else:
+        logger.info(f"Tenant '{tenant_id}' is disabled - will skip processing")
+    
+    return enabled
 
 def download_and_process_log_file(bucket_name: str, object_key: str) -> tuple[List[Dict[str, Any]], int]:
     """
