@@ -487,6 +487,59 @@ source .env
   --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN"
 ```
 
+## DynamoDB Tenant Configuration
+
+The system uses a DynamoDB table to store tenant-specific configuration. The table supports the following fields:
+
+### Required Fields
+- `tenant_id` (String): Primary key identifier for the tenant
+- `log_distribution_role_arn` (String): ARN of the customer's IAM role for log delivery
+- `log_group_name` (String): CloudWatch Logs group name for log delivery  
+- `target_region` (String): AWS region where logs should be delivered
+
+### Optional Fields
+- `enabled` (Boolean): Enable/disable log processing for this tenant (defaults to `true`)
+- `desired_logs` (List): List of application names to process (case-insensitive, defaults to all apps)
+
+### Example Configuration
+```json
+{
+  "tenant_id": "acme-corp",
+  "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
+  "log_group_name": "/aws/logs/acme-corp",
+  "target_region": "us-east-1",
+  "enabled": true,
+  "desired_logs": ["payment-service", "user-service", "api-gateway"]
+}
+```
+
+### Managing Tenant Status
+- **Enable tenant**: Set `enabled` to `true` or remove the field entirely
+- **Disable tenant**: Set `enabled` to `false` to skip all log processing for this tenant
+- **Partial processing**: Use `desired_logs` to filter specific applications while tenant is enabled
+
+### Operational Commands
+```bash
+# Check tenant configuration
+aws dynamodb get-item \
+  --table-name multi-tenant-logging-development-tenant-configs \
+  --key '{"tenant_id":{"S":"TENANT_ID"}}'
+
+# Disable a tenant
+aws dynamodb update-item \
+  --table-name multi-tenant-logging-development-tenant-configs \
+  --key '{"tenant_id":{"S":"TENANT_ID"}}' \
+  --update-expression "SET enabled = :val" \
+  --expression-attribute-values '{":val":{"BOOL":false}}'
+
+# Enable a tenant
+aws dynamodb update-item \
+  --table-name multi-tenant-logging-development-tenant-configs \
+  --key '{"tenant_id":{"S":"TENANT_ID"}}' \
+  --update-expression "SET enabled = :val" \
+  --expression-attribute-values '{":val":{"BOOL":true}}'
+```
+
 ## Cost Optimization
 
 The architecture prioritizes cost efficiency:
@@ -510,6 +563,7 @@ The architecture prioritizes cost efficiency:
 - **Manual mode**: Check stdin input format (SNS message with S3 event)
 - Verify DynamoDB tenant configuration table (check KMS permissions)
 - Check cross-account role trust policies and ExternalId configuration
+- **Tenant not processing**: Check if tenant `enabled` field is set to `false` in DynamoDB
 - Ensure ECR image URI is correct (for Lambda deployment)
 - **Lambda Permissions Required**:
   - S3: GetObject, GetBucketLocation, ListBucket

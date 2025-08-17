@@ -586,6 +586,41 @@ Previous fixes included:
 
 ## Configuration
 
+### DynamoDB Tenant Configuration Schema
+
+The tenant configuration table in DynamoDB supports the following fields:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `tenant_id` | String | Yes | - | Primary key identifier for the tenant |
+| `log_distribution_role_arn` | String | Yes | - | ARN of the customer's IAM role for log delivery |
+| `log_group_name` | String | Yes | - | CloudWatch Logs group name for log delivery |
+| `target_region` | String | Yes | - | AWS region where logs should be delivered |
+| `desired_logs` | List | No | All apps | List of application names to process (case-insensitive) |
+| `enabled` | Boolean | No | `true` | Enable/disable log processing for this tenant |
+
+#### Example Tenant Configuration
+
+```json
+{
+  "tenant_id": "acme-corp",
+  "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
+  "log_group_name": "/aws/logs/acme-corp",
+  "target_region": "us-east-1",
+  "desired_logs": ["payment-service", "user-service", "api-gateway"],
+  "enabled": true
+}
+```
+
+#### Tenant Enablement Control
+
+The `enabled` field provides operational control over log processing:
+
+- **`enabled: true`** or **field missing**: Tenant logs are processed normally
+- **`enabled: false`**: All logs for this tenant are skipped, regardless of `desired_logs` configuration
+
+This allows administrators to quickly disable problematic or expensive tenants without deleting their configuration.
+
 ### Environment Variables
 
 The following environment variables can be configured:
@@ -701,12 +736,18 @@ The infrastructure provides basic observability through AWS native services:
    - Check S3 lifecycle policies
    - Monitor CloudWatch billing alerts
 
-4. **Jinja2 template generation errors**
+4. **Tenant logs not being processed**
+   - Check if tenant is enabled: `aws dynamodb get-item --table-name TENANT_CONFIG_TABLE --key '{"tenant_id":{"S":"TENANT_ID"}}'`
+   - Look for `enabled` field set to `false` in tenant configuration
+   - Verify tenant configuration exists and is complete
+   - Check CloudWatch logs for "tenant is disabled" messages
+
+5. **Jinja2 template generation errors**
    - Install jinja2: `pip3 install --user jinja2`
    - Check template syntax in `cloudformation/cluster/templates/`
    - Validate rendered templates: `aws cloudformation validate-template --template-body file://cluster/rendered/template.yaml`
 
-5. **Cluster role deployment issues**
+6. **Cluster role deployment issues**
    - Verify OIDC provider exists in AWS IAM
    - Check regional stack outputs for required ARNs
    - Ensure cluster name matches OIDC provider configuration

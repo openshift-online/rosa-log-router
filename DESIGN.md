@@ -199,6 +199,7 @@ Tenants can optionally include a `desired_logs` field in their DynamoDB configur
   "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
   "log_group_name": "/aws/logs/acme-corp",
   "target_region": "us-east-1",
+  "enabled": true,
   "desired_logs": ["payment-service", "user-service", "api-gateway"]
 }
 ```
@@ -207,6 +208,11 @@ Tenants can optionally include a `desired_logs` field in their DynamoDB configur
 
 The filtering logic operates as follows:
 
+**Tenant-Level Enablement:**
+* **`enabled: true` or field missing**: Tenant logs are processed normally (backward compatibility)
+* **`enabled: false`**: All logs for this tenant are skipped, regardless of other configuration
+
+**Application-Level Filtering (when tenant is enabled):**
 * **No `desired_logs` field**: All application logs are processed (full backward compatibility)
 * **`desired_logs` present**: Only applications listed in the array are processed
 * **Case-insensitive matching**: Application names are matched without regard to case for robustness
