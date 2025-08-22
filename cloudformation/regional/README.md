@@ -128,7 +128,6 @@ podman push 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
 |-----------|-------------|---------|
 | `CentralLogDistributionRoleArn` | ARN from [global deployment](../global/) | `arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234` |
 | `TemplateBucket` | S3 bucket for nested templates | `my-cloudformation-templates` |
-| `RandomSuffix` | Generated unique suffix | `abcd1234` (auto-generated) |
 
 ### Optional Parameters
 
@@ -143,12 +142,27 @@ podman push 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
 | `S3DeleteAfterDays` | S3 object retention | `7` | Lifecycle policy setting |
 | `EnableS3Encryption` | Enable S3 KMS encryption | `true` | Recommended for production |
 
+## Resource Naming Convention
+
+Regional resources use **deterministic naming** based on AWS built-in values for global uniqueness:
+
+- **S3 Bucket**: `${ProjectName}-${Environment}-${AWS::AccountId}-${AWS::Region}`
+  - Example: `multi-tenant-logging-development-123456789012-us-east-2`
+- **SNS Topic**: `${ProjectName}-${Environment}-log-delivery-${AWS::AccountId}-${AWS::Region}`
+- **DynamoDB Table**: `${ProjectName}-${Environment}-tenant-configs`
+- **IAM Roles**: `${ProjectName}-${Environment}-{role-purpose}-role`
+
+This approach provides:
+- **Global uniqueness** without requiring random suffixes
+- **Predictable names** for operations and debugging
+- **Self-documenting** resource identification (account, region, environment visible)
+
 ## Stack Outputs
 
 Regional deployments provide comprehensive outputs for integration with other deployment types:
 
 ### Core Outputs
-- **CentralLoggingBucketName**: S3 bucket for log storage
+- **CentralLoggingBucketName**: S3 bucket for log storage (named: `${ProjectName}-${Environment}-${AccountId}-${Region}`)
 - **TenantConfigTableName**: DynamoDB table for tenant configurations
 - **CentralLogDistributionRoleArn**: Passed-through global role ARN
 - **VectorRoleArn**: IAM role for Vector agents (if OIDC configured)

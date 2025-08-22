@@ -19,6 +19,10 @@ INCLUDE_SQS=false
 INCLUDE_LAMBDA=false
 ECR_IMAGE_URI=""
 CENTRAL_ROLE_ARN=""
+INCLUDE_API=false
+API_AUTH_SSM_PARAMETER=""
+AUTHORIZER_IMAGE_URI=""
+API_IMAGE_URI=""
 CLUSTER_NAME=""
 OIDC_PROVIDER=""
 OIDC_AUDIENCE="openshift"
@@ -73,6 +77,10 @@ OPTIONS:
     --include-sqs               Include SQS stack for log processing (regional only)
     --include-lambda            Include Lambda stack for container-based processing (regional only)
     --ecr-image-uri URI         ECR container image URI (required if --include-lambda)
+    --include-api               Include API stack for tenant management (regional only)
+    --api-auth-ssm-parameter    SSM parameter name for API PSK (required if --include-api)
+    --authorizer-image-uri URI  ECR URI for API authorizer container (required if --include-api)
+    --api-image-uri URI         ECR URI for API service container (required if --include-api)
     --dry-run                   Show what would be deployed without actually deploying
     --validate-only             Only validate templates without deploying
     -h, --help                  Display this help message
@@ -86,6 +94,9 @@ EXAMPLES:
 
     # Deploy regional with SQS and Lambda
     $0 -t regional -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --include-sqs --include-lambda --ecr-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
+
+    # Deploy regional with API management
+    $0 -t regional -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --include-api --api-auth-ssm-parameter /logging/api/psk --authorizer-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-authorizer:latest --api-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-api:latest
 
     # Deploy customer role
     $0 -t customer --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
@@ -166,6 +177,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ecr-image-uri)
             ECR_IMAGE_URI="$2"
+            shift 2
+            ;;
+        --include-api)
+            INCLUDE_API=true
+            shift
+            ;;
+        --api-auth-ssm-parameter)
+            API_AUTH_SSM_PARAMETER="$2"
+            shift 2
+            ;;
+        --authorizer-image-uri)
+            AUTHORIZER_IMAGE_URI="$2"
+            shift 2
+            ;;
+        --api-image-uri)
+            API_IMAGE_URI="$2"
             shift 2
             ;;
         --dry-run)
@@ -261,6 +288,22 @@ case "$DEPLOYMENT_TYPE" in
         if [[ "$INCLUDE_LAMBDA" == true ]]; then
             INCLUDE_SQS=true
             print_status "Auto-enabling SQS stack since Lambda stack requires it."
+        fi
+        
+        # Validate API requirements
+        if [[ "$INCLUDE_API" == true ]]; then
+            if [[ -z "$API_AUTH_SSM_PARAMETER" ]]; then
+                print_error "API auth SSM parameter is required when --include-api is specified. Use --api-auth-ssm-parameter option."
+                exit 1
+            fi
+            if [[ -z "$AUTHORIZER_IMAGE_URI" ]]; then
+                print_error "Authorizer image URI is required when --include-api is specified. Use --authorizer-image-uri option."
+                exit 1
+            fi
+            if [[ -z "$API_IMAGE_URI" ]]; then
+                print_error "API image URI is required when --include-api is specified. Use --api-image-uri option."
+                exit 1
+            fi
         fi
         ;;
     customer)
@@ -437,6 +480,11 @@ upload_templates() {
         templates+=("lambda-stack.yaml")
     fi
     
+    # Add API stack if requested
+    if [[ "$INCLUDE_API" == true ]]; then
+        templates+=("api-stack.yaml")
+    fi
+    
     print_status "Uploading nested templates to S3..."
     
     for template in "${templates[@]}"; do
@@ -476,6 +524,11 @@ validate_templates() {
             # Add Lambda stack if requested
             if [[ "$INCLUDE_LAMBDA" == true ]]; then
                 templates+=("lambda-stack.yaml")
+            fi
+            
+            # Add API stack if requested
+            if [[ "$INCLUDE_API" == true ]]; then
+                templates+=("api-stack.yaml")
             fi
             ;;
         customer)
@@ -742,14 +795,7 @@ deploy_stack() {
                 local existing_params=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Parameters' --output json 2>/dev/null || echo '[]')
                 
                 # Use jq for parameter extraction (required)
-                local random_suffix_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="RandomSuffix") | .ParameterValue // empty')
                 local template_bucket_existing=$(echo "$existing_params" | jq -r '.[] | select(.ParameterKey=="TemplateBucket") | .ParameterValue // empty')
-                
-                # Use existing RandomSuffix if it exists, otherwise generate new one
-                if [[ -n "$random_suffix_existing" ]]; then
-                    random_suffix="$random_suffix_existing"
-                    print_status "Using existing RandomSuffix: $random_suffix"
-                fi
                 
                 # Use existing TemplateBucket if not specified on command line
                 if [[ -z "$TEMPLATE_BUCKET" && -n "$template_bucket_existing" ]]; then
@@ -764,10 +810,22 @@ deploy_stack() {
                 parameters+=("Environment=$ENVIRONMENT")
                 parameters+=("ProjectName=$PROJECT_NAME")
                 parameters+=("TemplateBucket=$TEMPLATE_BUCKET")
-                parameters+=("RandomSuffix=$random_suffix")
                 parameters+=("CentralLogDistributionRoleArn=$CENTRAL_ROLE_ARN")
-                parameters+=("IncludeSQSStack=$INCLUDE_SQS")
-                parameters+=("IncludeLambdaStack=$INCLUDE_LAMBDA")
+                if [[ "$INCLUDE_SQS" == true ]]; then
+                    parameters+=("IncludeSQSStack=true")
+                else
+                    parameters+=("IncludeSQSStack=false")
+                fi
+                if [[ "$INCLUDE_LAMBDA" == true ]]; then
+                    parameters+=("IncludeLambdaStack=true")
+                else
+                    parameters+=("IncludeLambdaStack=false")
+                fi
+                if [[ "$INCLUDE_API" == true ]]; then
+                    parameters+=("IncludeAPIStack=true")
+                else
+                    parameters+=("IncludeAPIStack=false")
+                fi
                 
                 # Add new S3DeleteAfterDays parameter with default if not in existing params
                 local s3_delete_days_found=false
@@ -779,7 +837,7 @@ deploy_stack() {
                     
                     # Skip parameters we've already set from command line
                     case "$param_key" in
-                        Environment|ProjectName|TemplateBucket|RandomSuffix|CentralLogDistributionRoleArn|IncludeSQSStack|IncludeLambdaStack)
+                        Environment|ProjectName|TemplateBucket|CentralLogDistributionRoleArn|IncludeSQSStack|IncludeLambdaStack|IncludeAPIStack)
                             continue
                             ;;
                         ECRImageUri)
@@ -827,15 +885,22 @@ deploy_stack() {
                     "Environment=$ENVIRONMENT"
                     "ProjectName=$PROJECT_NAME"
                     "TemplateBucket=$TEMPLATE_BUCKET"
-                    "RandomSuffix=$random_suffix"
                     "CentralLogDistributionRoleArn=$CENTRAL_ROLE_ARN"
-                    "IncludeSQSStack=$INCLUDE_SQS"
-                    "IncludeLambdaStack=$INCLUDE_LAMBDA"
+                    "IncludeSQSStack=$(if [[ "$INCLUDE_SQS" == true ]]; then echo 'true'; else echo 'false'; fi)"
+                    "IncludeLambdaStack=$(if [[ "$INCLUDE_LAMBDA" == true ]]; then echo 'true'; else echo 'false'; fi)"
+                    "IncludeAPIStack=$(if [[ "$INCLUDE_API" == true ]]; then echo 'true'; else echo 'false'; fi)"
                 )
                 
                 # Add ECR image URI if Lambda is enabled
                 if [[ "$INCLUDE_LAMBDA" == true && -n "$ECR_IMAGE_URI" ]]; then
                     parameters+=("ECRImageUri=$ECR_IMAGE_URI")
+                fi
+                
+                # Add API parameters if API is enabled
+                if [[ "$INCLUDE_API" == true ]]; then
+                    parameters+=("APIAuthSSMParameter=$API_AUTH_SSM_PARAMETER")
+                    parameters+=("AuthorizerImageUri=$AUTHORIZER_IMAGE_URI")
+                    parameters+=("APIImageUri=$API_IMAGE_URI")
                 fi
             fi
             ;;
@@ -950,11 +1015,16 @@ Templates:
 - regional/core-infrastructure.yaml (S3, DynamoDB, KMS, IAM, SNS)
 $(if [[ "$INCLUDE_SQS" == true ]]; then echo "- regional/sqs-stack.yaml (SQS queue and DLQ)"; fi)
 $(if [[ "$INCLUDE_LAMBDA" == true ]]; then echo "- regional/lambda-stack.yaml (Container-based Lambda functions)"; fi)
+$(if [[ "$INCLUDE_API" == true ]]; then echo "- regional/api-stack.yaml (API Gateway and Lambda authorizer)"; fi)
 
 Configuration:
 - Include SQS Stack: $INCLUDE_SQS
 - Include Lambda Stack: $INCLUDE_LAMBDA
+- Include API Stack: $INCLUDE_API
 $(if [[ -n "$ECR_IMAGE_URI" ]]; then echo "- ECR Image URI: $ECR_IMAGE_URI"; fi)
+$(if [[ -n "$API_AUTH_SSM_PARAMETER" ]]; then echo "- API Auth SSM Parameter: $API_AUTH_SSM_PARAMETER"; fi)
+$(if [[ -n "$AUTHORIZER_IMAGE_URI" ]]; then echo "- Authorizer Image URI: $AUTHORIZER_IMAGE_URI"; fi)
+$(if [[ -n "$API_IMAGE_URI" ]]; then echo "- API Image URI: $API_IMAGE_URI"; fi)
 
 EOF
             ;;

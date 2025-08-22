@@ -12,6 +12,7 @@ This is a **PROOF OF CONCEPT (POC)** project implementing a "Centralized Ingesti
 - **Container-based Lambda** functions for cross-account log delivery using ECR images
 - **DynamoDB** for tenant configuration management
 - **Unified log processor** supporting Lambda, SQS polling, and manual execution modes
+- **Management API** REST service for tenant configuration management with HMAC authentication
 - **Vector integration** within processor for reliable CloudWatch Logs delivery
 - **Multi-stage container builds** with collector and processor containers
 
@@ -162,7 +163,8 @@ graph TB
 │   │   ├── main.yaml                       # Main regional orchestration template
 │   │   ├── core-infrastructure.yaml       # S3, DynamoDB, KMS, IAM resources
 │   │   ├── sqs-stack.yaml                 # Optional SQS queue and DLQ
-│   │   └── lambda-stack.yaml              # Optional container-based Lambda functions
+│   │   ├── lambda-stack.yaml              # Optional container-based Lambda functions
+│   │   └── api-stack.yaml                 # Optional API Gateway and management service
 │   ├── customer/
 │   │   └── customer-log-distribution-role.yaml # Customer account CloudFormation template
 │   ├── cluster/
@@ -175,6 +177,25 @@ graph TB
 │   │   └── README.md                      # Cluster template documentation
 │   ├── deploy.sh                          # CloudFormation deployment script with modular options
 │   └── README.md                          # CloudFormation-specific documentation
+├── api/
+│   ├── src/
+│   │   ├── handlers/
+│   │   │   ├── authorizer.py              # Lambda authorizer with HMAC-SHA256 validation
+│   │   │   ├── tenants.py                 # CRUD operations for tenant management
+│   │   │   └── health.py                  # Health check endpoint
+│   │   ├── models/
+│   │   │   ├── tenant.py                  # Tenant data models and validation
+│   │   │   └── responses.py               # Standard API response formats
+│   │   ├── utils/
+│   │   │   ├── auth.py                    # HMAC signature validation utilities
+│   │   │   ├── dynamodb.py                # DynamoDB helper functions
+│   │   │   └── logger.py                  # Logging configuration
+│   │   └── app.py                         # Main API Lambda handler with routing
+│   ├── tests/                             # API service tests
+│   ├── Containerfile.authorizer           # Lambda authorizer container
+│   ├── Containerfile.api                  # API service container
+│   ├── requirements.txt                   # API Python dependencies
+│   └── README.md                          # API service documentation
 ├── container/
 │   ├── Containerfile.collector             # Base container with Vector binary installation
 │   ├── Containerfile.processor             # Log processor container that includes Vector
@@ -271,6 +292,37 @@ podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:l
 # Deploy infrastructure with Lambda processing
 cd ../cloudformation/
 ./deploy.sh -b your-templates-bucket --include-sqs --include-lambda --ecr-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/log-processor:latest
+```
+
+#### **API Management Service (Optional)**
+```bash
+# Create SSM parameter for API authentication
+aws ssm put-parameter \
+  --name "/logging/api/psk" \
+  --value "your-256-bit-base64-encoded-key" \
+  --type "SecureString" \
+  --description "PSK for tenant management API authentication"
+
+# Build API containers
+cd api/
+podman build -f Containerfile.authorizer -t logging-authorizer:latest .
+podman build -f Containerfile.api -t logging-api:latest .
+
+# Push to ECR
+aws ecr get-login-password --region YOUR_AWS_REGION | podman login --username AWS --password-stdin AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com
+podman tag logging-authorizer:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-authorizer:latest
+podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-authorizer:latest
+podman tag logging-api:latest AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-api:latest
+podman push AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-api:latest
+
+# Deploy with API management
+cd ../cloudformation/
+./deploy.sh -b your-templates-bucket \
+  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abc123 \
+  --include-api \
+  --api-auth-ssm-parameter "/logging/api/psk" \
+  --authorizer-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-authorizer:latest \
+  --api-image-uri AWS_ACCOUNT_ID.dkr.ecr.YOUR_AWS_REGION.amazonaws.com/logging-api:latest
 ```
 
 #### **Environment-Specific Deployment**
@@ -751,6 +803,13 @@ The infrastructure provides basic observability through AWS native services:
    - Verify OIDC provider exists in AWS IAM
    - Check regional stack outputs for required ARNs
    - Ensure cluster name matches OIDC provider configuration
+
+7. **API management service issues**
+   - Verify PSK exists in SSM Parameter Store: `aws ssm get-parameter --name /logging/api/psk --with-decryption`
+   - Check API Gateway authorizer logs: `/aws/lambda/multi-tenant-logging-{env}-api-authorizer`
+   - Verify HMAC signature calculation matches specification
+   - Check API service logs: `/aws/lambda/multi-tenant-logging-{env}-api-service`
+   - Ensure ECR container images are accessible and correctly tagged
 
 ### Debug Commands
 
