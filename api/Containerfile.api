@@ -1,0 +1,19 @@
+# API Service Container for Tenant Management
+# This container provides REST API endpoints for managing tenant configurations
+
+FROM public.ecr.aws/lambda/python:3.13
+
+# Set working directory
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy API source code
+COPY src/ ./src/
+
+# Set the Lambda handler
+CMD ["src.app.lambda_handler"]

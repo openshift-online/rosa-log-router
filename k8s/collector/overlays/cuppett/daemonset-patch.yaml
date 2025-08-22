@@ -22,7 +22,7 @@ spec:
         - name: AWS_DEFAULT_REGION
           value: "us-east-2"
         - name: S3_BUCKET_NAME
-          value: "multi-tenant-logging-development-central-12345678"
+          value: "multi-tenant-logging-development-641875867446-us-east-2"
         - name: S3_WRITER_ROLE_ARN
           value: "arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role"
         - name: CLUSTER_ID

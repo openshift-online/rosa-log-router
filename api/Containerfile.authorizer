@@ -1,0 +1,20 @@
+# Lambda Authorizer Container for API Gateway
+# This container provides HMAC-SHA256 signature validation using PSK from SSM
+
+FROM public.ecr.aws/lambda/python:3.13
+
+# Set working directory
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy authorizer source code
+COPY src/handlers/authorizer.py ./
+COPY src/utils/ ./utils/
+
+# Set the Lambda handler
+CMD ["authorizer.lambda_handler"]

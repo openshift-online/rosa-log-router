@@ -130,7 +130,7 @@ Resources:
           CENTRAL_LOG_DISTRIBUTION_ROLE_ARN: !Ref CentralLogDistributionRoleArn
           EXECUTION_MODE: "lambda"
       Timeout: 300
-      MemorySize: 1024
+      MemorySize: 512
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-log-distributor'
