@@ -6,11 +6,14 @@ FROM public.ecr.aws/lambda/python:3.13
 # Set working directory
 WORKDIR ${LAMBDA_TASK_ROOT}
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Install uv for fast Python package management
+RUN pip install --no-cache-dir uv
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency files first for better caching
+COPY pyproject.toml uv.lock README.md ./
+
+# Install Python dependencies using uv with frozen lockfile for reproducible builds
+RUN uv sync --frozen --no-dev
 
 # Copy authorizer source code
 COPY src/handlers/authorizer.py ./
