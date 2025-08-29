@@ -21,7 +21,7 @@ spec:
       serviceAccountName: log-processor
       containers:
       - name: processor
-        image: public.ecr.aws/d1w4s4o1/logdesign/processor:main
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/processor:main
         imagePullPolicy: Always
         env:
         - name: AWS_STS_REGIONAL_ENDPOINTS
