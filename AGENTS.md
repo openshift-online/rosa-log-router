@@ -290,6 +290,93 @@ aws sqs get-queue-attributes \
   --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible
 ```
 
+### Unit Testing
+
+The project includes comprehensive unit tests for both the API and container components:
+
+#### Prerequisites
+```bash
+# Install test dependencies
+pip3 install -r tests/requirements.txt
+```
+
+#### Running Unit Tests
+
+**Run all unit tests:**
+```bash
+# From project root
+pytest tests/unit/ -v
+
+# With coverage report
+pytest tests/unit/ --cov=container --cov=api/src --cov-report=html --cov-report=term-missing
+```
+
+**Run specific test files:**
+```bash
+# Test log processor only
+pytest tests/unit/test_log_processor.py -v
+
+# Test API components only
+pytest tests/unit/test_api_app.py -v
+```
+
+**Run with specific markers:**
+```bash
+# Run only unit tests (if integration tests are added later)
+pytest tests/unit/ -m "unit" -v
+
+# Run slow tests separately
+pytest tests/unit/ -m "slow" -v
+```
+
+#### Test Structure
+
+- `tests/unit/test_log_processor.py`: Tests for container/log_processor.py
+  - S3 object key parsing and tenant info extraction
+  - DynamoDB tenant configuration retrieval
+  - Log file processing (NDJSON and JSON array formats)
+  - Cross-account role assumption (double-hop)
+  - Vector subprocess integration
+  - SQS message processing and Lambda handler functionality
+  - Error handling (recoverable vs non-recoverable errors)
+
+- `tests/unit/test_api_app.py`: Tests for API components
+  - FastAPI endpoint functionality
+  - Request/response validation
+  - Error handling and HTTP status codes
+  - Pydantic model validation
+
+- `tests/conftest.py`: Shared test fixtures and configuration
+  - AWS service mocking with moto
+  - Environment variable management
+  - Test database setup
+
+#### Test Features
+
+- **AWS Service Mocking**: Uses `moto` library to mock AWS services (S3, DynamoDB, STS, CloudWatch Logs)
+- **Comprehensive Coverage**: Tests both happy path and error scenarios
+- **Isolated Tests**: Each test uses fresh mocked AWS resources
+- **Environment Management**: Automatic environment variable setup and cleanup
+- **Time Mocking**: Uses `freezegun` for consistent timestamp testing
+
+#### Adding New Tests
+
+When adding new functionality, ensure tests cover:
+
+1. **Happy Path**: Successful execution with valid inputs
+2. **Input Validation**: Invalid or malformed inputs
+3. **Error Scenarios**: Network failures, AWS service errors, missing resources
+4. **Edge Cases**: Empty data, boundary conditions, concurrent access
+5. **Security**: Authentication, authorization, data sanitization
+
+#### Continuous Integration
+
+Tests are designed to run in CI/CD environments:
+- No external AWS dependencies (all mocked)
+- Deterministic results with time/UUID mocking
+- Clear test isolation and cleanup
+- Comprehensive logging for debugging test failures
+
 ### Debugging Commands
 ```bash
 # Check Lambda metrics
