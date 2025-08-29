@@ -246,11 +246,15 @@ podman run --rm \
   log-processor:latest --mode sqs
 
 # Test Vector with fake log generator and S3 role assumption
-cd test_container/
-pip3 install -r requirements.txt
+cd tests/integration/
 
-# Set up environment for Vector role assumption (use test-vector.sh script)
-../test-vector.sh
+# Set up environment for Vector role assumption
+chmod +x test-vector.sh
+source ./test-vector.sh
+
+# Install fake log generator dependencies
+cd ../../test_container/
+pip3 install -r requirements.txt
 
 # Basic Vector test with realistic fake logs and role assumption
 python3 fake_log_generator.py --total-batches 10 | vector --config ../vector-local-test.yaml
