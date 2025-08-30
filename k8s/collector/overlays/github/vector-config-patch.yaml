@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: default
+data:
+  vector.yaml: |
+    # Vector configuration for GitHub Actions integration testing
+    data_dir: "/vector-data-dir"
+    
+    api:
+      enabled: true
+      address: "0.0.0.0:8686"
+      playground: false
+    
+    # Sources
+    sources:
+      kubernetes_logs:
+        type: "kubernetes_logs"
+        # Collect logs from pods with specific label for testing
+        extra_label_selector: "app=fake-log-generator"
+        glob_minimum_cooldown_ms: 1000
+        auto_partial_merge: true
+        namespace_annotation_fields:
+          - metadata.labels
+    
+    # Transforms
+    transforms:  
+      enrich_metadata:
+        type: "remap"
+        inputs: ["kubernetes_logs"]
+        source: |
+          # Extract metadata for S3 path structure
+          .cluster_id = get_env_var!("CLUSTER_ID") || "test-cluster"
+          .namespace = .kubernetes.pod_namespace || "default"
+          .application = .kubernetes.pod_labels.app || "fake-log-generator"
+          .pod_name = .kubernetes.pod_name || "unknown"
+          
+          # Keep timestamp
+          if !exists(.timestamp) {
+            .timestamp = now()
+          }
+      
+      parse_json_logs:
+        type: "remap"
+        inputs: ["enrich_metadata"]
+        source: |
+          # Attempt to parse the message field as JSON
+          # If successful, merge the parsed JSON fields into the top-level event
+          # If parsing fails, leave the message field as plain text
+          parsed, err = parse_json(.message)
+          if err == null && is_object(parsed) {
+            # Merge parsed JSON into the event, preserving existing fields
+            . = merge!(., parsed)
+          }
+          # If err is not null or parsed is not an object, keep original message
+    
+    # Sinks
+    sinks:
+      s3_logs:
+        type: "aws_s3"
+        inputs: ["parse_json_logs"]
+        
+        # MinIO configuration
+        bucket: "test-logs"
+        region: "us-east-1"
+        endpoint: "http://minio:9000"
+        
+        # Dynamic key prefix based on cluster/namespace/app/pod structure
+        key_prefix: "{{ cluster_id }}/{{ namespace }}/{{ application }}/{{ pod_name }}/"
+        
+        # Batch settings - smaller for testing
+        batch:
+          max_bytes: 10240       # 10KB
+          timeout_secs: 5        # 5 seconds
+        
+        # Request settings
+        request:
+          retry_attempts: 3
+          retry_initial_backoff_secs: 1
+          retry_max_duration_secs: 30
+          timeout_secs: 30
+        
+        # Compression
+        compression: "gzip"
+        
+        # File format
+        encoding:
+          codec: "json"
+          framing:
+            method: "newline_delimited"
+        
+        # Buffer configuration - minimum size for testing
+        buffer:
+          type: "disk"
+          max_size: 268435488  # 256MB (minimum allowed)
+          when_full: "block"
+        
+        # Authentication via access keys (not IRSA for MinIO)
+        auth:
+          access_key_id: "${AWS_ACCESS_KEY_ID}"
+          secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+          
+        # Add timestamp to filename
+        filename_append_uuid: true
+        filename_time_format: "%Y%m%d-%H%M%S"
+        filename_extension: "json.gz"

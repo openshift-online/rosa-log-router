@@ -9,6 +9,12 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch, MagicMock
 from botocore.exceptions import ClientError
 
+# Setup path for importing API modules
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
+
 # Import the modules we're testing
 from src.handlers.authorizer import lambda_handler, generate_policy
 from src.utils.auth import (

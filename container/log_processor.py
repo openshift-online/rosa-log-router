@@ -19,7 +19,6 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 import boto3
-from botocore.exceptions import ClientError
 
 # Configure logging
 logging.basicConfig(
@@ -508,10 +507,13 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
 def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Convert log record to CloudWatch Logs event format
+    
+    Since Vector now handles JSON parsing at the collection stage, log records
+    are already well-structured with parsed fields available at the top level.
     """
     try:
-        # Handle timestamp - Vector might use different field names
-        timestamp = log_record.get('timestamp') or log_record.get('.timestamp') or log_record.get('time')
+        # Extract timestamp from the structured log record
+        timestamp = log_record.get('timestamp')
         if timestamp:
             if isinstance(timestamp, str):
                 try:
@@ -527,14 +529,15 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
         else:
             timestamp_ms = int(datetime.now().timestamp() * 1000)
         
-        # Vector typically stores the log message in 'message' field
-        message = log_record.get('message') or log_record.get('.') or log_record.get('log')
+        # Extract message from the structured log record
+        # Vector places the original log content in the 'message' field
+        message = log_record.get('message', '')
         
         if not message:
-            # If no message field found, use the entire record
+            # Fallback: if no message field, serialize the entire record
             message = json.dumps(log_record)
         elif isinstance(message, (dict, list)):
-            # If message is a dict/list, convert to string
+            # If message is still structured data, serialize it
             message = json.dumps(message)
         
         return {
@@ -552,37 +555,22 @@ def deliver_logs_to_customer(
     s3_timestamp: int
 ) -> None:
     """
-    Deliver log events to customer's CloudWatch Logs using Vector with double-hop cross-account role assumption
+    Deliver log events to customer's CloudWatch Logs using Vector with native assume_role capability
     """
     try:
         sts_client = boto3.client('sts', region_name=AWS_REGION)
         
-        # Step 1: Assume the central log distribution role without session tags
+        # Step 1: Assume the central log distribution role
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
             RoleSessionName=f"CentralLogDistribution-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
         )
         
-        # Step 2: Create STS client with central role credentials
-        central_sts_client = boto3.client(
-            'sts',
-            region_name=AWS_REGION,
-            aws_access_key_id=central_role_response['Credentials']['AccessKeyId'],
-            aws_secret_access_key=central_role_response['Credentials']['SecretAccessKey'],
-            aws_session_token=central_role_response['Credentials']['SessionToken']
-        )
+        # Extract central role credentials (Vector will use these to assume customer role)
+        central_credentials = central_role_response['Credentials']
         
-        # Step 3: Assume the customer's log distribution role using central role
         # Get the current account ID for ExternalId
         current_account_id = boto3.client('sts').get_caller_identity()['Account']
-        customer_role_response = central_sts_client.assume_role(
-            RoleArn=tenant_config['log_distribution_role_arn'],
-            RoleSessionName=f"CustomerLogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}",
-            ExternalId=current_account_id
-        )
-        
-        # Extract customer credentials
-        customer_credentials = customer_role_response['Credentials']
         
         # Generate unique session ID for Vector
         session_id = str(uuid.uuid4())
@@ -591,10 +579,12 @@ def deliver_logs_to_customer(
         log_group_name = tenant_config['log_group_name']
         log_stream_name = tenant_info['pod_name']
         
-        # Use Vector to deliver logs
+        # Use Vector to deliver logs with native assume_role for second hop
         deliver_logs_with_vector(
             log_events=log_events,
-            credentials=customer_credentials,
+            central_credentials=central_credentials,
+            customer_role_arn=tenant_config['log_distribution_role_arn'],
+            external_id=current_account_id,
             region=tenant_config['target_region'],
             log_group=log_group_name,
             log_stream=log_stream_name,
@@ -610,7 +600,9 @@ def deliver_logs_to_customer(
 
 def deliver_logs_with_vector(
     log_events: List[Dict[str, Any]],
-    credentials: Dict[str, Any],
+    central_credentials: Dict[str, Any],
+    customer_role_arn: str,
+    external_id: str,
     region: str,
     log_group: str,
     log_stream: str,
@@ -632,15 +624,14 @@ def deliver_logs_with_vector(
         with open(template_path, 'r') as f:
             config_template = f.read()
         
-        # Substitute credentials and parameters
+        # Substitute parameters and role information
         config = config_template.format(
             session_id=session_id,
             region=region,
             log_group=log_group,
             log_stream=log_stream,
-            access_key_id=credentials['AccessKeyId'],
-            secret_access_key=credentials['SecretAccessKey'],
-            session_token=credentials['SessionToken']
+            customer_role_arn=customer_role_arn,
+            external_id=external_id
         )
         
         # Write config to temporary file
@@ -653,13 +644,13 @@ def deliver_logs_with_vector(
         data_dir = f"/tmp/vector-{session_id}"
         os.makedirs(data_dir, exist_ok=True)
         
-        # Set up Vector environment variables
+        # Set up Vector environment variables with central role credentials
         vector_env = os.environ.copy()
         vector_env.update({
             'VECTOR_DATA_DIR': data_dir,
-            'AWS_ACCESS_KEY_ID': credentials['AccessKeyId'],
-            'AWS_SECRET_ACCESS_KEY': credentials['SecretAccessKey'],
-            'AWS_SESSION_TOKEN': credentials['SessionToken'],
+            'AWS_ACCESS_KEY_ID': central_credentials['AccessKeyId'],
+            'AWS_SECRET_ACCESS_KEY': central_credentials['SecretAccessKey'],
+            'AWS_SESSION_TOKEN': central_credentials['SessionToken'],
             'AWS_REGION': region,
             'LOG_GROUP': log_group,
             'LOG_STREAM': log_stream
@@ -668,10 +659,12 @@ def deliver_logs_with_vector(
         # Log critical environment variables (mask sensitive data)
         logger.info(f"Vector environment variables:")
         logger.info(f"  VECTOR_DATA_DIR: {data_dir}")
-        logger.info(f"  AWS_ACCESS_KEY_ID: {credentials['AccessKeyId'][:10]}...")
+        logger.info(f"  AWS_ACCESS_KEY_ID: {central_credentials['AccessKeyId'][:10]}...")
         logger.info(f"  AWS_REGION: {region}")
         logger.info(f"  LOG_GROUP: {log_group}")
         logger.info(f"  LOG_STREAM: {log_stream}")
+        logger.info(f"  CUSTOMER_ROLE_ARN: {customer_role_arn}")
+        logger.info(f"  EXTERNAL_ID: {external_id}")
         
         # Start Vector subprocess
         vector_cmd = ['vector', '--config', temp_config_path]
@@ -783,100 +776,8 @@ def deliver_logs_with_vector(
         if vector_process and vector_process.poll() is None:
             vector_process.kill()
 
-def ensure_log_stream_exists(logs_client, log_group_name: str, log_stream_name: str) -> None:
-    """
-    Ensure the log group and stream exist in the customer account
-    """
-    try:
-        # Check if log group exists, create if not
-        try:
-            logs_client.describe_log_groups(logGroupNamePrefix=log_group_name)
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                logs_client.create_log_group(logGroupName=log_group_name)
-                logger.info(f"Created log group: {log_group_name}")
-        
-        # Check if log stream exists, create if not
-        try:
-            logs_client.describe_log_streams(
-                logGroupName=log_group_name,
-                logStreamNamePrefix=log_stream_name
-            )
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                logs_client.create_log_stream(
-                    logGroupName=log_group_name,
-                    logStreamName=log_stream_name
-                )
-                logger.info(f"Created log stream: {log_stream_name}")
-                
-    except Exception as e:
-        logger.error(f"Failed to ensure log stream exists: {str(e)}")
-        raise
 
-def deliver_logs_in_batches(
-    logs_client, 
-    log_group_name: str, 
-    log_stream_name: str, 
-    log_events: List[Dict[str, Any]]
-) -> None:
-    """
-    Deliver log events to CloudWatch Logs in batches
-    """
-    # Sort events by timestamp
-    log_events.sort(key=lambda x: x['timestamp'])
-    
-    # Get current sequence token
-    sequence_token = get_sequence_token(logs_client, log_group_name, log_stream_name)
-    
-    # Process in batches
-    for i in range(0, len(log_events), MAX_BATCH_SIZE):
-        batch = log_events[i:i + MAX_BATCH_SIZE]
-        
-        put_events_kwargs = {
-            'logGroupName': log_group_name,
-            'logStreamName': log_stream_name,
-            'logEvents': batch
-        }
-        
-        if sequence_token:
-            put_events_kwargs['sequenceToken'] = sequence_token
-        
-        try:
-            response = logs_client.put_log_events(**put_events_kwargs)
-            sequence_token = response.get('nextSequenceToken')
-            
-            logger.info(f"Delivered batch of {len(batch)} log events")
-            
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'InvalidSequenceTokenException':
-                # Retry with correct sequence token
-                sequence_token = get_sequence_token(logs_client, log_group_name, log_stream_name)
-                put_events_kwargs['sequenceToken'] = sequence_token
-                response = logs_client.put_log_events(**put_events_kwargs)
-                sequence_token = response.get('nextSequenceToken')
-            else:
-                raise
 
-def get_sequence_token(logs_client, log_group_name: str, log_stream_name: str) -> Optional[str]:
-    """
-    Get the current sequence token for the log stream
-    """
-    try:
-        response = logs_client.describe_log_streams(
-            logGroupName=log_group_name,
-            logStreamNamePrefix=log_stream_name
-        )
-        
-        for stream in response['logStreams']:
-            if stream['logStreamName'] == log_stream_name:
-                return stream.get('uploadSequenceToken')
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"Failed to get sequence token: {str(e)}")
-        return None
 
 def main():
     """

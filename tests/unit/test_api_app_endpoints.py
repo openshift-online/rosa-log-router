@@ -6,6 +6,11 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
+
 from src.app import app
 from src.services.dynamo import TenantNotFoundError, DynamoDBError
 
