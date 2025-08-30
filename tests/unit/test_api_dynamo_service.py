@@ -4,6 +4,13 @@ Unit tests for DynamoDB tenant service
 
 import pytest
 from botocore.exceptions import ClientError
+
+# Setup path for importing API modules
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
+
 from src.services.dynamo import TenantService, TenantNotFoundError, DynamoDBError
 
 

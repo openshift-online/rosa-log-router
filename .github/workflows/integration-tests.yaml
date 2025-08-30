@@ -1,0 +1,209 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Start minikube
+      uses: medyagh/setup-minikube@master
+      with:
+        driver: docker
+        kubernetes-version: v1.33.0
+
+    - name: Wait for minikube to be ready
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+
+    - name: Deploy MinIO (S3-compatible storage)
+      run: |
+        kubectl apply -f tests/integration/manifests/minio.yaml
+        
+        # Wait for MinIO to be ready
+        kubectl wait --for=condition=ready pod -l app=minio --timeout=300s
+        kubectl wait --for=condition=complete job/minio-setup --timeout=300s
+        
+        echo "MinIO is ready"
+
+    - name: Deploy DynamoDB Local
+      run: |
+        kubectl apply -f tests/integration/manifests/dynamodb-local.yaml
+        
+        # Wait for DynamoDB Local to be ready
+        kubectl wait --for=condition=ready pod -l app=dynamodb-local --timeout=300s
+        
+        echo "DynamoDB Local is ready"
+
+    - name: Deploy fake log generators
+      run: |
+        kubectl apply -f tests/integration/manifests/fake-log-generator.yaml
+        
+        # Wait for fake log generators to be ready
+        kubectl wait --for=condition=ready pod -l app=fake-log-generator --timeout=300s
+        
+        echo "Fake log generators are ready"
+
+    - name: Deploy Vector collector
+      run: |
+        kubectl apply -k k8s/collector/overlays/github
+        
+        # Wait for Vector DaemonSet to be ready
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vector --timeout=300s
+        
+        echo "Vector collector is ready"
+
+    - name: Wait for log collection and processing
+      run: |
+        echo "Waiting for logs to be collected and processed by Vector..."
+        sleep 180
+        
+        # Check Vector logs for any errors
+        kubectl logs -l app.kubernetes.io/name=vector --tail=20
+
+    - name: Verify log delivery to MinIO
+      run: |
+        # Get MinIO pod name
+        MINIO_POD=$(kubectl get pod -l app=minio -o jsonpath='{.items[0].metadata.name}')
+        echo "MinIO pod: $MINIO_POD"
+        
+        # Check if log files exist in MinIO bucket
+        echo "Checking for log files in MinIO bucket..."
+        kubectl exec $MINIO_POD -- ls -la /data/test-logs/
+        
+        # Verify the expected directory structure exists
+        if kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/ > /dev/null 2>&1; then
+          echo "✅ Success: Log directory structure found"
+        else
+          echo "❌ Error: Expected log directory structure not found"
+          exit 1
+        fi
+        
+        # Count S3 objects (they appear as directories in MinIO)
+        # Check each pod directory for .json.gz objects
+        POD_DIRS=$(kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/ 2>/dev/null || echo "")
+        
+        if [ -z "$POD_DIRS" ]; then
+          echo "❌ Error: No pod directories found in MinIO bucket"
+          exit 1
+        fi
+        
+        echo "Found pod directories: $POD_DIRS"
+        
+        # Count .json.gz objects in the first pod directory
+        FIRST_POD_DIR=$(echo $POD_DIRS | awk '{print $1}')
+        S3_OBJECTS=$(kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ 2>/dev/null | grep -c "\.json\.gz" || echo "0")
+        
+        echo "Found $S3_OBJECTS S3 objects (.json.gz) in pod directory: $FIRST_POD_DIR"
+        
+        if [ "$S3_OBJECTS" -gt 0 ]; then
+          echo "✅ Success: Log objects were created and stored in MinIO"
+          echo "✅ Success: Vector is successfully writing logs to S3-compatible storage"
+          
+          # Verify multiple pods are writing logs
+          TOTAL_POD_DIRS=$(echo $POD_DIRS | wc -w)
+          echo "✅ Success: Found $TOTAL_POD_DIRS pod directories (from $TOTAL_POD_DIRS fake log generators)"
+          
+          # Show sample of S3 object names to verify naming pattern
+          echo "Sample S3 object names:"
+          kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ | grep "\.json\.gz" | head -3 || echo "Could not list object names"
+          
+        else
+          echo "❌ Error: No S3 objects (.json.gz) found in MinIO bucket"
+          echo "Debug: Contents of pod directory $FIRST_POD_DIR:"
+          kubectl exec $MINIO_POD -- ls -la /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ || echo "Could not list directory contents"
+          exit 1
+        fi
+
+    - name: Setup Python for API integration tests
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install API integration test dependencies
+      run: |
+        pip install -r tests/requirements.txt
+
+    - name: Run API integration tests
+      run: |
+        # Start port forwarding for DynamoDB Local in background
+        kubectl port-forward service/dynamodb-local 8000:8000 &
+        PORT_FORWARD_PID=$!
+        
+        # Wait for port forward to be ready
+        echo "Waiting for DynamoDB Local port forward..."
+        sleep 10
+        
+        # Verify DynamoDB Local is accessible
+        max_retries=30
+        for i in $(seq 1 $max_retries); do
+          if curl -s http://localhost:8000 > /dev/null 2>&1; then
+            echo "✅ DynamoDB Local accessible on localhost:8000"
+            break
+          fi
+          echo "Waiting for DynamoDB Local... ($i/$max_retries)"
+          sleep 2
+        done
+        
+        if [ $i -eq $max_retries ]; then
+          echo "❌ Failed to connect to DynamoDB Local"
+          kill $PORT_FORWARD_PID || true
+          exit 1
+        fi
+        
+        # Run integration tests
+        echo "Running API integration tests..."
+        pytest tests/integration/test_api_integration.py -v -m integration --tb=short
+        TEST_EXIT_CODE=$?
+        
+        # Cleanup port forward
+        kill $PORT_FORWARD_PID || true
+        
+        # Exit with test result
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+          echo "✅ API integration tests passed"
+        else
+          echo "❌ API integration tests failed"
+          exit $TEST_EXIT_CODE
+        fi
+
+    - name: Show integration test results
+      run: |
+        echo "=== Integration Test Summary ==="
+        echo "✅ MinIO deployment: OK"
+        echo "✅ DynamoDB Local deployment: OK"
+        echo "✅ Fake log generator deployment: OK" 
+        echo "✅ Vector collector deployment: OK"
+        echo "✅ Log collection and processing: OK"
+        echo "✅ Log delivery to MinIO bucket: OK"
+        echo "✅ API integration tests with DynamoDB Local: OK"
+        echo ""
+        echo "Integration test completed successfully!"
+
+    - name: Cleanup (if test fails)
+      if: failure()
+      run: |
+        echo "=== Cleanup and Debug Info ==="
+        echo "Pods:"
+        kubectl get pods
+        echo ""
+        echo "Vector logs:"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=50 || echo "No Vector logs"
+        echo ""
+        echo "Fake log generator logs:"
+        kubectl logs -l app=fake-log-generator --tail=20 || echo "No generator logs"
+        echo ""
+        echo "MinIO logs:"
+        kubectl logs -l app=minio --tail=20 || echo "No MinIO logs"
+        echo ""
+        echo "DynamoDB Local logs:"
+        kubectl logs -l app=dynamodb-local --tail=20 || echo "No DynamoDB Local logs"

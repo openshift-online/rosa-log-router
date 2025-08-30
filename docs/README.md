@@ -145,13 +145,15 @@ graph TB
 ### Data Flow Summary
 
 1. **Collection**: Vector agents collect logs from Kubernetes pods and enrich with tenant metadata
-2. **Role Assumption**: Vector assumes S3WriterRole using base AWS credentials for secure S3 access
-3. **Direct Write**: Vector writes NDJSON logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
-4. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
-5. **Processing**: Container-based Lambda function processes SQS messages
-6. **Vector Integration**: Lambda spawns Vector subprocess with customer credentials for reliable delivery
-7. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
-8. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
+2. **Intelligent Parsing**: Vector automatically detects and parses JSON-formatted logs while preserving plain text logs
+3. **Transform Pipeline**: Two-stage processing - metadata enrichment followed by JSON parsing and field merging
+4. **Role Assumption**: Vector assumes S3WriterRole using base AWS credentials for secure S3 access
+5. **Direct Write**: Vector writes structured NDJSON logs directly to S3 with dynamic partitioning by customer_id/cluster_id/application/pod_name
+6. **Notification**: S3 events trigger SNS hub, which distributes to SQS queue
+7. **Processing**: Container-based Lambda function processes SQS messages with pre-structured log data
+8. **Vector Integration**: Lambda spawns Vector subprocess with customer credentials for reliable delivery
+9. **Security**: Double-hop role assumption with session tag validation ensures tenant isolation
+10. **Delivery**: Logs delivered to customer CloudWatch Logs in `/ROSA/cluster-logs/*` format
 
 ## Repository Structure
 

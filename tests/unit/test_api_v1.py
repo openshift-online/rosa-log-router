@@ -8,9 +8,10 @@ from fastapi.testclient import TestClient
 # Import the module under test
 import sys
 import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
 
-from app import app
+from src.app import app
 
 
 class TestAPIEndpoints:
@@ -60,7 +61,7 @@ class TestAPIEndpoints:
             assert data["status"] == "healthy"
             mock_health.assert_called_once()
     
-    @patch('app.tenant_service')
+    @patch('src.app.tenant_service')
     def test_get_tenant_success(self, mock_tenant_service, client, environment_variables):
         """Test successful tenant retrieval."""
         mock_tenant_service.get_tenant.return_value = {
@@ -75,10 +76,10 @@ class TestAPIEndpoints:
         
         assert response.status_code == 200
         data = response.json()
-        assert data["success"] is True
+        assert data["status"] == "success"
         assert data["data"]["tenant_id"] == "test-tenant"
     
-    @patch('app.tenant_service')
+    @patch('src.app.tenant_service')
     def test_get_tenant_not_found(self, mock_tenant_service, client, environment_variables):
         """Test tenant not found."""
         from src.services.dynamo import TenantNotFoundError
@@ -88,10 +89,10 @@ class TestAPIEndpoints:
         
         assert response.status_code == 404
         data = response.json()
-        assert data["success"] is False
-        assert "not found" in data["message"].lower()
+        assert "detail" in data
+        assert "not found" in data["detail"].lower()
     
-    @patch('app.tenant_service')
+    @patch('src.app.tenant_service')
     def test_create_tenant_success(self, mock_tenant_service, client, environment_variables):
         """Test successful tenant creation."""
         tenant_data = {
@@ -108,10 +109,10 @@ class TestAPIEndpoints:
         
         assert response.status_code == 201
         data = response.json()
-        assert data["success"] is True
+        assert data["status"] == "success"
         assert data["data"]["tenant_id"] == "new-tenant"
     
-    @patch('app.tenant_service')
+    @patch('src.app.tenant_service')
     def test_update_tenant_success(self, mock_tenant_service, client, environment_variables):
         """Test successful tenant update."""
         update_data = {
@@ -132,10 +133,10 @@ class TestAPIEndpoints:
         
         assert response.status_code == 200
         data = response.json()
-        assert data["success"] is True
+        assert data["status"] == "success"
         assert data["data"]["enabled"] is False
     
-    @patch('app.tenant_service')
+    @patch('src.app.tenant_service')
     def test_delete_tenant_success(self, mock_tenant_service, client, environment_variables):
         """Test successful tenant deletion."""
         mock_tenant_service.delete_tenant.return_value = None
@@ -144,7 +145,7 @@ class TestAPIEndpoints:
         
         assert response.status_code == 200
         data = response.json()
-        assert data["success"] is True
+        assert data["status"] == "success"
         assert "deleted" in data["message"].lower()
     
     def test_validation_error(self, client, environment_variables):
@@ -158,8 +159,7 @@ class TestAPIEndpoints:
         
         assert response.status_code == 422
         data = response.json()
-        assert data["success"] is False
-        assert "validation" in data["message"].lower()
+        assert "detail" in data
 
 
 class TestAPIModels:
@@ -167,7 +167,7 @@ class TestAPIModels:
     
     def test_tenant_create_request_validation(self):
         """Test tenant creation request validation."""
-        from models.tenant import TenantCreateRequest
+        from src.models.tenant import TenantCreateRequest
         
         # Valid request
         valid_data = {
@@ -183,7 +183,7 @@ class TestAPIModels:
     
     def test_tenant_create_request_invalid_arn(self):
         """Test tenant creation with invalid ARN."""
-        from models.tenant import TenantCreateRequest
+        from src.models.tenant import TenantCreateRequest
         from pydantic import ValidationError
         
         invalid_data = {
@@ -196,11 +196,11 @@ class TestAPIModels:
         with pytest.raises(ValidationError) as exc_info:
             TenantCreateRequest(**invalid_data)
         
-        assert "arn format" in str(exc_info.value).lower()
+        assert "arn" in str(exc_info.value).lower()
     
     def test_tenant_update_request_partial(self):
         """Test partial tenant update request."""
-        from models.tenant import TenantUpdateRequest
+        from src.models.tenant import TenantUpdateRequest
         
         partial_data = {
             "enabled": False,

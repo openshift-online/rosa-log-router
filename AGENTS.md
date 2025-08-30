@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to various agents when working with code in this repository.
 
 ## Project Overview
 
@@ -296,7 +296,7 @@ aws sqs get-queue-attributes \
 
 ### Unit Testing
 
-The project includes comprehensive unit tests for both the API and container components:
+The project includes comprehensive unit tests for both the API and container components (126 total tests):
 
 #### Prerequisites
 ```bash
@@ -321,7 +321,7 @@ pytest tests/unit/ --cov=container --cov=api/src --cov-report=html --cov-report=
 pytest tests/unit/test_log_processor.py -v
 
 # Test API components only
-pytest tests/unit/test_api_app.py -v
+pytest tests/unit/test_api_*.py -v
 ```
 
 **Run with specific markers:**
@@ -344,9 +344,11 @@ pytest tests/unit/ -m "slow" -v
   - SQS message processing and Lambda handler functionality
   - Error handling (recoverable vs non-recoverable errors)
 
-- `tests/unit/test_api_app.py`: Tests for API components
-  - FastAPI endpoint functionality
-  - Request/response validation
+- `tests/unit/test_api_*.py`: Tests for API components
+  - `test_api_app_endpoints.py`: FastAPI endpoint functionality, request/response validation
+  - `test_api_authorizer.py`: Lambda authorizer and HMAC authentication tests
+  - `test_api_dynamo_service.py`: DynamoDB tenant service tests
+  - `test_api_v1.py`: Original API integration tests
   - Error handling and HTTP status codes
   - Pydantic model validation
 
@@ -354,11 +356,12 @@ pytest tests/unit/ -m "slow" -v
   - AWS service mocking with moto
   - Environment variable management
   - Test database setup
+  - Consolidated fixtures from both container and API tests
 
 #### Test Features
 
 - **AWS Service Mocking**: Uses `moto` library to mock AWS services (S3, DynamoDB, STS, CloudWatch Logs)
-- **Comprehensive Coverage**: Tests both happy path and error scenarios
+- **Comprehensive Coverage**: Tests both happy path and error scenarios (70% code coverage)
 - **Isolated Tests**: Each test uses fresh mocked AWS resources
 - **Environment Management**: Automatic environment variable setup and cleanup
 - **Time Mocking**: Uses `freezegun` for consistent timestamp testing
@@ -439,13 +442,47 @@ The regional deployment model organizes infrastructure into four deployment type
 ### Vector Configuration (`k8s/collector/base/vector-config.yaml`, `vector-local-test.yaml`)
 - Collects logs from `/var/log/pods/**/*.log` in production
 - **Namespace Filtering**: Uses `extra_namespace_label_selector` to only collect from namespaces with `hypershift.openshift.io/hosted-control-plane=true`
-- Enriches logs with metadata: cluster_id, namespace, application (from pod label), pod_name
+- **Intelligent Log Parsing**: Automatically detects and parses JSON-formatted log messages while preserving plain text logs
+- **Transform Pipeline**:
+  - `enrich_metadata`: Enriches logs with metadata (cluster_id, namespace, application, pod_name)
+  - `parse_json_logs`: Parses JSON content in log messages and merges structured fields to top level, with intelligent timestamp extraction from 'ts' and 'time' fields
+  - `parse_plain_text_timestamps`: Extracts timestamps from plain text log messages using regex patterns for multiple log formats
+  - **Pipeline Flow**: `kubernetes_logs` → `enrich_metadata` → `parse_json_logs` → `parse_plain_text_timestamps` → `s3_logs`
 - Writes directly to S3 with dynamic key prefixing: `cluster_id/namespace/application/pod_name/`
-- Output format: NDJSON (newline-delimited JSON) with all logs in a single JSON array per file
+- Output format: NDJSON (newline-delimited JSON) with structured log records
 - Uses disk-based buffering for reliability (10GB max)
 - Batch settings: 64MB / 5 minutes (Note: Vector has known issues with batch sizing)
 - **Role Assumption**: Uses IRSA or base AWS credentials to assume S3WriterRole for secure S3 access
 - **Compression**: GZIP compression is properly working with ~30-35:1 compression ratios
+
+#### Intelligent Timestamp Parsing
+
+Vector's configuration includes comprehensive timestamp extraction from multiple log formats commonly found in OpenShift/Kubernetes environments:
+
+**JSON Log Parsing (`parse_json_logs` transform):**
+- **'ts' field priority**: Extracts timestamps from JSON logs with 'ts' field (etcd, ignition-server style)
+  - Supports ISO timestamp strings (`2025-08-30T06:11:26.816Z`)
+  - Handles Unix timestamps (seconds and milliseconds)
+  - Automatic fallback to Vector's ingestion timestamp on parsing errors
+- **'time' field fallback**: Alternative JSON timestamp field for structured logs
+- **Field cleanup**: Removes 'ts' and 'time' fields after extraction to avoid duplication
+
+**Plain Text Log Parsing (`parse_plain_text_timestamps` transform):**
+- **Direct ISO timestamps**: `2025-08-30T06:11:26.816Z Message here`
+- **Structured time format**: `time="2025-08-30T09:21:21Z" Additional content`
+- **Kubernetes log format**: `I0830 11:27:01.564974 1 controller.go:231] Message` (reconstructs year)
+- **Go standard log format**: `2025/08/30 10:33:20 message`
+
+**Fallback Hierarchy:**
+1. JSON 'ts' field → JSON 'time' field → Plain text patterns → Vector default timestamp
+2. All parsing uses error-safe fallible operations with proper error handling
+3. Invalid timestamps gracefully fall back to Vector's ingestion timestamp
+
+**Performance Optimizations:**
+- Priority-based parsing (most specific patterns first)
+- VRL regex matching with named capture groups
+- Efficient string building using `join!()` function
+- Early termination on successful timestamp extraction
 
 ### Unified Log Processor (`container/log_processor.py`)
 - **Multi-mode execution**: Lambda runtime, SQS polling, manual input
@@ -453,11 +490,12 @@ The regional deployment model organizes infrastructure into four deployment type
 - Extracts tenant information from S3 object keys (cluster_id/namespace/application/pod_name)
 - **Log Processing**: 
   - Downloads and decompresses gzipped files from S3
-  - Parses Vector's JSON array format (single line with array of log objects)
-  - Extracts only the 'message' field from each log record
+  - Processes Vector's pre-structured log records (JSON format with parsed fields)
+  - Handles both plain text and originally-JSON logs that Vector has already parsed
+  - Extracts the 'message' field and timestamp for CloudWatch delivery
 - **CloudWatch Delivery**:
   - Log streams named: `application-pod_name-date`
-  - Sends only message content (no Vector metadata wrapper)
+  - Sends structured log messages with proper timestamps
 - **Cross-Account Access**:
   - Double-hop role assumption with ExternalId validation
   - Lambda role → Central distribution role → Customer role

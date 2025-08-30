@@ -279,10 +279,15 @@ class TestLogProcessing:
     
     @freeze_time("2024-01-01 12:00:00")
     def test_convert_log_record_to_event_with_timestamp(self):
-        """Test converting log record with timestamp."""
+        """Test converting pre-structured log record with timestamp."""
+        # Since Vector now handles JSON parsing, log records are already structured
         log_record = {
             "timestamp": "2024-01-01T10:00:00Z",
-            "message": "Test log message"
+            "message": "Test log message",
+            "level": "INFO",
+            "cluster_id": "test-cluster",
+            "namespace": "default",
+            "application": "test-app"
         }
         
         event = convert_log_record_to_event(log_record)
@@ -294,8 +299,14 @@ class TestLogProcessing:
     
     @freeze_time("2024-01-01 12:00:00")
     def test_convert_log_record_to_event_without_timestamp(self):
-        """Test converting log record without timestamp."""
-        log_record = {"message": "Test log message"}
+        """Test converting pre-structured log record without timestamp."""
+        # Since Vector now handles JSON parsing, log records are already structured
+        log_record = {
+            "message": "Test log message",
+            "level": "INFO",
+            "cluster_id": "test-cluster",
+            "namespace": "default"
+        }
         
         event = convert_log_record_to_event(log_record)
         
@@ -304,13 +315,59 @@ class TestLogProcessing:
         assert event['timestamp'] == 1704110400000  # Current time in ms
     
     def test_convert_log_record_to_event_no_message(self):
-        """Test converting log record without message field."""
-        log_record = {"timestamp": "2024-01-01T10:00:00Z", "data": "some data"}
+        """Test converting pre-structured log record without message field."""
+        # Since Vector now handles JSON parsing, log records are already structured
+        log_record = {
+            "timestamp": "2024-01-01T10:00:00Z", 
+            "level": "INFO",
+            "cluster_id": "test-cluster",
+            "data": "some data"
+        }
         
         event = convert_log_record_to_event(log_record)
         
         assert event is not None
-        assert json.loads(event['message']) == log_record  # Entire record as JSON
+        assert json.loads(event['message']) == log_record  # Entire record as JSON fallback
+    
+    def test_convert_log_record_to_event_plain_text_from_vector(self):
+        """Test converting plain text log that was processed by Vector."""
+        # Vector wraps plain text logs with metadata
+        log_record = {
+            "timestamp": "2024-01-01T10:00:00Z",
+            "message": "2024-01-01T10:00:00Z INFO auth.service: User login successful",
+            "cluster_id": "test-cluster",
+            "namespace": "default",
+            "application": "auth-service",
+            "pod_name": "auth-pod-123"
+        }
+        
+        event = convert_log_record_to_event(log_record)
+        
+        assert event is not None
+        assert event['message'] == "2024-01-01T10:00:00Z INFO auth.service: User login successful"
+        assert 1704099600000 <= event['timestamp'] <= 1704103200000
+    
+    def test_convert_log_record_to_event_json_log_from_vector(self):
+        """Test converting JSON log that was processed and parsed by Vector."""
+        # Vector parses JSON logs and merges fields into the top level
+        log_record = {
+            "timestamp": "2024-01-01T10:00:00Z",
+            "message": "Payment processed successfully",
+            "level": "INFO",
+            "request_id": "req-12345",
+            "user_id": "user-789",
+            "amount": 100.50,
+            "cluster_id": "test-cluster",
+            "namespace": "default",
+            "application": "payment-service",
+            "pod_name": "payment-pod-456"
+        }
+        
+        event = convert_log_record_to_event(log_record)
+        
+        assert event is not None
+        assert event['message'] == "Payment processed successfully"
+        assert 1704099600000 <= event['timestamp'] <= 1704103200000
 
 
 class TestSQSRecordProcessing:
@@ -486,7 +543,9 @@ class TestVectorDelivery:
             
             log_processor.deliver_logs_with_vector(
                 log_events=log_events,
-                credentials=credentials,
+                central_credentials=credentials,
+                customer_role_arn='arn:aws:iam::987654321098:role/CustomerRole',
+                external_id='123456789012',
                 region='us-east-1',
                 log_group='/aws/logs/test',
                 log_stream='test-stream',
@@ -529,7 +588,9 @@ class TestVectorDelivery:
             
             log_processor.deliver_logs_with_vector(
                 log_events=log_events,
-                credentials=credentials,
+                central_credentials=credentials,
+                customer_role_arn='arn:aws:iam::987654321098:role/CustomerRole',
+                external_id='123456789012',
                 region='us-east-1',
                 log_group='/aws/logs/test',
                 log_stream='test-stream',
@@ -545,10 +606,9 @@ class TestCrossAccountRoleAssumption:
     
     @patch('boto3.client')
     def test_deliver_logs_to_customer_double_hop(self, mock_boto_client, environment_variables):
-        """Test double-hop role assumption for log delivery."""
-        # Mock STS clients
+        """Test role assumption for log delivery using Vector's native assume_role."""
+        # Mock STS client
         mock_sts_client = Mock()
-        mock_central_sts_client = Mock()
         
         # Mock role assumption responses
         central_role_response = {
@@ -559,25 +619,13 @@ class TestCrossAccountRoleAssumption:
             }
         }
         
-        customer_role_response = {
-            'Credentials': {
-                'AccessKeyId': 'customer-key',
-                'SecretAccessKey': 'customer-secret',
-                'SessionToken': 'customer-token'
-            }
-        }
-        
         mock_sts_client.assume_role.return_value = central_role_response
         mock_sts_client.get_caller_identity.return_value = {'Account': '123456789012'}
-        mock_central_sts_client.assume_role.return_value = customer_role_response
         
-        # Setup boto3.client to return appropriate clients
+        # Setup boto3.client to return STS client
         def mock_client_factory(service, **kwargs):
             if service == 'sts':
-                if 'aws_access_key_id' in kwargs:
-                    return mock_central_sts_client
-                else:
-                    return mock_sts_client
+                return mock_sts_client
             return Mock()
         
         mock_boto_client.side_effect = mock_client_factory
@@ -601,11 +649,12 @@ class TestCrossAccountRoleAssumption:
                 s3_timestamp=1234567890
             )
             
-            # Verify role assumptions were called correctly
+            # Verify only central role assumption was called (customer role handled by Vector)
             mock_sts_client.assume_role.assert_called_once()
-            mock_central_sts_client.assume_role.assert_called_once()
             
-            # Verify Vector delivery was called with customer credentials
+            # Verify deliver_logs_with_vector was called with central credentials and customer role ARN
             mock_vector_delivery.assert_called_once()
             call_args = mock_vector_delivery.call_args
-            assert call_args[1]['credentials'] == customer_role_response['Credentials']
+            assert call_args[1]['central_credentials']['AccessKeyId'] == 'central-key'
+            assert call_args[1]['customer_role_arn'] == 'arn:aws:iam::987654321098:role/CustomerRole'
+            assert call_args[1]['external_id'] == '123456789012'

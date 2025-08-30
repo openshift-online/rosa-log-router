@@ -40,12 +40,150 @@ data:
           if !exists(.timestamp) {
             .timestamp = now()
           }
+      
+      parse_json_logs:
+        type: "remap"
+        inputs: ["enrich_metadata"]
+        source: |
+          # Attempt to parse the message field as JSON
+          # If successful, merge the parsed JSON fields into the top-level event
+          # If parsing fails, leave the message field as plain text
+          parsed, err = parse_json(.message)
+          if err == null && is_object(parsed) {
+            # Store Vector's original timestamp as fallback
+            original_timestamp = .timestamp
+            
+            # Merge parsed JSON into the event, preserving existing fields
+            . = merge!(., parsed)
+            
+            # Handle timestamp precedence: prefer 'ts' or 'time' from JSON logs over Vector's timestamp
+            # Try 'ts' field first (etcd, ignition-server style)
+            if exists(.ts) {
+              ts_value = .ts
+              if is_string(ts_value) {
+                # Handle ISO timestamp strings
+                parsed_ts, ts_err = parse_timestamp(ts_value, "%+")
+                if ts_err == null {
+                  .timestamp = parsed_ts
+                } else {
+                  # Try Unix timestamp in string format
+                  unix_ts, unix_err = to_float(ts_value)
+                  if unix_err == null {
+                    # Convert to timestamp (handle both seconds and milliseconds)
+                    unix_ts_int = to_int!(unix_ts)
+                    if unix_ts < 1000000000000.0 {
+                      .timestamp = from_unix_timestamp!(unix_ts_int, "seconds")
+                    } else {
+                      unix_ts_ms = unix_ts / 1000
+                      .timestamp = from_unix_timestamp!(to_int!(unix_ts_ms), "seconds")
+                    }
+                  } else {
+                    # Keep Vector's original timestamp if parsing fails
+                    .timestamp = original_timestamp
+                  }
+                }
+              } else if is_float(ts_value) || is_integer(ts_value) {
+                # Handle numeric timestamps
+                ts_float = to_float!(ts_value)
+                if ts_float < 1000000000000.0 {
+                  .timestamp = from_unix_timestamp!(to_int!(ts_value), "seconds")
+                } else {
+                  ts_seconds = to_float!(ts_value) / 1000.0
+                  .timestamp = from_unix_timestamp!(to_int!(ts_seconds), "seconds")
+                }
+              } else {
+                # Keep Vector's original timestamp if ts is not a recognized format
+                .timestamp = original_timestamp
+              }
+              
+              # Remove the 'ts' field to avoid duplication
+              del(.ts)
+            # Try 'time' field as fallback (alternative JSON timestamp field)
+            } else if exists(.time) {
+              time_value = .time
+              if is_string(time_value) {
+                # Handle ISO timestamp strings
+                parsed_time, time_err = parse_timestamp(time_value, "%+")
+                if time_err == null {
+                  .timestamp = parsed_time
+                } else {
+                  # Keep Vector's original timestamp if parsing fails
+                  .timestamp = original_timestamp
+                }
+              } else {
+                # Keep Vector's original timestamp if time is not a string
+                .timestamp = original_timestamp
+              }
+              
+              # Remove the 'time' field to avoid duplication
+              del(.time)
+            }
+          }
+          # If err is not null or parsed is not an object, keep original message
+      
+      parse_plain_text_timestamps:
+        type: "remap"
+        inputs: ["parse_json_logs"]
+        source: |
+          # Parse timestamps from plain text log messages
+          # This handles logs that weren't parsed as JSON or didn't have timestamp fields
+          
+          message = string!(.message)
+          
+          # Priority order for timestamp extraction (try most specific first)
+          
+          # 1. Direct ISO timestamp at start: "2025-08-30T06:11:26.816Z Message here"
+          iso_match, iso_err = parse_regex(message, r'^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,6})?Z?)')
+          if iso_err == null && iso_match != null {
+            parsed_ts, ts_err = parse_timestamp(iso_match.timestamp, "%+")
+            if ts_err == null {
+              .timestamp = parsed_ts
+            }
+          } else {
+            # 2. time="timestamp" format: 'time="2025-08-30T09:21:21Z" Additional content'
+            time_match, time_err = parse_regex(message, r'time="(?P<timestamp>[^"]+)"')
+            if time_err == null && time_match != null {
+              parsed_ts, ts_err = parse_timestamp(time_match.timestamp, "%+")
+              if ts_err == null {
+                .timestamp = parsed_ts
+              }
+            }
+            # 3. Kubernetes log format: "I0830 11:27:01.564974 1 controller.go:231] Message"
+            k8s_match, k8s_err = parse_regex(message, r'^[IWEF](?P<month>\d{2})(?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})\.(?P<microsecond>\d{6})')
+            if k8s_err == null && k8s_match != null {
+              # Construct ISO timestamp (assume current year)
+              current_year = format_timestamp!(now(), "%Y")
+              # Extract milliseconds (first 3 digits of microseconds)
+              millis = slice!(k8s_match.microsecond, start: 0, end: 3)
+              # Build ISO timestamp using join function
+              parts = [current_year, "-", k8s_match.month, "-", k8s_match.day, "T", 
+                      k8s_match.hour, ":", k8s_match.minute, ":", k8s_match.second, ".", millis, "Z"]
+              iso_timestamp = join!(parts, "")
+              parsed_ts, ts_err = parse_timestamp(iso_timestamp, "%+")
+              if ts_err == null {
+                .timestamp = parsed_ts
+              }
+            # 4. Go standard log format: "2025/08/30 10:33:20 message"
+            } else {
+              go_match, go_err = parse_regex(message, r'^(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})')
+              if go_err == null && go_match != null {
+                # Build ISO timestamp using join function
+                parts = [go_match.year, "-", go_match.month, "-", go_match.day, "T", 
+                        go_match.hour, ":", go_match.minute, ":", go_match.second, "Z"]
+                iso_timestamp = join!(parts, "")
+                parsed_ts, ts_err = parse_timestamp(iso_timestamp, "%+")
+                if ts_err == null {
+                  .timestamp = parsed_ts
+                }
+              }
+            }
+          }
     
     # Sinks
     sinks:
       s3_logs:
         type: "aws_s3"
-        inputs: ["enrich_metadata"]
+        inputs: ["parse_plain_text_timestamps"]
         
         # S3 bucket configuration
         bucket: "${S3_BUCKET_NAME}"
