@@ -16,3 +16,7 @@ patches:
     target:
       kind: Deployment
       name: log-processor
+  - path: imagestream-patch.yaml
+    target:
+      kind: ImageStream
+      name: processor
