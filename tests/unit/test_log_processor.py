@@ -768,6 +768,80 @@ class TestVectorDelivery:
             )
         
         assert "Vector exited with non-zero code 1" in str(exc_info.value)
+    
+    @patch('log_processor.subprocess.Popen')
+    @patch('log_processor.tempfile.mkstemp')
+    def test_deliver_logs_with_vector_timestamp_conversion(self, mock_mkstemp, mock_popen):
+        """Test Vector log delivery with proper timestamp format conversion."""
+        mock_mkstemp.return_value = (5, '/tmp/vector-config-123.yaml')
+        
+        # Mock subprocess
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.communicate.return_value = ('Vector output', '')
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+        
+        # Test with millisecond timestamps (should be converted to seconds)
+        log_events = [
+            {"message": "Test log 1", "timestamp": 1609459200000},  # 2021-01-01 00:00:00 in ms
+            {"message": "Test log 2", "timestamp": 1609459260000},  # 2021-01-01 00:01:00 in ms
+            {"message": "Test log 3", "timestamp": 1609459200}     # Already in seconds
+        ]
+        
+        credentials = {
+            'AccessKeyId': 'test-key',
+            'SecretAccessKey': 'test-secret',
+            'SessionToken': 'test-token'
+        }
+        
+        # Mock file operations
+        mocked_open = mock_open(read_data='mock config template')
+        
+        with patch('builtins.open', mocked_open), \
+             patch('os.fdopen', mock_open()), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'), \
+             patch('shutil.rmtree'):
+            
+            log_processor.deliver_logs_with_vector(
+                log_events=log_events,
+                central_credentials=credentials,
+                customer_role_arn='arn:aws:iam::987654321098:role/CustomerRole',
+                external_id='123456789012',
+                region='us-east-1',
+                log_group='/aws/logs/test',
+                log_stream='test-stream',
+                session_id='test-session',
+                s3_timestamp=1609459200000
+            )
+            
+            # Verify subprocess was called
+            mock_popen.assert_called_once()
+            
+            # Verify the input sent to Vector subprocess
+            call_args = mock_process.communicate.call_args
+            input_data = call_args[1]['input']  # communicate(input=data, timeout=300)
+            
+            # Parse the NDJSON input to verify timestamp conversion
+            lines = input_data.strip().split('\n')
+            assert len(lines) == 3
+            
+            # Check first event (millisecond timestamp converted to seconds)
+            import json
+            event1 = json.loads(lines[0])
+            assert event1['message'] == 'Test log 1'
+            assert event1['timestamp'] == 1609459200.0  # Converted from ms to seconds
+            
+            # Check second event
+            event2 = json.loads(lines[1])
+            assert event2['message'] == 'Test log 2'
+            assert event2['timestamp'] == 1609459260.0  # Converted from ms to seconds
+            
+            # Check third event (already in seconds, should remain unchanged)
+            event3 = json.loads(lines[2])
+            assert event3['message'] == 'Test log 3'
+            assert event3['timestamp'] == 1609459200  # Should remain as seconds
 
 
 class TestCrossAccountRoleAssumption:
