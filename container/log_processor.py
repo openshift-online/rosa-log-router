@@ -568,11 +568,12 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
     """
     Convert log record to CloudWatch Logs event format
     
-    Since Vector now handles JSON parsing at the collection stage, log records
-    are already well-structured with parsed fields available at the top level.
+    Since Vector now handles JSON parsing and timestamp extraction at the collection stage, 
+    log records are already well-structured with a normalized 'timestamp' field.
     """
     try:
         # Extract timestamp from the structured log record
+        # Vector collector has already extracted and normalized timestamps into 'timestamp' field
         timestamp = log_record.get('timestamp')
         if timestamp:
             if isinstance(timestamp, str):

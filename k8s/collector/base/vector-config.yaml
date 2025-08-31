@@ -56,7 +56,9 @@ data:
             # Merge parsed JSON into the event, preserving existing fields
             . = merge!(., parsed)
             
-            # Handle timestamp precedence: prefer 'ts' or 'time' from JSON logs over Vector's timestamp
+            # Handle timestamp precedence: prefer JSON log timestamps over Vector's timestamp
+            # Priority order: ts -> time -> stageTimestamp -> requestReceivedTimestamp -> Vector default
+            
             # Try 'ts' field first (etcd, ignition-server style)
             if exists(.ts) {
               ts_value = .ts
@@ -117,6 +119,38 @@ data:
               
               # Remove the 'time' field to avoid duplication
               del(.time)
+            # Try 'stageTimestamp' field (Kubernetes audit logs - primary)
+            } else if exists(.stageTimestamp) {
+              stage_timestamp = .stageTimestamp
+              if is_string(stage_timestamp) {
+                # Handle ISO timestamp strings
+                parsed_ts, ts_err = parse_timestamp(stage_timestamp, "%+")
+                if ts_err == null {
+                  .timestamp = parsed_ts
+                } else {
+                  # Keep Vector's original timestamp if parsing fails
+                  .timestamp = original_timestamp
+                }
+              } else {
+                # Keep Vector's original timestamp if stageTimestamp is not a string
+                .timestamp = original_timestamp
+              }
+            # Try 'requestReceivedTimestamp' field (Kubernetes audit logs - fallback)
+            } else if exists(.requestReceivedTimestamp) {
+              request_timestamp = .requestReceivedTimestamp
+              if is_string(request_timestamp) {
+                # Handle ISO timestamp strings
+                parsed_ts, ts_err = parse_timestamp(request_timestamp, "%+")
+                if ts_err == null {
+                  .timestamp = parsed_ts
+                } else {
+                  # Keep Vector's original timestamp if parsing fails
+                  .timestamp = original_timestamp
+                }
+              } else {
+                # Keep Vector's original timestamp if requestReceivedTimestamp is not a string
+                .timestamp = original_timestamp
+              }
             }
             
             # Handle message field to eliminate duplication
