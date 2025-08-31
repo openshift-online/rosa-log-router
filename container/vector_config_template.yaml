@@ -6,10 +6,37 @@ sources:
     decoding:
       codec: "json"
 
+transforms:
+  extract_timestamp:
+    type: remap
+    inputs: ["stdin"]
+    source: |
+      # Extract timestamp from JSON and convert to proper format
+      if exists(.timestamp) {{
+        if is_string(.timestamp) {{
+          # Parse ISO timestamp string
+          parsed_ts, err = parse_timestamp(.timestamp, "%+")
+          if err == null {{
+            .timestamp = parsed_ts
+          }}
+        }} else if is_float(.timestamp) || is_integer(.timestamp) {{
+          # Convert numeric timestamp to proper timestamp object
+          # Vector expects seconds, so convert from milliseconds if needed
+          ts_value = to_float!(.timestamp)
+          if ts_value > 1000000000000.0 {{
+            # Milliseconds - convert to seconds
+            .timestamp = from_unix_timestamp!(to_int(ts_value / 1000.0), "seconds")
+          }} else {{
+            # Already in seconds
+            .timestamp = from_unix_timestamp!(to_int(ts_value), "seconds")
+          }}
+        }}
+      }}
+
 sinks:
   cloudwatch_logs:
     type: aws_cloudwatch_logs
-    inputs: ["stdin"]
+    inputs: ["extract_timestamp"]
     region: "{region}"
     group_name: "{log_group}"
     stream_name: "{log_stream}"

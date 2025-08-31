@@ -1030,3 +1030,207 @@ class TestVectorLogParsing:
         log_line = "Some random text without log level keywords"
         result = parse_vector_log_level(log_line)
         assert result == logging.WARNING  # Should fallback to WARNING
+
+
+
+class TestVectorSubprocessTimestampMapping:
+    """Test Vector subprocess configuration for CloudWatch timestamp mapping."""
+    
+    @patch('log_processor.subprocess.Popen')
+    @patch('log_processor.tempfile.mkstemp')
+    def test_vector_config_includes_timestamp_transform(self, mock_mkstemp, mock_popen):
+        """Test that Vector config template includes timestamp transform for CloudWatch mapping."""
+        mock_mkstemp.return_value = (5, '/tmp/vector-config-123.yaml')
+        
+        # Mock subprocess
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.communicate.return_value = ('Vector output', '')
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+        
+        log_events = [{"message": "Test log", "timestamp": 1725108058}]
+        
+        credentials = {
+            'AccessKeyId': 'test-key',
+            'SecretAccessKey': 'test-secret',
+            'SessionToken': 'test-token'
+        }
+        
+        # We'll capture what's written to the temporary config file
+        written_config = None
+        
+        def mock_fdopen(fd, mode):
+            if mode == 'w':
+                # Create a mock file object that captures what's written
+                mock_file = Mock()
+                written_configs = []
+                
+                def write_side_effect(content):
+                    written_configs.append(content)
+                    return len(content)
+                
+                def context_manager():
+                    return mock_file
+                
+                mock_file.write.side_effect = write_side_effect
+                mock_file.__enter__ = lambda self: self
+                mock_file.__exit__ = lambda self, *args: None
+                
+                # Store reference so we can access it later
+                mock_fdopen.written_configs = written_configs
+                return mock_file
+            return Mock()
+        
+        # Mock the template file read with timestamp transform approach
+        template_content = '''data_dir: /tmp/vector-{session_id}
+
+sources:
+  stdin:
+    type: stdin
+    decoding:
+      codec: "json"
+
+transforms:
+  extract_timestamp:
+    type: remap
+    inputs: ["stdin"]
+    source: |
+      # Extract timestamp from JSON and convert to proper format
+      if exists(.timestamp) {{
+        if is_string(.timestamp) {{
+          # Parse ISO timestamp string
+          parsed_ts, err = parse_timestamp(.timestamp, "%+")
+          if err == null {{
+            .timestamp = parsed_ts
+          }}
+        }} else if is_float(.timestamp) || is_integer(.timestamp) {{
+          # Convert numeric timestamp to proper timestamp object
+          ts_value = to_float!(.timestamp)
+          if ts_value > 1000000000000.0 {{
+            .timestamp = from_unix_timestamp!(to_int!(ts_value / 1000.0), "seconds")
+          }} else {{
+            .timestamp = from_unix_timestamp!(to_int!(ts_value), "seconds")
+          }}
+        }}
+      }}
+
+sinks:
+  cloudwatch_logs:
+    type: aws_cloudwatch_logs
+    inputs: ["extract_timestamp"]
+    region: "{region}"
+    group_name: "{log_group}"
+    stream_name: "{log_stream}"
+    encoding:
+      codec: "text"
+      timestamp_format: "unix"
+    auth:
+      assume_role: "{customer_role_arn}"
+      external_id: "{external_id}"
+    batch:
+      max_events: 1000
+      timeout_secs: 5
+    request:
+      retry_attempts: 3
+      retry_max_duration_secs: 30'''
+        
+        with patch('builtins.open', mock_open(read_data=template_content)), \
+             patch('os.fdopen', side_effect=mock_fdopen), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'), \
+             patch('shutil.rmtree'):
+            
+            log_processor.deliver_logs_with_vector(
+                log_events=log_events,
+                central_credentials=credentials,
+                customer_role_arn='arn:aws:iam::987654321098:role/CustomerRole',
+                external_id='123456789012',
+                region='us-east-1',
+                log_group='/aws/logs/test',
+                log_stream='test-stream',
+                session_id='test-session',
+                s3_timestamp=1725108058000
+            )
+            
+            # Verify the config was written with timestamp transform
+            written_config = ''.join(mock_fdopen.written_configs)
+            assert 'extract_timestamp:' in written_config
+            assert 'type: remap' in written_config
+            assert 'parse_timestamp(.timestamp' in written_config
+            assert 'timestamp_format: "unix"' in written_config
+            assert 'region: "us-east-1"' in written_config
+            assert 'group_name: "/aws/logs/test"' in written_config
+    
+    @patch('log_processor.subprocess.Popen')
+    @patch('log_processor.tempfile.mkstemp')
+    def test_vector_receives_proper_timestamp_format(self, mock_mkstemp, mock_popen):
+        """Test that Vector subprocess receives timestamps in proper Unix seconds format."""
+        mock_mkstemp.return_value = (5, '/tmp/vector-config-123.yaml')
+        
+        # Mock subprocess
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.communicate.return_value = ('Vector output', '')
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+        
+        # Test with mixed timestamp formats
+        log_events = [
+            {"message": "Log 1", "timestamp": 1725108058000},  # Milliseconds
+            {"message": "Log 2", "timestamp": 1725108059},     # Seconds
+            {"message": "Log 3", "timestamp": 1725108060000}   # Milliseconds
+        ]
+        
+        credentials = {
+            'AccessKeyId': 'test-key',
+            'SecretAccessKey': 'test-secret',
+            'SessionToken': 'test-token'
+        }
+        
+        # Mock file operations
+        mocked_open = mock_open(read_data='mock config template')
+        
+        with patch('builtins.open', mocked_open), \
+             patch('os.fdopen', mock_open()), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'), \
+             patch('shutil.rmtree'):
+            
+            log_processor.deliver_logs_with_vector(
+                log_events=log_events,
+                central_credentials=credentials,
+                customer_role_arn='arn:aws:iam::987654321098:role/CustomerRole',
+                external_id='123456789012',
+                region='us-east-1',
+                log_group='/aws/logs/test',
+                log_stream='test-stream',
+                session_id='test-session',
+                s3_timestamp=1725108058000
+            )
+            
+            # Verify subprocess was called
+            assert mock_popen.called
+            
+            # Get the input sent to Vector via communicate()
+            communicate_call = mock_process.communicate.call_args
+            vector_input = communicate_call[1]['input']
+            
+            # Parse the NDJSON input to verify timestamp conversion
+            lines = vector_input.strip().split('\n')
+            assert len(lines) == 3
+            
+            # Check first event (millisecond timestamp converted to seconds)
+            event1 = json.loads(lines[0])
+            assert event1['message'] == "Log 1"
+            assert event1['timestamp'] == 1725108058.0  # Converted from ms to seconds
+            
+            # Check second event (already in seconds)
+            event2 = json.loads(lines[1])
+            assert event2['message'] == "Log 2"
+            assert event2['timestamp'] == 1725108059  # Should remain as seconds
+            
+            # Check third event (millisecond timestamp converted to seconds)
+            event3 = json.loads(lines[2])
+            assert event3['message'] == "Log 3"
+            assert event3['timestamp'] == 1725108060.0  # Converted from ms to seconds
