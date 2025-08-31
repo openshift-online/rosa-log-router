@@ -270,6 +270,12 @@ def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     
     if len(path_parts) < 5:
         raise InvalidS3NotificationError(f"Invalid object key format. Expected at least 5 path segments, got {len(path_parts)}: {object_key}")
+    
+    # Validate that required path segments are not empty (handles double slashes in paths)
+    required_segments = ['cluster_id', 'tenant_id', 'application', 'pod_name']
+    for i, segment_name in enumerate(required_segments):
+        if not path_parts[i] or path_parts[i].strip() == '':
+            raise InvalidS3NotificationError(f"Invalid object key format. {segment_name} (segment {i}) cannot be empty: {object_key}")
 
     tenant_info = {
         'cluster_id': path_parts[0],
@@ -336,6 +342,11 @@ def get_tenant_configuration(tenant_id: str) -> Dict[str, Any]:
         # Re-raise TenantNotFoundError as-is
         raise
     except Exception as e:
+        # Handle DynamoDB ValidationException for empty string keys (from malformed S3 paths)
+        if 'ValidationException' in str(e) and 'empty string value' in str(e):
+            logger.warning(f"Invalid tenant_id (empty string) for DynamoDB lookup: '{tenant_id}'. This indicates a malformed S3 object path.")
+            raise TenantNotFoundError(f"Invalid tenant_id (empty string) from malformed S3 path")
+        
         logger.error(f"Failed to get tenant configuration for {tenant_id}: {str(e)}")
         raise
 

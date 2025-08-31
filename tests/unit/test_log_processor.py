@@ -73,6 +73,52 @@ class TestExtractTenantInfoFromKey:
         
         assert "Invalid object key format" in str(exc_info.value)
         assert "Expected at least 5 path segments" in str(exc_info.value)
+    
+    def test_invalid_object_key_empty_cluster_id(self):
+        """Test parsing object key with empty cluster_id (leading slash)."""
+        object_key = "/tenant/app/pod/file.json.gz"
+        
+        with pytest.raises(InvalidS3NotificationError) as exc_info:
+            extract_tenant_info_from_key(object_key)
+        
+        assert "cluster_id (segment 0) cannot be empty" in str(exc_info.value)
+    
+    def test_invalid_object_key_empty_tenant_id(self):
+        """Test parsing object key with empty tenant_id (double slash)."""
+        # This is the exact scenario from the bug report
+        object_key = "scuppett-oepz//hosted-cluster-config-operator/hosted-cluster-config-operator-c66f74b5f-dhp62/20250831-104654.json.gz"
+        
+        with pytest.raises(InvalidS3NotificationError) as exc_info:
+            extract_tenant_info_from_key(object_key)
+        
+        assert "tenant_id (segment 1) cannot be empty" in str(exc_info.value)
+    
+    def test_invalid_object_key_empty_application(self):
+        """Test parsing object key with empty application."""
+        object_key = "cluster/tenant//pod/file.json.gz"
+        
+        with pytest.raises(InvalidS3NotificationError) as exc_info:
+            extract_tenant_info_from_key(object_key)
+        
+        assert "application (segment 2) cannot be empty" in str(exc_info.value)
+    
+    def test_invalid_object_key_empty_pod_name(self):
+        """Test parsing object key with empty pod_name."""
+        object_key = "cluster/tenant/app//file.json.gz"
+        
+        with pytest.raises(InvalidS3NotificationError) as exc_info:
+            extract_tenant_info_from_key(object_key)
+        
+        assert "pod_name (segment 3) cannot be empty" in str(exc_info.value)
+    
+    def test_invalid_object_key_whitespace_only_segments(self):
+        """Test parsing object key with whitespace-only segments."""
+        object_key = "cluster/ /app/pod/file.json.gz"
+        
+        with pytest.raises(InvalidS3NotificationError) as exc_info:
+            extract_tenant_info_from_key(object_key)
+        
+        assert "tenant_id (segment 1) cannot be empty" in str(exc_info.value)
 
 
 class TestTenantConfiguration:
@@ -193,6 +239,43 @@ class TestTenantConfiguration:
             del config['desired_logs']
         
         assert should_process_application(config, 'any-service') is True
+    
+    def test_get_tenant_configuration_dynamodb_validation_exception(self, environment_variables):
+        """Test DynamoDB ValidationException for empty string tenant_id."""
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('boto3.resource') as mock_boto3:
+                mock_table = MagicMock()
+                mock_boto3.return_value.Table.return_value = mock_table
+                
+                # Simulate DynamoDB ValidationException for empty string
+                validation_error = Exception(
+                    'ValidationException: One or more parameter values are not valid. '
+                    'The AttributeValue for a key attribute cannot contain an empty string value. Key: tenant_id'
+                )
+                mock_table.get_item.side_effect = validation_error
+                
+                with pytest.raises(TenantNotFoundError) as exc_info:
+                    get_tenant_configuration('')
+                
+                assert "Invalid tenant_id (empty string) from malformed S3 path" in str(exc_info.value)
+    
+    def test_get_tenant_configuration_other_dynamodb_error(self, environment_variables):
+        """Test that other DynamoDB errors are not converted to TenantNotFoundError."""
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('boto3.resource') as mock_boto3:
+                mock_table = MagicMock()
+                mock_boto3.return_value.Table.return_value = mock_table
+                
+                # Simulate other DynamoDB error
+                other_error = Exception('Some other DynamoDB error')
+                mock_table.get_item.side_effect = other_error
+                
+                with pytest.raises(Exception) as exc_info:
+                    get_tenant_configuration('valid-tenant')
+                
+                # Should not be converted to TenantNotFoundError
+                assert "Some other DynamoDB error" in str(exc_info.value)
+                assert not isinstance(exc_info.value, TenantNotFoundError)
 
 
 class TestLogProcessing:
@@ -446,6 +529,90 @@ class TestSQSRecordProcessing:
             mock_get_tenant.side_effect = TenantNotFoundError("Tenant not found")
             
             # Should not raise an exception (handled as non-recoverable)
+            log_processor.process_sqs_record(sqs_record)
+    
+    def test_process_sqs_record_malformed_s3_path_empty_tenant_id(self, environment_variables):
+        """Test processing SQS record with malformed S3 path (empty tenant_id)."""
+        # Create S3 event with malformed path (double slash - the exact bug scenario)
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "scuppett-oepz//hosted-cluster-config-operator/pod-123/file.json.gz"}
+                }
+            }]
+        }
+        
+        # Create SNS message
+        sns_message = {"Message": json.dumps(s3_event)}
+        
+        # Create SQS record
+        sqs_record = {
+            "body": json.dumps(sns_message),
+            "messageId": "test-message-id"
+        }
+        
+        # Should not raise an exception (handled as non-recoverable)
+        # The InvalidS3NotificationError should be caught and handled
+        log_processor.process_sqs_record(sqs_record)
+    
+    def test_process_sqs_record_malformed_s3_path_empty_cluster_id(self, environment_variables):
+        """Test processing SQS record with malformed S3 path (empty cluster_id)."""
+        # Create S3 event with malformed path (leading slash)
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "/tenant/app/pod/file.json.gz"}
+                }
+            }]
+        }
+        
+        # Create SNS message
+        sns_message = {"Message": json.dumps(s3_event)}
+        
+        # Create SQS record
+        sqs_record = {
+            "body": json.dumps(sns_message),
+            "messageId": "test-message-id"
+        }
+        
+        # Should not raise an exception (handled as non-recoverable)
+        log_processor.process_sqs_record(sqs_record)
+    
+    def test_process_sqs_record_dynamodb_validation_exception(self, environment_variables):
+        """Test processing SQS record that triggers DynamoDB ValidationException."""
+        # Create S3 event with valid path but simulate ValidationException in DynamoDB
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "cluster/tenant/app/pod/file.json.gz"}
+                }
+            }]
+        }
+        
+        # Create SNS message
+        sns_message = {"Message": json.dumps(s3_event)}
+        
+        # Create SQS record
+        sqs_record = {
+            "body": json.dumps(sns_message),
+            "messageId": "test-message-id"
+        }
+        
+        with patch('boto3.resource') as mock_boto3:
+            mock_table = MagicMock()
+            mock_boto3.return_value.Table.return_value = mock_table
+            
+            # Simulate DynamoDB ValidationException for empty string
+            validation_error = Exception(
+                'ValidationException: One or more parameter values are not valid. '
+                'The AttributeValue for a key attribute cannot contain an empty string value. Key: tenant_id'
+            )
+            mock_table.get_item.side_effect = validation_error
+            
+            # Should not raise an exception (ValidationException converted to TenantNotFoundError)
             log_processor.process_sqs_record(sqs_record)
 
 
