@@ -16,4 +16,8 @@ patches:
     target:
       kind: DaemonSet
       name: vector-logs
+  - path: imagestream-patch.yaml
+    target:
+      kind: ImageStream
+      name: collector
 

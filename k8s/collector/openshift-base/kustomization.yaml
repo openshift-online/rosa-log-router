@@ -9,7 +9,7 @@ resources:
 namespace: logging
 
 patches:
-  - path: imagestream-patch.yaml
+  - path: daemonset-patch.yaml
     target:
       kind: DaemonSet
       name: vector-logs
