@@ -70,12 +70,12 @@ data:
                   unix_ts, unix_err = to_float(ts_value)
                   if unix_err == null {
                     # Convert to timestamp (handle both seconds and milliseconds)
-                    unix_ts_int = to_int!(unix_ts)
+                    unix_ts_int = to_int(unix_ts)
                     if unix_ts < 1000000000000.0 {
                       .timestamp = from_unix_timestamp!(unix_ts_int, "seconds")
                     } else {
                       unix_ts_ms = unix_ts / 1000
-                      .timestamp = from_unix_timestamp!(to_int!(unix_ts_ms), "seconds")
+                      .timestamp = from_unix_timestamp!(to_int(unix_ts_ms), "seconds")
                     }
                   } else {
                     # Keep Vector's original timestamp if parsing fails
@@ -89,7 +89,7 @@ data:
                   .timestamp = from_unix_timestamp!(to_int!(ts_value), "seconds")
                 } else {
                   ts_seconds = to_float!(ts_value) / 1000.0
-                  .timestamp = from_unix_timestamp!(to_int!(ts_seconds), "seconds")
+                  .timestamp = from_unix_timestamp!(to_int(ts_seconds), "seconds")
                 }
               } else {
                 # Keep Vector's original timestamp if ts is not a recognized format
