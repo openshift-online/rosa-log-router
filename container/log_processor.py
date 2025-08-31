@@ -762,9 +762,10 @@ def deliver_logs_with_vector(
             timestamp = event.get('timestamp', timestamp)
             
             # Create simple JSON object for Vector
+            # Convert timestamp from milliseconds to seconds for Vector (Vector expects Unix seconds)
             json_event = {
                 'message': message,
-                'timestamp': timestamp
+                'timestamp': timestamp / 1000 if timestamp > 1e12 else timestamp
             }
             all_events += json.dumps(json_event) + '\n'
         

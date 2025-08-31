@@ -118,6 +118,23 @@ data:
               # Remove the 'time' field to avoid duplication
               del(.time)
             }
+            
+            # Handle message field to eliminate duplication
+            # Replace .message with actual message content from parsed JSON
+            if exists(.msg) {
+              .message = .msg
+              del(.msg)
+            } else if exists(.message_content) {
+              .message = .message_content
+              del(.message_content)
+            } else if exists(.log) {
+              .message = .log
+              del(.log)
+            } else if exists(.text) {
+              .message = .text
+              del(.text)
+            }
+            # Keep original .message if no specific message field found
           }
           # If err is not null or parsed is not an object, keep original message
       
