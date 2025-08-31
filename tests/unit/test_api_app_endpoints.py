@@ -346,7 +346,7 @@ class TestErrorHandling:
         """Test handling of invalid JSON in request body"""
         response = client.post(
             "/api/v1/tenants",
-            data="invalid json",
+            content="invalid json",
             headers={"content-type": "application/json"}
         )
         
