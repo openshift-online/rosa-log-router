@@ -24,6 +24,8 @@ from log_processor import (
     download_and_process_log_file,
     process_json_file,
     convert_log_record_to_event,
+    parse_vector_log_level,
+    log_vector_line,
     TenantNotFoundError,
     InvalidS3NotificationError,
     NonRecoverableError
@@ -825,3 +827,132 @@ class TestCrossAccountRoleAssumption:
             assert call_args[1]['central_credentials']['AccessKeyId'] == 'central-key'
             assert call_args[1]['customer_role_arn'] == 'arn:aws:iam::987654321098:role/CustomerRole'
             assert call_args[1]['external_id'] == '123456789012'
+
+
+class TestVectorLogParsing:
+    """Test Vector log level parsing functionality."""
+    
+    def test_parse_vector_log_level_info(self):
+        """Test parsing Vector INFO level logs."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z INFO vector::app: Log level is enabled. level=\"info\""
+        result = parse_vector_log_level(log_line)
+        assert result == logging.INFO
+    
+    def test_parse_vector_log_level_warn(self):
+        """Test parsing Vector WARN level logs."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z WARN vector::config: Deprecated configuration option used"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.WARNING
+    
+    def test_parse_vector_log_level_error(self):
+        """Test parsing Vector ERROR level logs."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z ERROR vector::sources: Failed to connect to source"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.ERROR
+    
+    def test_parse_vector_log_level_debug(self):
+        """Test parsing Vector DEBUG level logs."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z DEBUG vector::internal: Debug information"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.DEBUG
+    
+    def test_parse_vector_log_level_trace(self):
+        """Test parsing Vector TRACE level logs."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z TRACE vector::internal: Trace information"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.DEBUG  # TRACE maps to DEBUG
+    
+    def test_parse_vector_log_level_with_microseconds(self):
+        """Test parsing Vector logs with microsecond timestamps."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588123Z INFO vector::app: Message with microseconds"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.INFO
+    
+    def test_parse_vector_log_level_invalid_format(self):
+        """Test parsing non-Vector log format falls back to WARNING."""
+        import logging
+        log_line = "This is not a Vector log line"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.WARNING
+    
+    def test_parse_vector_log_level_unknown_level(self):
+        """Test parsing Vector log with unknown level falls back to WARNING."""
+        import logging
+        log_line = "2025-08-31T10:53:48.817588Z UNKNOWN vector::app: Unknown level"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.WARNING
+    
+    def test_log_vector_line_info(self, caplog):
+        """Test log_vector_line with INFO level."""
+        import logging
+        with caplog.at_level(logging.INFO):
+            log_line = "2025-08-31T10:53:48.817588Z INFO vector::app: Test message"
+            log_vector_line(log_line)
+        
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.INFO
+        assert "VECTOR: 2025-08-31T10:53:48.817588Z INFO vector::app: Test message" in caplog.records[0].message
+    
+    def test_log_vector_line_warning(self, caplog):
+        """Test log_vector_line with WARNING level."""
+        import logging
+        with caplog.at_level(logging.WARNING):
+            log_line = "2025-08-31T10:53:48.817588Z WARN vector::config: Test warning"
+            log_vector_line(log_line)
+        
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.WARNING
+        assert "VECTOR: 2025-08-31T10:53:48.817588Z WARN vector::config: Test warning" in caplog.records[0].message
+    
+    def test_log_vector_line_error(self, caplog):
+        """Test log_vector_line with ERROR level."""
+        import logging
+        with caplog.at_level(logging.ERROR):
+            log_line = "2025-08-31T10:53:48.817588Z ERROR vector::sources: Test error"
+            log_vector_line(log_line)
+        
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.ERROR
+        assert "VECTOR: 2025-08-31T10:53:48.817588Z ERROR vector::sources: Test error" in caplog.records[0].message
+    
+    def test_parse_vector_log_level_long_message_performance(self):
+        """Test that parsing only checks first 50 characters for performance."""
+        import logging
+        # Create a very long log message - the level should still be parsed correctly
+        # because we only check the first 50 characters
+        very_long_message = "This is a very long message that goes on and on and contains many characters and could potentially be thousands of characters long in production but we should only scan the first 50 characters for performance reasons"
+        log_line = f"2025-08-31T10:53:48.817588Z INFO vector::app: {very_long_message}"
+        
+        result = parse_vector_log_level(log_line)
+        assert result == logging.INFO
+        
+        # Test that it works even if the message is shorter than 50 characters
+        short_log_line = "2025-08-31T10:53:48.817588Z WARN vector::config: Short"
+        result = parse_vector_log_level(short_log_line)
+        assert result == logging.WARNING
+    
+    def test_parse_vector_log_level_simplified_regex_edge_cases(self):
+        """Test simplified regex handles edge cases correctly."""
+        import logging
+        
+        # Test that log level keywords in message content don't interfere
+        # (should pick up the first occurrence which is the actual log level)
+        log_line = "2025-08-31T10:53:48.817588Z INFO vector::app: ERROR occurred in downstream"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.INFO  # Should pick up INFO, not ERROR
+        
+        # Test that partial matches don't work (word boundaries)
+        log_line = "2025-08-31T10:53:48.817588Z INFO vector::app: INFORMATION message"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.INFO  # Should pick up INFO, not be confused by INFORMATION
+        
+        # Test line with no recognizable log level
+        log_line = "Some random text without log level keywords"
+        result = parse_vector_log_level(log_line)
+        assert result == logging.WARNING  # Should fallback to WARNING

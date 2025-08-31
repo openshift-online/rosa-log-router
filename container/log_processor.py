@@ -9,6 +9,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,54 @@ RETRY_ATTEMPTS = int(os.environ.get('RETRY_ATTEMPTS', '3'))
 CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = os.environ.get('CENTRAL_LOG_DISTRIBUTION_ROLE_ARN')
 SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+# Compiled regex for Vector log level parsing (performance optimization)
+# Vector format: 2025-08-31T10:53:48.817588Z [LEVEL] component::path: Message
+# Simplified to just match the log level keywords in the first 50 characters
+_VECTOR_LOG_PATTERN = re.compile(r'\b(INFO|WARN|ERROR|DEBUG|TRACE)\b')
+
+# Map Vector levels to Python logging levels (constant for performance)
+_VECTOR_LEVEL_MAP = {
+    'ERROR': logging.ERROR,
+    'WARN': logging.WARNING,
+    'INFO': logging.INFO,
+    'DEBUG': logging.DEBUG,
+    'TRACE': logging.DEBUG
+}
+
+def parse_vector_log_level(log_line: str) -> int:
+    """
+    Parse Vector log line and extract the log level, returning Python logging level.
+    
+    Vector log format: 2025-08-31T10:53:48.817588Z [LEVEL] component::path: Message
+    
+    Args:
+        log_line: Vector log line
+        
+    Returns:
+        Python logging level constant (logging.INFO, logging.WARNING, etc.)
+    """
+    # Only search the first 50 characters where timestamp and level appear
+    # This avoids scanning the entire potentially long log message
+    log_prefix = log_line[:50] if len(log_line) > 50 else log_line
+    
+    match = _VECTOR_LOG_PATTERN.search(log_prefix)
+    if match:
+        vector_level = match.group(1)
+        return _VECTOR_LEVEL_MAP.get(vector_level, logging.WARNING)
+    
+    # Fallback to WARNING for unparseable lines
+    return logging.WARNING
+
+def log_vector_line(log_line: str) -> None:
+    """
+    Log a Vector output line with the appropriate Python log level.
+    
+    Args:
+        log_line: Vector log line to be logged
+    """
+    python_level = parse_vector_log_level(log_line)
+    logger.log(python_level, f"  VECTOR: {log_line}")
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
@@ -736,9 +785,9 @@ def deliver_logs_with_vector(
                 logger.info("Vector stdout: (empty)")
                 
             if stderr:
-                logger.warning("Vector stderr:")
+                logger.info("Vector stderr:")
                 for line in stderr.splitlines():
-                    logger.warning(f"  VECTOR: {line}")
+                    log_vector_line(line)
             else:
                 logger.info("Vector stderr: (empty)")
                 
