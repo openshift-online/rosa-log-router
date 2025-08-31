@@ -15,9 +15,8 @@ COPY pyproject.toml uv.lock README.md ./
 # Install Python dependencies using uv with frozen lockfile for reproducible builds
 RUN uv sync --frozen --no-dev
 
-# Copy authorizer source code
-COPY src/handlers/authorizer.py ./
-COPY src/utils/ ./utils/
+# Copy API source code
+COPY src/ ./src/
 
 # Set the Lambda handler
-CMD ["authorizer.lambda_handler"]
+CMD ["src.handlers.authorizer.lambda_handler"]
