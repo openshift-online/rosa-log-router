@@ -2,8 +2,6 @@
 Main API handler for the tenant management service
 """
 
-import json
-import logging
 import os
 from typing import Dict, Any
 
