@@ -1,9 +1,10 @@
 """
-DynamoDB service layer for tenant configuration management
+DynamoDB service layer for tenant delivery configuration management
 """
 
 import logging
 from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 import boto3
 
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class TenantNotFoundError(Exception):
-    """Raised when a tenant is not found in DynamoDB"""
+    """Raised when a tenant delivery configuration is not found in DynamoDB"""
     pass
 
 
@@ -20,12 +21,12 @@ class DynamoDBError(Exception):
     pass
 
 
-class TenantService:
-    """Service class for managing tenant configurations in DynamoDB"""
+class TenantDeliveryConfigService:
+    """Service class for managing tenant delivery configurations in DynamoDB"""
     
     def __init__(self, table_name: str, region: str = "us-east-1"):
         """
-        Initialize the tenant service
+        Initialize the tenant delivery configuration service
         
         Args:
             table_name: Name of the DynamoDB table
@@ -50,80 +51,153 @@ class TenantService:
             self._table = self.dynamodb.Table(self.table_name)
         return self._table
     
-    def get_tenant(self, tenant_id: str) -> Dict[str, Any]:
+    def _apply_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply default values to configuration"""
+        config = config.copy()
+        
+        # Apply defaults
+        if 'enabled' not in config or config['enabled'] is None:
+            config['enabled'] = True
+        
+        # Add timestamps
+        current_time = datetime.now(timezone.utc).isoformat()
+        if 'created_at' not in config or config['created_at'] is None:
+            config['created_at'] = current_time
+        config['updated_at'] = current_time
+        
+        return config
+    
+    def get_tenant_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
         """
-        Get a tenant configuration by ID
+        Get a specific tenant delivery configuration by ID and type
         
         Args:
             tenant_id: The tenant identifier
+            delivery_type: The delivery configuration type ("cloudwatch" or "s3")
             
         Returns:
-            Dictionary containing tenant configuration
+            Dictionary containing tenant delivery configuration
             
         Raises:
-            TenantNotFoundError: If tenant is not found
+            TenantNotFoundError: If configuration is not found
             DynamoDBError: For other DynamoDB errors
         """
         try:
-            response = self.table.get_item(Key={'tenant_id': tenant_id})
+            response = self.table.get_item(
+                Key={
+                    'tenant_id': tenant_id,
+                    'type': delivery_type
+                }
+            )
             
             if 'Item' not in response:
-                raise TenantNotFoundError(f"Tenant '{tenant_id}' not found")
+                raise TenantNotFoundError(f"Tenant '{tenant_id}' delivery configuration '{delivery_type}' not found")
             
             return dict(response['Item'])
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            logger.error(f"DynamoDB error getting tenant {tenant_id}: {error_code}")
-            raise DynamoDBError(f"Failed to get tenant: {error_code}")
+            logger.error(f"DynamoDB error getting tenant {tenant_id}/{delivery_type}: {error_code}")
+            raise DynamoDBError(f"Failed to get tenant configuration: {error_code}")
     
-    def create_tenant(self, tenant_data: Dict[str, Any]) -> Dict[str, Any]:
+    def get_tenant_configs(self, tenant_id: str) -> List[Dict[str, Any]]:
         """
-        Create a new tenant configuration
+        Get all delivery configurations for a tenant
         
         Args:
-            tenant_data: Dictionary containing tenant configuration
+            tenant_id: The tenant identifier
             
         Returns:
-            The created tenant data
+            List of dictionaries containing tenant delivery configurations
             
         Raises:
             DynamoDBError: For DynamoDB operation errors
         """
         try:
-            # Add default values
-            item = tenant_data.copy()
-            if 'enabled' not in item:
-                item['enabled'] = True
-                
-            self.table.put_item(
-                Item=item,
-                ConditionExpression='attribute_not_exists(tenant_id)'
+            response = self.table.query(
+                KeyConditionExpression='tenant_id = :tenant_id',
+                ExpressionAttributeValues={
+                    ':tenant_id': tenant_id
+                }
             )
             
-            logger.info(f"Created tenant: {tenant_data['tenant_id']}")
+            return [dict(item) for item in response.get('Items', [])]
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            logger.error(f"DynamoDB error getting tenant configs for {tenant_id}: {error_code}")
+            raise DynamoDBError(f"Failed to get tenant configurations: {error_code}")
+    
+    def get_enabled_tenant_configs(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all enabled delivery configurations for a tenant
+        
+        Args:
+            tenant_id: The tenant identifier
+            
+        Returns:
+            List of enabled delivery configurations
+            
+        Raises:
+            DynamoDBError: For DynamoDB operation errors
+        """
+        configs = self.get_tenant_configs(tenant_id)
+        
+        # Filter for enabled configurations (default to True if not present)
+        enabled_configs = []
+        for config in configs:
+            if config.get('enabled', True):
+                enabled_configs.append(config)
+        
+        return enabled_configs
+    
+    def create_tenant_config(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new tenant delivery configuration
+        
+        Args:
+            config_data: Dictionary containing tenant delivery configuration
+            
+        Returns:
+            The created tenant configuration data
+            
+        Raises:
+            DynamoDBError: For DynamoDB operation errors
+        """
+        try:
+            # Apply defaults and timestamps
+            item = self._apply_defaults(config_data)
+            
+            self.table.put_item(
+                Item=item,
+                ConditionExpression='attribute_not_exists(tenant_id) AND attribute_not_exists(#type)',
+                ExpressionAttributeNames={'#type': 'type'}
+            )
+            
+            logger.info(f"Created tenant delivery config: {config_data['tenant_id']}/{config_data['type']}")
             return item
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'ConditionalCheckFailedException':
-                raise DynamoDBError(f"Tenant '{tenant_data['tenant_id']}' already exists")
-            logger.error(f"DynamoDB error creating tenant: {error_code}")
-            raise DynamoDBError(f"Failed to create tenant: {error_code}")
+                raise DynamoDBError(f"Tenant '{config_data['tenant_id']}' delivery configuration '{config_data['type']}' already exists")
+            logger.error(f"DynamoDB error creating tenant config: {error_code}")
+            raise DynamoDBError(f"Failed to create tenant configuration: {error_code}")
     
-    def update_tenant(self, tenant_id: str, tenant_data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_tenant_config(self, tenant_id: str, delivery_type: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Update an existing tenant configuration
+        Update an existing tenant delivery configuration
         
         Args:
             tenant_id: The tenant identifier
-            tenant_data: Dictionary containing updated tenant configuration
+            delivery_type: The delivery configuration type
+            update_data: Dictionary containing updated configuration
             
         Returns:
-            The updated tenant data
+            The updated tenant configuration data
             
         Raises:
-            TenantNotFoundError: If tenant is not found
+            TenantNotFoundError: If configuration is not found
             DynamoDBError: For other DynamoDB errors
         """
         try:
@@ -132,8 +206,12 @@ class TenantService:
             expr_attr_values = {}
             expr_attr_names = {}
             
-            for key, value in tenant_data.items():
-                if key != 'tenant_id':  # Don't update the primary key
+            # Always update the updated_at timestamp
+            update_data = update_data.copy()
+            update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+            
+            for key, value in update_data.items():
+                if key not in ['tenant_id', 'type']:  # Don't update the primary keys
                     placeholder = f":{key}"
                     attr_name = f"#{key}"
                     update_expr_parts.append(f"{attr_name} = {placeholder}")
@@ -145,82 +223,94 @@ class TenantService:
             
             update_expression = "SET " + ", ".join(update_expr_parts)
             
+            # Add expression attribute name for the condition expression
+            expr_attr_names['#delivery_type'] = 'type'
+            
             response = self.table.update_item(
-                Key={'tenant_id': tenant_id},
+                Key={
+                    'tenant_id': tenant_id,
+                    'type': delivery_type
+                },
                 UpdateExpression=update_expression,
                 ExpressionAttributeValues=expr_attr_values,
                 ExpressionAttributeNames=expr_attr_names,
-                ConditionExpression='attribute_exists(tenant_id)',
+                ConditionExpression='attribute_exists(tenant_id) AND attribute_exists(#delivery_type)',
                 ReturnValues='ALL_NEW'
             )
             
-            logger.info(f"Updated tenant: {tenant_id}")
+            logger.info(f"Updated tenant delivery config: {tenant_id}/{delivery_type}")
             return dict(response['Attributes'])
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'ConditionalCheckFailedException':
-                raise TenantNotFoundError(f"Tenant '{tenant_id}' not found")
-            logger.error(f"DynamoDB error updating tenant {tenant_id}: {error_code}")
-            raise DynamoDBError(f"Failed to update tenant: {error_code}")
+                raise TenantNotFoundError(f"Tenant '{tenant_id}' delivery configuration '{delivery_type}' not found")
+            logger.error(f"DynamoDB error updating tenant config {tenant_id}/{delivery_type}: {error_code}")
+            raise DynamoDBError(f"Failed to update tenant configuration: {error_code}")
     
-    def patch_tenant(self, tenant_id: str, patch_data: Dict[str, Any]) -> Dict[str, Any]:
+    def patch_tenant_config(self, tenant_id: str, delivery_type: str, patch_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Partially update a tenant configuration
+        Partially update a tenant delivery configuration
         
         Args:
             tenant_id: The tenant identifier
+            delivery_type: The delivery configuration type
             patch_data: Dictionary containing fields to update
             
         Returns:
-            The updated tenant data
+            The updated tenant configuration data
             
         Raises:
-            TenantNotFoundError: If tenant is not found
+            TenantNotFoundError: If configuration is not found
             DynamoDBError: For other DynamoDB errors
         """
-        return self.update_tenant(tenant_id, patch_data)
+        return self.update_tenant_config(tenant_id, delivery_type, patch_data)
     
-    def delete_tenant(self, tenant_id: str) -> bool:
+    def delete_tenant_config(self, tenant_id: str, delivery_type: str) -> bool:
         """
-        Delete a tenant configuration
+        Delete a tenant delivery configuration
         
         Args:
             tenant_id: The tenant identifier
+            delivery_type: The delivery configuration type
             
         Returns:
-            True if tenant was deleted
+            True if configuration was deleted
             
         Raises:
-            TenantNotFoundError: If tenant is not found
+            TenantNotFoundError: If configuration is not found
             DynamoDBError: For other DynamoDB errors
         """
         try:
             self.table.delete_item(
-                Key={'tenant_id': tenant_id},
-                ConditionExpression='attribute_exists(tenant_id)'
+                Key={
+                    'tenant_id': tenant_id,
+                    'type': delivery_type
+                },
+                ConditionExpression='attribute_exists(tenant_id) AND attribute_exists(#type)',
+                ExpressionAttributeNames={'#type': 'type'}
             )
             
-            logger.info(f"Deleted tenant: {tenant_id}")
+            logger.info(f"Deleted tenant delivery config: {tenant_id}/{delivery_type}")
             return True
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'ConditionalCheckFailedException':
-                raise TenantNotFoundError(f"Tenant '{tenant_id}' not found")
-            logger.error(f"DynamoDB error deleting tenant {tenant_id}: {error_code}")
-            raise DynamoDBError(f"Failed to delete tenant: {error_code}")
+                raise TenantNotFoundError(f"Tenant '{tenant_id}' delivery configuration '{delivery_type}' not found")
+            logger.error(f"DynamoDB error deleting tenant config {tenant_id}/{delivery_type}: {error_code}")
+            raise DynamoDBError(f"Failed to delete tenant configuration: {error_code}")
     
-    def list_tenants(self, limit: int = 50, last_key: Optional[str] = None) -> Dict[str, Any]:
+    def list_tenant_configs(self, limit: int = 50, last_key: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
-        List tenant configurations with pagination
+        List tenant delivery configurations with pagination
         
         Args:
-            limit: Maximum number of tenants to return
-            last_key: Last evaluated key for pagination
+            limit: Maximum number of configurations to return
+            last_key: Last evaluated key for pagination (dict with tenant_id and type)
             
         Returns:
-            Dictionary containing tenants list and pagination info
+            Dictionary containing configurations list and pagination info
             
         Raises:
             DynamoDBError: For DynamoDB operation errors
@@ -231,59 +321,56 @@ class TenantService:
             }
             
             if last_key:
-                scan_kwargs['ExclusiveStartKey'] = {'tenant_id': last_key}
+                scan_kwargs['ExclusiveStartKey'] = last_key
             
             response = self.table.scan(**scan_kwargs)
             
-            tenants = [dict(item) for item in response.get('Items', [])]
+            configurations = [dict(item) for item in response.get('Items', [])]
             
             result = {
-                'tenants': tenants,
-                'count': len(tenants),
+                'configurations': configurations,
+                'count': len(configurations),
                 'limit': limit
             }
             
             if 'LastEvaluatedKey' in response:
-                result['last_key'] = response['LastEvaluatedKey']['tenant_id']
+                result['last_key'] = f"{response['LastEvaluatedKey']['tenant_id']}#{response['LastEvaluatedKey']['type']}"
             
             return result
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            logger.error(f"DynamoDB error listing tenants: {error_code}")
-            raise DynamoDBError(f"Failed to list tenants: {error_code}")
+            logger.error(f"DynamoDB error listing tenant configs: {error_code}")
+            raise DynamoDBError(f"Failed to list tenant configurations: {error_code}")
     
-    def validate_tenant_config(self, tenant_id: str) -> Dict[str, Any]:
+    def validate_tenant_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
         """
-        Validate a tenant configuration
+        Validate a tenant delivery configuration
         
         Args:
             tenant_id: The tenant identifier
+            delivery_type: The delivery configuration type
             
         Returns:
             Dictionary containing validation results
             
         Raises:
-            TenantNotFoundError: If tenant is not found
+            TenantNotFoundError: If configuration is not found
             DynamoDBError: For other DynamoDB errors
         """
-        tenant = self.get_tenant(tenant_id)
+        config = self.get_tenant_config(tenant_id, delivery_type)
         
         validation_results = {
             'tenant_id': tenant_id,
+            'type': delivery_type,
             'valid': True,
             'checks': []
         }
         
-        # Required fields validation
-        required_fields = [
-            'log_distribution_role_arn',
-            'log_group_name',
-            'target_region'
-        ]
-        
-        for field in required_fields:
-            if field not in tenant or not tenant[field]:
+        # Common field validation
+        common_fields = ['tenant_id', 'type']
+        for field in common_fields:
+            if field not in config or not config[field]:
                 validation_results['valid'] = False
                 validation_results['checks'].append({
                     'field': field,
@@ -297,18 +384,65 @@ class TenantService:
                     'message': f'Field {field} is present'
                 })
         
-        # Role ARN format validation
-        role_arn = tenant.get('log_distribution_role_arn', '')
-        if role_arn and not role_arn.startswith('arn:aws:iam::'):
-            validation_results['valid'] = False
-            validation_results['checks'].append({
-                'field': 'log_distribution_role_arn',
-                'status': 'invalid',
-                'message': 'Role ARN format is invalid'
-            })
+        # Type-specific validation
+        if delivery_type == 'cloudwatch':
+            required_fields = ['log_distribution_role_arn', 'log_group_name']
+            
+            for field in required_fields:
+                if field not in config or not config[field]:
+                    validation_results['valid'] = False
+                    validation_results['checks'].append({
+                        'field': field,
+                        'status': 'missing',
+                        'message': f'Required CloudWatch field {field} is missing or empty'
+                    })
+                else:
+                    validation_results['checks'].append({
+                        'field': field,
+                        'status': 'ok',
+                        'message': f'CloudWatch field {field} is present'
+                    })
+            
+            # Role ARN format validation
+            role_arn = config.get('log_distribution_role_arn', '')
+            if role_arn and not role_arn.startswith('arn:aws:iam::'):
+                validation_results['valid'] = False
+                validation_results['checks'].append({
+                    'field': 'log_distribution_role_arn',
+                    'status': 'invalid',
+                    'message': 'Role ARN format is invalid'
+                })
+        
+        elif delivery_type == 's3':
+            required_fields = ['bucket_name']
+            
+            for field in required_fields:
+                if field not in config or not config[field]:
+                    validation_results['valid'] = False
+                    validation_results['checks'].append({
+                        'field': field,
+                        'status': 'missing',
+                        'message': f'Required S3 field {field} is missing or empty'
+                    })
+                else:
+                    validation_results['checks'].append({
+                        'field': field,
+                        'status': 'ok',
+                        'message': f'S3 field {field} is present'
+                    })
+            
+            # S3 bucket name validation (basic)
+            bucket_name = config.get('bucket_name', '')
+            if bucket_name and not bucket_name.replace('-', '').replace('.', '').isalnum():
+                validation_results['valid'] = False
+                validation_results['checks'].append({
+                    'field': 'bucket_name',
+                    'status': 'invalid',
+                    'message': 'S3 bucket name format appears invalid'
+                })
         
         # Region validation (basic)
-        target_region = tenant.get('target_region', '')
+        target_region = config.get('target_region', '')
         if target_region and not target_region.replace('-', '').replace('_', '').isalnum():
             validation_results['valid'] = False
             validation_results['checks'].append({

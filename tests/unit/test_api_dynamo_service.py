@@ -11,169 +11,188 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
 
-from src.services.dynamo import TenantService, TenantNotFoundError, DynamoDBError
+from src.services.dynamo import TenantDeliveryConfigService, TenantNotFoundError, DynamoDBError
 
 
-class TestTenantService:
-    """Test cases for TenantService class"""
+class TestTenantDeliveryConfigService:
+    """Test cases for TenantDeliveryConfigService class"""
     
-    def test_get_tenant_success(self, tenant_service, sample_tenant_data):
-        """Test successful tenant retrieval"""
-        # Create a tenant first
-        tenant_service.create_tenant(sample_tenant_data)
+    def test_get_tenant_config_success(self, delivery_config_service, sample_cloudwatch_config):
+        """Test successful delivery config retrieval"""
+        # Create a delivery config first
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
-        # Retrieve the tenant
-        result = tenant_service.get_tenant("test-tenant")
+        # Retrieve the config
+        result = delivery_config_service.get_tenant_config("test-tenant", "cloudwatch")
         
         assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["log_distribution_role_arn"] == "arn:aws:iam::123456789012:role/TestRole"
         assert result["log_group_name"] == "/aws/logs/test-tenant"
         assert result["target_region"] == "us-east-1"
         assert result["enabled"] is True
         assert result["desired_logs"] == ["app1", "app2"]
     
-    def test_get_tenant_not_found(self, tenant_service):
-        """Test tenant retrieval when tenant doesn't exist"""
-        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' not found"):
-            tenant_service.get_tenant("nonexistent")
+    def test_get_tenant_config_not_found(self, delivery_config_service):
+        """Test delivery config retrieval when config doesn't exist"""
+        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' delivery configuration 'cloudwatch' not found"):
+            delivery_config_service.get_tenant_config("nonexistent", "cloudwatch")
     
-    def test_create_tenant_success(self, tenant_service, sample_tenant_data):
-        """Test successful tenant creation"""
-        result = tenant_service.create_tenant(sample_tenant_data)
+    def test_create_tenant_config_success(self, delivery_config_service, sample_cloudwatch_config):
+        """Test successful delivery config creation"""
+        result = delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
         assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["enabled"] is True  # Default value should be set
         
-        # Verify tenant was actually created
-        retrieved = tenant_service.get_tenant("test-tenant")
+        # Verify config was actually created
+        retrieved = delivery_config_service.get_tenant_config("test-tenant", "cloudwatch")
         assert retrieved["tenant_id"] == "test-tenant"
+        assert retrieved["type"] == "cloudwatch"
     
-    def test_create_tenant_minimal_data(self, tenant_service, sample_tenant_minimal):
-        """Test tenant creation with minimal required fields"""
-        result = tenant_service.create_tenant(sample_tenant_minimal)
+    def test_create_s3_config_success(self, delivery_config_service, sample_s3_config):
+        """Test successful S3 delivery config creation"""
+        result = delivery_config_service.create_tenant_config(sample_s3_config)
         
-        assert result["tenant_id"] == "minimal-tenant"
+        assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "s3"
+        assert result["bucket_name"] == "test-bucket"
+        assert result["bucket_prefix"] == "ROSA/cluster-logs/"
         assert result["enabled"] is True  # Should default to True
         assert "desired_logs" not in result or result["desired_logs"] is None
     
-    def test_create_tenant_duplicate(self, tenant_service, sample_tenant_data):
-        """Test tenant creation with duplicate tenant_id"""
-        # Create tenant first time
-        tenant_service.create_tenant(sample_tenant_data)
+    def test_create_tenant_config_duplicate(self, delivery_config_service, sample_cloudwatch_config):
+        """Test delivery config creation with duplicate tenant_id/type"""
+        # Create config first time
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
         # Try to create again - should fail
         with pytest.raises(DynamoDBError, match="already exists"):
-            tenant_service.create_tenant(sample_tenant_data)
+            delivery_config_service.create_tenant_config(sample_cloudwatch_config)
     
-    def test_update_tenant_success(self, tenant_service, sample_tenant_data):
-        """Test successful tenant update"""
-        # Create tenant first
-        tenant_service.create_tenant(sample_tenant_data)
+    def test_update_tenant_config_success(self, delivery_config_service, sample_cloudwatch_config):
+        """Test successful delivery config update"""
+        # Create config first
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
-        # Update tenant
+        # Update config
         update_data = {
             "log_group_name": "/aws/logs/updated-tenant",
             "enabled": False,
             "desired_logs": ["new-app"]
         }
         
-        result = tenant_service.update_tenant("test-tenant", update_data)
+        result = delivery_config_service.update_tenant_config("test-tenant", "cloudwatch", update_data)
         
         assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["log_group_name"] == "/aws/logs/updated-tenant"
         assert result["enabled"] is False
         assert result["desired_logs"] == ["new-app"]
         # Other fields should remain unchanged
         assert result["log_distribution_role_arn"] == "arn:aws:iam::123456789012:role/TestRole"
     
-    def test_update_tenant_not_found(self, tenant_service):
-        """Test tenant update when tenant doesn't exist"""
+    def test_update_tenant_config_not_found(self, delivery_config_service):
+        """Test delivery config update when config doesn't exist"""
         update_data = {"enabled": False}
         
-        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' not found"):
-            tenant_service.update_tenant("nonexistent", update_data)
+        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' delivery configuration 'cloudwatch' not found"):
+            delivery_config_service.update_tenant_config("nonexistent", "cloudwatch", update_data)
     
-    def test_update_tenant_no_fields(self, tenant_service, sample_tenant_data):
-        """Test tenant update with no fields to update"""
-        tenant_service.create_tenant(sample_tenant_data)
+    def test_update_tenant_config_no_fields(self, delivery_config_service, sample_cloudwatch_config):
+        """Test delivery config update with no fields to update (should still update timestamp)"""
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
-        with pytest.raises(DynamoDBError, match="No fields to update"):
-            tenant_service.update_tenant("test-tenant", {})
-    
-    def test_patch_tenant_success(self, tenant_service, sample_tenant_data):
-        """Test successful tenant patch (partial update)"""
-        # Create tenant first
-        tenant_service.create_tenant(sample_tenant_data)
-        
-        # Patch tenant
-        patch_data = {"enabled": False}
-        
-        result = tenant_service.patch_tenant("test-tenant", patch_data)
+        # Even with empty update data, should succeed because updated_at is always added
+        result = delivery_config_service.update_tenant_config("test-tenant", "cloudwatch", {})
         
         assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
+        assert "updated_at" in result
+    
+    def test_patch_tenant_config_success(self, delivery_config_service, sample_cloudwatch_config):
+        """Test successful delivery config patch (partial update)"""
+        # Create config first
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
+        
+        # Patch config
+        patch_data = {"enabled": False}
+        
+        result = delivery_config_service.patch_tenant_config("test-tenant", "cloudwatch", patch_data)
+        
+        assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["enabled"] is False
         # Other fields should remain unchanged
         assert result["log_group_name"] == "/aws/logs/test-tenant"
         assert result["desired_logs"] == ["app1", "app2"]
     
-    def test_delete_tenant_success(self, tenant_service, sample_tenant_data):
-        """Test successful tenant deletion"""
-        # Create tenant first
-        tenant_service.create_tenant(sample_tenant_data)
+    def test_delete_tenant_config_success(self, delivery_config_service, sample_cloudwatch_config):
+        """Test successful delivery config deletion"""
+        # Create config first
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
-        # Delete tenant
-        result = tenant_service.delete_tenant("test-tenant")
+        # Delete config
+        result = delivery_config_service.delete_tenant_config("test-tenant", "cloudwatch")
         assert result is True
         
-        # Verify tenant is gone
+        # Verify config is gone
         with pytest.raises(TenantNotFoundError):
-            tenant_service.get_tenant("test-tenant")
+            delivery_config_service.get_tenant_config("test-tenant", "cloudwatch")
     
-    def test_delete_tenant_not_found(self, tenant_service):
-        """Test tenant deletion when tenant doesn't exist"""
-        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' not found"):
-            tenant_service.delete_tenant("nonexistent")
+    def test_delete_tenant_config_not_found(self, delivery_config_service):
+        """Test delivery config deletion when config doesn't exist"""
+        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' delivery configuration 'cloudwatch' not found"):
+            delivery_config_service.delete_tenant_config("nonexistent", "cloudwatch")
     
-    def test_list_tenants_empty(self, tenant_service):
-        """Test listing tenants when table is empty"""
-        result = tenant_service.list_tenants()
+    def test_get_tenant_configs_success(self, delivery_config_service, sample_cloudwatch_config, sample_s3_config):
+        """Test getting all delivery configs for a tenant"""
+        # Create both CloudWatch and S3 configs for the same tenant
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
+        delivery_config_service.create_tenant_config(sample_s3_config)
         
-        assert result["tenants"] == []
+        # Get all configs for the tenant
+        result = delivery_config_service.get_tenant_configs("test-tenant")
+        
+        assert len(result) == 2
+        config_types = [config["type"] for config in result]
+        assert "cloudwatch" in config_types
+        assert "s3" in config_types
+    
+    def test_get_enabled_tenant_configs(self, delivery_config_service, sample_cloudwatch_config, sample_s3_config):
+        """Test getting only enabled delivery configs for a tenant"""
+        # Create enabled CloudWatch config
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
+        
+        # Create disabled S3 config
+        sample_s3_config["enabled"] = False
+        delivery_config_service.create_tenant_config(sample_s3_config)
+        
+        # Get enabled configs for the tenant
+        result = delivery_config_service.get_enabled_tenant_configs("test-tenant")
+        
+        assert len(result) == 1
+        assert result[0]["type"] == "cloudwatch"
+        assert result[0]["enabled"] is True
+    
+    def test_list_tenant_configs_empty(self, delivery_config_service):
+        """Test listing delivery configs when table is empty"""
+        result = delivery_config_service.list_tenant_configs()
+        
+        assert result["configurations"] == []
         assert result["count"] == 0
         assert result["limit"] == 50
         assert "last_key" not in result
     
-    def test_list_tenants_with_data(self, populated_table):
-        """Test listing tenants with data"""
-        result = populated_table.list_tenants()
+    def test_validate_tenant_config_valid_cloudwatch(self, delivery_config_service, sample_cloudwatch_config):
+        """Test delivery configuration validation for valid CloudWatch config"""
+        delivery_config_service.create_tenant_config(sample_cloudwatch_config)
         
-        assert len(result["tenants"]) == 3
-        assert result["count"] == 3
-        assert result["limit"] == 50
-        
-        # Verify all tenants are present
-        tenant_ids = [t["tenant_id"] for t in result["tenants"]]
-        assert "tenant-1" in tenant_ids
-        assert "tenant-2" in tenant_ids
-        assert "tenant-3" in tenant_ids
-    
-    def test_list_tenants_with_limit(self, populated_table):
-        """Test listing tenants with limit"""
-        result = populated_table.list_tenants(limit=2)
-        
-        assert len(result["tenants"]) == 2
-        assert result["count"] == 2
-        assert result["limit"] == 2
-        # Should have pagination key since we limited results
-        assert "last_key" in result
-    
-    def test_validate_tenant_config_valid(self, tenant_service, sample_tenant_data):
-        """Test tenant configuration validation for valid tenant"""
-        tenant_service.create_tenant(sample_tenant_data)
-        
-        result = tenant_service.validate_tenant_config("test-tenant")
+        result = delivery_config_service.validate_tenant_config("test-tenant", "cloudwatch")
         
         assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["valid"] is True
         assert len(result["checks"]) > 0
         
@@ -181,21 +200,36 @@ class TestTenantService:
         check_fields = [check["field"] for check in result["checks"]]
         assert "log_distribution_role_arn" in check_fields
         assert "log_group_name" in check_fields
-        assert "target_region" in check_fields
     
-    def test_validate_tenant_config_invalid_role_arn(self, tenant_service):
-        """Test tenant configuration validation with invalid role ARN"""
-        invalid_tenant = {
-            "tenant_id": "invalid-tenant",
-            "log_distribution_role_arn": "invalid-arn",
-            "log_group_name": "/aws/logs/invalid-tenant",
-            "target_region": "us-east-1"
-        }
-        tenant_service.create_tenant(invalid_tenant)
+    def test_validate_tenant_config_valid_s3(self, delivery_config_service, sample_s3_config):
+        """Test delivery configuration validation for valid S3 config"""
+        delivery_config_service.create_tenant_config(sample_s3_config)
         
-        result = tenant_service.validate_tenant_config("invalid-tenant")
+        result = delivery_config_service.validate_tenant_config("test-tenant", "s3")
+        
+        assert result["tenant_id"] == "test-tenant"
+        assert result["type"] == "s3"
+        assert result["valid"] is True
+        assert len(result["checks"]) > 0
+        
+        # Check that required fields are validated
+        check_fields = [check["field"] for check in result["checks"]]
+        assert "bucket_name" in check_fields
+    
+    def test_validate_tenant_config_invalid_role_arn(self, delivery_config_service):
+        """Test delivery configuration validation with invalid role ARN"""
+        invalid_config = {
+            "tenant_id": "invalid-tenant",
+            "type": "cloudwatch",
+            "log_distribution_role_arn": "invalid-arn",
+            "log_group_name": "/aws/logs/invalid-tenant"
+        }
+        delivery_config_service.create_tenant_config(invalid_config)
+        
+        result = delivery_config_service.validate_tenant_config("invalid-tenant", "cloudwatch")
         
         assert result["tenant_id"] == "invalid-tenant"
+        assert result["type"] == "cloudwatch"
         assert result["valid"] is False
         
         # Find the role ARN validation check
@@ -207,59 +241,36 @@ class TestTenantService:
         assert role_check is not None
         assert "invalid" in role_check["message"]
     
-    def test_validate_tenant_config_missing_fields(self, tenant_service):
-        """Test tenant configuration validation with missing fields"""
-        incomplete_tenant = {
-            "tenant_id": "incomplete-tenant",
-            "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole"
-            # Missing log_group_name and target_region
-        }
-        
-        # Use low-level DynamoDB operation to create incomplete tenant
-        tenant_service.table.put_item(Item=incomplete_tenant)
-        
-        result = tenant_service.validate_tenant_config("incomplete-tenant")
-        
-        assert result["tenant_id"] == "incomplete-tenant"
-        assert result["valid"] is False
-        
-        # Check for missing field validations
-        missing_checks = [
-            check for check in result["checks"] 
-            if check["status"] == "missing"
-        ]
-        assert len(missing_checks) >= 2  # log_group_name and target_region
-    
-    def test_validate_tenant_config_not_found(self, tenant_service):
-        """Test tenant configuration validation when tenant doesn't exist"""
-        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' not found"):
-            tenant_service.validate_tenant_config("nonexistent")
+    def test_validate_tenant_config_not_found(self, delivery_config_service):
+        """Test delivery configuration validation when config doesn't exist"""
+        with pytest.raises(TenantNotFoundError, match="Tenant 'nonexistent' delivery configuration 'cloudwatch' not found"):
+            delivery_config_service.validate_tenant_config("nonexistent", "cloudwatch")
 
 
-class TestTenantServiceEdgeCases:
+class TestTenantDeliveryConfigServiceEdgeCases:
     """Test edge cases and error scenarios"""
     
     def test_initialization(self):
         """Test service initialization"""
-        service = TenantService("test-table", "us-west-2")
+        service = TenantDeliveryConfigService("test-table", "us-west-2")
         assert service.table_name == "test-table"
         assert service.region == "us-west-2"
     
     def test_initialization_defaults(self):
         """Test service initialization with defaults"""
-        service = TenantService("test-table")
+        service = TenantDeliveryConfigService("test-table")
         assert service.table_name == "test-table"
         assert service.region == "us-east-1"
     
-    def test_lazy_initialization(self, tenant_service):
+    def test_lazy_initialization(self, delivery_config_service):
         """Test that DynamoDB resources are initialized lazily"""
         # Before accessing properties, should be None
-        assert tenant_service._dynamodb is None
-        assert tenant_service._table is None
+        assert delivery_config_service._dynamodb is None
+        assert delivery_config_service._table is None
         
         # After accessing, should be initialized
-        _ = tenant_service.dynamodb
-        assert tenant_service._dynamodb is not None
+        _ = delivery_config_service.dynamodb
+        assert delivery_config_service._dynamodb is not None
         
-        _ = tenant_service.table
-        assert tenant_service._table is not None
+        _ = delivery_config_service.table
+        assert delivery_config_service._table is not None

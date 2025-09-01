@@ -18,9 +18,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
 import log_processor
 from log_processor import (
     extract_tenant_info_from_key,
-    get_tenant_configuration,
+    get_tenant_delivery_configs,
     should_process_application,
-    should_process_tenant,
+    should_process_delivery_config,
     download_and_process_log_file,
     process_json_file,
     convert_log_record_to_event,
@@ -137,20 +137,29 @@ class TestTenantConfiguration:
                 {
                     'AttributeName': 'tenant_id',
                     'KeyType': 'HASH'
+                },
+                {
+                    'AttributeName': 'type',
+                    'KeyType': 'RANGE'
                 }
             ],
             AttributeDefinitions=[
                 {
                     'AttributeName': 'tenant_id',
                     'AttributeType': 'S'
+                },
+                {
+                    'AttributeName': 'type',
+                    'AttributeType': 'S'
                 }
             ],
             BillingMode='PAY_PER_REQUEST'
         )
         
-        # Add test tenant configurations
+        # Add test tenant configurations with composite key
         table.put_item(Item={
             'tenant_id': 'acme-corp',
+            'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
             'log_group_name': '/aws/logs/acme-corp',
             'target_region': 'us-east-1',
@@ -160,6 +169,7 @@ class TestTenantConfiguration:
         
         table.put_item(Item={
             'tenant_id': 'disabled-tenant',
+            'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
             'log_group_name': '/aws/logs/disabled',
             'target_region': 'us-east-1',
@@ -168,56 +178,69 @@ class TestTenantConfiguration:
         
         table.put_item(Item={
             'tenant_id': 'missing-fields',
+            'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole'
             # Missing required fields
         })
         
         return table
     
-    def test_get_tenant_configuration_success(self, environment_variables, dynamodb_table):
-        """Test successful tenant configuration retrieval."""
+    def test_get_tenant_delivery_configs_success(self, environment_variables, dynamodb_table):
+        """Test successful tenant delivery configuration retrieval."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('acme-corp')
+            configs = get_tenant_delivery_configs('acme-corp')
         
+        assert len(configs) == 1
+        config = configs[0]
         assert config['tenant_id'] == 'acme-corp'
+        assert config['type'] == 'cloudwatch'
         assert config['log_distribution_role_arn'] == 'arn:aws:iam::987654321098:role/LogRole'
         assert config['log_group_name'] == '/aws/logs/acme-corp'
         assert config['target_region'] == 'us-east-1'
         assert config['enabled'] is True
         assert config['desired_logs'] == ['payment-service', 'user-service']
     
-    def test_get_tenant_configuration_not_found(self, environment_variables, dynamodb_table):
-        """Test tenant configuration not found."""
+    def test_get_tenant_delivery_configs_not_found(self, environment_variables, dynamodb_table):
+        """Test tenant delivery configuration not found."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             with pytest.raises(TenantNotFoundError) as exc_info:
-                get_tenant_configuration('nonexistent-tenant')
+                get_tenant_delivery_configs('nonexistent-tenant')
         
-        assert "No configuration found for tenant: nonexistent-tenant" in str(exc_info.value)
+        assert "No delivery configurations found for tenant: nonexistent-tenant" in str(exc_info.value)
     
-    def test_get_tenant_configuration_missing_required_fields(self, environment_variables, dynamodb_table):
-        """Test tenant configuration with missing required fields."""
+    def test_get_tenant_delivery_configs_missing_required_fields(self, environment_variables, dynamodb_table):
+        """Test tenant delivery configuration with missing required fields."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             with pytest.raises(TenantNotFoundError) as exc_info:
-                get_tenant_configuration('missing-fields')
+                get_tenant_delivery_configs('missing-fields')
         
         assert "missing required field" in str(exc_info.value)
     
-    def test_should_process_tenant_enabled(self, environment_variables, dynamodb_table):
-        """Test should_process_tenant with enabled tenant."""
+    def test_should_process_delivery_config_enabled(self, environment_variables, dynamodb_table):
+        """Test should_process_delivery_config with enabled tenant."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('acme-corp')
-        assert should_process_tenant(config, 'acme-corp') is True
+            configs = get_tenant_delivery_configs('acme-corp')
+        config = configs[0]
+        assert should_process_delivery_config(config, 'acme-corp', 'cloudwatch') is True
     
-    def test_should_process_tenant_disabled(self, environment_variables, dynamodb_table):
-        """Test should_process_tenant with disabled tenant."""
-        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('disabled-tenant')
-        assert should_process_tenant(config, 'disabled-tenant') is False
+    def test_should_process_delivery_config_disabled(self, environment_variables, dynamodb_table):
+        """Test should_process_delivery_config with disabled delivery config."""
+        # Create a disabled config directly for testing the function
+        disabled_config = {
+            'tenant_id': 'disabled-tenant',
+            'type': 'cloudwatch',
+            'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
+            'log_group_name': '/aws/logs/disabled',
+            'target_region': 'us-east-1',
+            'enabled': False
+        }
+        assert should_process_delivery_config(disabled_config, 'disabled-tenant', 'cloudwatch') is False
     
     def test_should_process_application_with_desired_logs(self, environment_variables, dynamodb_table):
         """Test application filtering with desired_logs configuration."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('acme-corp')
+            configs = get_tenant_delivery_configs('acme-corp')
+        config = configs[0]
         
         assert should_process_application(config, 'payment-service') is True
         assert should_process_application(config, 'user-service') is True
@@ -226,23 +249,28 @@ class TestTenantConfiguration:
     def test_should_process_application_case_insensitive(self, environment_variables, dynamodb_table):
         """Test application filtering is case insensitive."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('acme-corp')
+            configs = get_tenant_delivery_configs('acme-corp')
+        config = configs[0]
         
         assert should_process_application(config, 'Payment-Service') is True
         assert should_process_application(config, 'USER-SERVICE') is True
     
     def test_should_process_application_no_filtering(self, environment_variables, dynamodb_table):
         """Test application processing when no desired_logs is specified."""
-        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            config = get_tenant_configuration('disabled-tenant')
+        # Create a config without desired_logs for testing
+        config_without_filtering = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
+            'log_group_name': '/aws/logs/test-tenant',
+            'target_region': 'us-east-1',
+            'enabled': True
+            # No desired_logs field - should allow all applications
+        }
         
-        # Remove desired_logs to test default behavior
-        if 'desired_logs' in config:
-            del config['desired_logs']
-        
-        assert should_process_application(config, 'any-service') is True
+        assert should_process_application(config_without_filtering, 'any-service') is True
     
-    def test_get_tenant_configuration_dynamodb_validation_exception(self, environment_variables):
+    def test_get_tenant_delivery_configs_dynamodb_validation_exception(self, environment_variables):
         """Test DynamoDB ValidationException for empty string tenant_id."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             with patch('boto3.resource') as mock_boto3:
@@ -254,14 +282,14 @@ class TestTenantConfiguration:
                     'ValidationException: One or more parameter values are not valid. '
                     'The AttributeValue for a key attribute cannot contain an empty string value. Key: tenant_id'
                 )
-                mock_table.get_item.side_effect = validation_error
+                mock_table.query.side_effect = validation_error
                 
                 with pytest.raises(TenantNotFoundError) as exc_info:
-                    get_tenant_configuration('')
+                    get_tenant_delivery_configs('')
                 
                 assert "Invalid tenant_id (empty string) from malformed S3 path" in str(exc_info.value)
     
-    def test_get_tenant_configuration_other_dynamodb_error(self, environment_variables):
+    def test_get_tenant_delivery_configs_other_dynamodb_error(self, environment_variables):
         """Test that other DynamoDB errors are not converted to TenantNotFoundError."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             with patch('boto3.resource') as mock_boto3:
@@ -270,10 +298,10 @@ class TestTenantConfiguration:
                 
                 # Simulate other DynamoDB error
                 other_error = Exception('Some other DynamoDB error')
-                mock_table.get_item.side_effect = other_error
+                mock_table.query.side_effect = other_error
                 
                 with pytest.raises(Exception) as exc_info:
-                    get_tenant_configuration('valid-tenant')
+                    get_tenant_delivery_configs('valid-tenant')
                 
                 # Should not be converted to TenantNotFoundError
                 assert "Some other DynamoDB error" in str(exc_info.value)
@@ -479,25 +507,27 @@ class TestSQSRecordProcessing:
             "messageId": "test-message-id"
         }
         
-        with patch('log_processor.get_tenant_configuration') as mock_get_tenant, \
+        with patch('log_processor.get_tenant_delivery_configs') as mock_get_tenant, \
              patch('log_processor.download_and_process_log_file') as mock_download, \
-             patch('log_processor.deliver_logs_to_customer') as mock_deliver:
+             patch('log_processor.deliver_logs_to_cloudwatch') as mock_deliver_cw:
             
-            mock_get_tenant.return_value = {
+            mock_get_tenant.return_value = [{
+                'tenant_id': 'acme-corp',
+                'type': 'cloudwatch',
                 'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
                 'log_group_name': '/aws/logs/acme-corp',
                 'target_region': 'us-east-1',
                 'enabled': True
-            }
+            }]
             mock_download.return_value = ([{"message": "test", "timestamp": 1234567890}], 1234567890)
-            mock_deliver.return_value = None
+            mock_deliver_cw.return_value = None
             
             # Should not raise an exception
             log_processor.process_sqs_record(sqs_record)
             
             mock_get_tenant.assert_called_once_with('acme-corp')
             mock_download.assert_called_once()
-            mock_deliver.assert_called_once()
+            mock_deliver_cw.assert_called_once()
     
     def test_process_sqs_record_invalid_json(self, environment_variables):
         """Test processing SQS record with invalid JSON."""
@@ -527,7 +557,7 @@ class TestSQSRecordProcessing:
             "messageId": "test-message-id"
         }
         
-        with patch('log_processor.get_tenant_configuration') as mock_get_tenant:
+        with patch('log_processor.get_tenant_delivery_configs') as mock_get_tenant:
             mock_get_tenant.side_effect = TenantNotFoundError("Tenant not found")
             
             # Should not raise an exception (handled as non-recoverable)
@@ -848,8 +878,8 @@ class TestCrossAccountRoleAssumption:
     """Test cross-account role assumption functionality."""
     
     @patch('boto3.client')
-    def test_deliver_logs_to_customer_double_hop(self, mock_boto_client, environment_variables):
-        """Test role assumption for log delivery using Vector's native assume_role."""
+    def test_deliver_logs_to_cloudwatch_double_hop(self, mock_boto_client, environment_variables):
+        """Test role assumption for CloudWatch log delivery using Vector's native assume_role."""
         # Mock STS client
         mock_sts_client = Mock()
         
@@ -874,7 +904,9 @@ class TestCrossAccountRoleAssumption:
         mock_boto_client.side_effect = mock_client_factory
         
         log_events = [{"message": "Test log", "timestamp": 1234567890}]
-        tenant_config = {
+        delivery_config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/CustomerRole',
             'log_group_name': '/aws/logs/customer',
             'target_region': 'us-east-1'
@@ -885,9 +917,9 @@ class TestCrossAccountRoleAssumption:
         }
         
         with patch('log_processor.deliver_logs_with_vector') as mock_vector_delivery:
-            log_processor.deliver_logs_to_customer(
+            log_processor.deliver_logs_to_cloudwatch(
                 log_events=log_events,
-                tenant_config=tenant_config,
+                delivery_config=delivery_config,
                 tenant_info=tenant_info,
                 s3_timestamp=1234567890
             )

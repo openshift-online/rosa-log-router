@@ -1,19 +1,22 @@
 """
-Pydantic models for tenant data validation
+Pydantic models for tenant delivery configuration validation
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union, Literal
+from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
-class TenantCreateRequest(BaseModel):
-    """Model for tenant creation requests"""
+class TenantDeliveryConfigBase(BaseModel):
+    """Base model for tenant delivery configuration"""
     tenant_id: str = Field(..., min_length=1, max_length=128, description="Unique tenant identifier")
-    log_distribution_role_arn: str = Field(..., min_length=1, description="ARN of the customer's IAM role for log delivery")
-    log_group_name: str = Field(..., min_length=1, description="CloudWatch Logs group name for log delivery")
-    target_region: str = Field(..., min_length=1, description="AWS region where logs should be delivered")
-    enabled: Optional[bool] = Field(default=True, description="Enable/disable log processing for this tenant")
-    desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
+    type: Literal["cloudwatch", "s3"] = Field(..., description="Delivery configuration type")
+    enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration (defaults to True)")
+    desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process (defaults to all applications)")
+    target_region: Optional[str] = Field(default=None, description="AWS region for delivery (defaults to processor region)")
+    ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
+    created_at: Optional[datetime] = Field(default=None, description="Configuration creation timestamp")
+    updated_at: Optional[datetime] = Field(default=None, description="Configuration last update timestamp")
     
     @field_validator('tenant_id')
     @classmethod
@@ -23,19 +26,11 @@ class TenantCreateRequest(BaseModel):
             raise ValueError('tenant_id must contain only alphanumeric characters, hyphens, and underscores')
         return v
     
-    @field_validator('log_distribution_role_arn')
-    @classmethod
-    def validate_role_arn(cls, v):
-        """Validate IAM role ARN format"""
-        if not v.startswith('arn:aws:iam::'):
-            raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
-        return v
-    
     @field_validator('target_region')
     @classmethod
     def validate_region(cls, v):
         """Validate AWS region format"""
-        if not v.replace('-', '').isalnum():
+        if v is not None and not v.replace('-', '').isalnum():
             raise ValueError('target_region must be a valid AWS region')
         return v
     
@@ -54,13 +49,125 @@ class TenantCreateRequest(BaseModel):
         return v
 
 
-class TenantUpdateRequest(BaseModel):
-    """Model for tenant update requests"""
-    log_distribution_role_arn: Optional[str] = Field(None, min_length=1, description="ARN of the customer's IAM role for log delivery")
-    log_group_name: Optional[str] = Field(None, min_length=1, description="CloudWatch Logs group name for log delivery")
-    target_region: Optional[str] = Field(None, min_length=1, description="AWS region where logs should be delivered")
-    enabled: Optional[bool] = Field(None, description="Enable/disable log processing for this tenant")
-    desired_logs: Optional[List[str]] = Field(None, description="List of application names to process")
+class CloudWatchDeliveryConfig(TenantDeliveryConfigBase):
+    """Model for CloudWatch delivery configuration"""
+    type: Literal["cloudwatch"] = Field(default="cloudwatch", description="CloudWatch delivery type")
+    log_distribution_role_arn: str = Field(..., min_length=1, description="ARN of the customer's IAM role for log delivery")
+    log_group_name: str = Field(..., min_length=1, description="CloudWatch Logs group name for log delivery")
+    
+    @field_validator('log_distribution_role_arn')
+    @classmethod
+    def validate_role_arn(cls, v):
+        """Validate IAM role ARN format"""
+        if not v.startswith('arn:aws:iam::'):
+            raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
+        return v
+
+
+class S3DeliveryConfig(TenantDeliveryConfigBase):
+    """Model for S3 delivery configuration"""
+    type: Literal["s3"] = Field(default="s3", description="S3 delivery type")
+    bucket_name: str = Field(..., min_length=1, description="Target S3 bucket name")
+    bucket_prefix: Optional[str] = Field(default="ROSA/cluster-logs/", description="S3 object prefix")
+    
+    @field_validator('bucket_name')
+    @classmethod
+    def validate_bucket_name(cls, v):
+        """Validate S3 bucket name format"""
+        if not v.replace('-', '').replace('.', '').isalnum():
+            raise ValueError('bucket_name must be a valid S3 bucket name')
+        return v
+    
+    @field_validator('bucket_prefix')
+    @classmethod
+    def validate_bucket_prefix(cls, v):
+        """Validate S3 bucket prefix format"""
+        if v is not None and v != "" and not v.endswith('/'):
+            return v + '/'
+        return v
+
+
+class TenantDeliveryConfigCreateRequest(BaseModel):
+    """Model for creating tenant delivery configurations"""
+    tenant_id: str = Field(..., min_length=1, max_length=128, description="Unique tenant identifier")
+    type: Literal["cloudwatch", "s3"] = Field(..., description="Delivery configuration type")
+    enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
+    desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
+    target_region: Optional[str] = Field(default=None, description="AWS region for delivery")
+    ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
+    
+    # CloudWatch-specific fields
+    log_distribution_role_arn: Optional[str] = Field(default=None, description="ARN of the customer's IAM role for log delivery")
+    log_group_name: Optional[str] = Field(default=None, description="CloudWatch Logs group name for log delivery")
+    
+    # S3-specific fields
+    bucket_name: Optional[str] = Field(default=None, description="Target S3 bucket name")
+    bucket_prefix: Optional[str] = Field(default=None, description="S3 object prefix")
+    
+    @field_validator('tenant_id')
+    @classmethod
+    def validate_tenant_id(cls, v):
+        """Validate tenant ID format"""
+        if not v.replace('-', '').replace('_', '').isalnum():
+            raise ValueError('tenant_id must contain only alphanumeric characters, hyphens, and underscores')
+        return v
+    
+    @field_validator('log_distribution_role_arn')
+    @classmethod
+    def validate_role_arn(cls, v):
+        """Validate IAM role ARN format"""
+        if v is not None and not v.startswith('arn:aws:iam::'):
+            raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
+        return v
+    
+    @field_validator('bucket_name')
+    @classmethod
+    def validate_bucket_name(cls, v):
+        """Validate S3 bucket name format"""
+        if v is not None and not v.replace('-', '').replace('.', '').isalnum():
+            raise ValueError('bucket_name must be a valid S3 bucket name')
+        return v
+    
+    @field_validator('desired_logs')
+    @classmethod
+    def validate_desired_logs(cls, v):
+        """Validate desired_logs list"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('desired_logs must be a list')
+            if len(v) == 0:
+                raise ValueError('desired_logs cannot be an empty list (use null to allow all applications)')
+            for app in v:
+                if not isinstance(app, str) or len(app.strip()) == 0:
+                    raise ValueError('All items in desired_logs must be non-empty strings')
+        return v
+    
+    def model_post_init(self, __context) -> None:
+        """Validate type-specific required fields"""
+        if self.type == "cloudwatch":
+            if not self.log_distribution_role_arn:
+                raise ValueError("log_distribution_role_arn is required for CloudWatch delivery")
+            if not self.log_group_name:
+                raise ValueError("log_group_name is required for CloudWatch delivery")
+        elif self.type == "s3":
+            if not self.bucket_name:
+                raise ValueError("bucket_name is required for S3 delivery")
+
+
+class TenantDeliveryConfigUpdateRequest(BaseModel):
+    """Model for updating tenant delivery configurations"""
+    enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
+    desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
+    target_region: Optional[str] = Field(default=None, description="AWS region for delivery")
+    ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
+    
+    # CloudWatch-specific fields
+    log_distribution_role_arn: Optional[str] = Field(default=None, description="ARN of the customer's IAM role for log delivery")
+    log_group_name: Optional[str] = Field(default=None, description="CloudWatch Logs group name for log delivery")
+    
+    # S3-specific fields
+    bucket_name: Optional[str] = Field(default=None, description="Target S3 bucket name")
+    bucket_prefix: Optional[str] = Field(default=None, description="S3 object prefix")
     
     @field_validator('log_distribution_role_arn')
     @classmethod
@@ -93,10 +200,10 @@ class TenantUpdateRequest(BaseModel):
         return v
 
 
-class TenantPatchRequest(BaseModel):
-    """Model for tenant patch requests (partial updates)"""
-    enabled: Optional[bool] = Field(None, description="Enable/disable log processing for this tenant")
-    desired_logs: Optional[List[str]] = Field(None, description="List of application names to process")
+class TenantDeliveryConfigPatchRequest(BaseModel):
+    """Model for partial updates to tenant delivery configurations"""
+    enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
+    desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
     
     @field_validator('desired_logs')
     @classmethod
@@ -113,19 +220,13 @@ class TenantPatchRequest(BaseModel):
         return v
 
 
-class TenantResponse(BaseModel):
-    """Model for tenant response data"""
-    tenant_id: str
-    log_distribution_role_arn: str
-    log_group_name: str
-    target_region: str
-    enabled: bool = True
-    desired_logs: Optional[List[str]] = None
+# Union type for responses
+TenantDeliveryConfigResponse = Union[CloudWatchDeliveryConfig, S3DeliveryConfig]
 
 
-class TenantListResponse(BaseModel):
-    """Model for tenant list response"""
-    tenants: List[TenantResponse]
+class TenantDeliveryConfigListResponse(BaseModel):
+    """Model for tenant delivery configuration list response"""
+    configurations: List[TenantDeliveryConfigResponse]
     count: int
     limit: int
     last_key: Optional[str] = None
@@ -138,8 +239,9 @@ class ValidationCheck(BaseModel):
     message: str
 
 
-class TenantValidationResponse(BaseModel):
-    """Model for tenant validation response"""
+class TenantDeliveryConfigValidationResponse(BaseModel):
+    """Model for tenant delivery configuration validation response"""
     tenant_id: str
+    type: str
     valid: bool
     checks: List[ValidationCheck]

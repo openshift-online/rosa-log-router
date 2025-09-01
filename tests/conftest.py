@@ -61,18 +61,20 @@ def environment_variables():
 
 @pytest.fixture(scope="function")
 def dynamodb_table(aws_credentials):
-    """Create a mocked DynamoDB table for testing"""
+    """Create a mocked DynamoDB table for testing with composite key schema"""
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
         
-        # Create the table
+        # Create the table with composite key (tenant_id + type)
         table = dynamodb.create_table(
             TableName="test-tenant-configs",
             KeySchema=[
-                {"AttributeName": "tenant_id", "KeyType": "HASH"}
+                {"AttributeName": "tenant_id", "KeyType": "HASH"},
+                {"AttributeName": "type", "KeyType": "RANGE"}
             ],
             AttributeDefinitions=[
-                {"AttributeName": "tenant_id", "AttributeType": "S"}
+                {"AttributeName": "tenant_id", "AttributeType": "S"},
+                {"AttributeName": "type", "AttributeType": "S"}
             ],
             BillingMode="PAY_PER_REQUEST"
         )
@@ -81,21 +83,22 @@ def dynamodb_table(aws_credentials):
 
 
 @pytest.fixture(scope="function")
-def tenant_service(dynamodb_table):
-    """Create a TenantService instance with mocked DynamoDB"""
+def delivery_config_service(dynamodb_table):
+    """Create a TenantDeliveryConfigService instance with mocked DynamoDB"""
     try:
-        from src.services.dynamo import TenantService
-        return TenantService(table_name="test-tenant-configs", region="us-east-1")
+        from src.services.dynamo import TenantDeliveryConfigService
+        return TenantDeliveryConfigService(table_name="test-tenant-configs", region="us-east-1")
     except ImportError:
         # If API modules aren't available, skip
         pytest.skip("API modules not available")
 
 
 @pytest.fixture
-def sample_tenant_data():
-    """Sample tenant data for testing"""
+def sample_cloudwatch_config():
+    """Sample CloudWatch delivery config for testing"""
     return {
         "tenant_id": "test-tenant",
+        "type": "cloudwatch",
         "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole",
         "log_group_name": "/aws/logs/test-tenant",
         "target_region": "us-east-1",
@@ -105,29 +108,41 @@ def sample_tenant_data():
 
 
 @pytest.fixture
-def sample_tenant_minimal():
-    """Minimal tenant data for testing"""
+def sample_s3_config():
+    """Sample S3 delivery config for testing"""
     return {
-        "tenant_id": "minimal-tenant",
-        "log_distribution_role_arn": "arn:aws:iam::123456789012:role/MinimalRole",
-        "log_group_name": "/aws/logs/minimal-tenant",
-        "target_region": "us-west-2"
+        "tenant_id": "test-tenant",
+        "type": "s3",
+        "bucket_name": "test-bucket",
+        "bucket_prefix": "ROSA/cluster-logs/",
+        "target_region": "us-east-1",
+        "enabled": True
     }
 
 
 @pytest.fixture
-def multiple_tenants():
-    """Multiple tenant configurations for list testing"""
+def multiple_delivery_configs():
+    """Multiple delivery configurations for testing"""
     return [
         {
             "tenant_id": "tenant-1",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/Role1",
             "log_group_name": "/aws/logs/tenant-1",
             "target_region": "us-east-1",
             "enabled": True
         },
         {
+            "tenant_id": "tenant-1",
+            "type": "s3",
+            "bucket_name": "tenant-1-logs",
+            "bucket_prefix": "logs/",
+            "target_region": "us-east-1",
+            "enabled": True
+        },
+        {
             "tenant_id": "tenant-2",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/Role2",
             "log_group_name": "/aws/logs/tenant-2",
             "target_region": "us-west-2",
@@ -136,8 +151,8 @@ def multiple_tenants():
         },
         {
             "tenant_id": "tenant-3",
-            "log_distribution_role_arn": "arn:aws:iam::123456789012:role/Role3",
-            "log_group_name": "/aws/logs/tenant-3",
+            "type": "s3",
+            "bucket_name": "tenant-3-archive",
             "target_region": "eu-west-1",
             "enabled": True,
             "desired_logs": ["user-service", "auth-service"]
@@ -146,8 +161,8 @@ def multiple_tenants():
 
 
 @pytest.fixture
-def populated_table(tenant_service, multiple_tenants):
-    """A tenant service with pre-populated test data"""
-    for tenant in multiple_tenants:
-        tenant_service.create_tenant(tenant)
-    return tenant_service
+def populated_delivery_configs(delivery_config_service, multiple_delivery_configs):
+    """A delivery config service with pre-populated test data"""
+    for config in multiple_delivery_configs:
+        delivery_config_service.create_tenant_config(config)
+    return delivery_config_service

@@ -61,60 +61,64 @@ class TestAPIEndpoints:
             assert data["status"] == "healthy"
             mock_health.assert_called_once()
     
-    @patch('src.app.tenant_service')
-    def test_get_tenant_success(self, mock_tenant_service, client, environment_variables):
-        """Test successful tenant retrieval."""
-        mock_tenant_service.get_tenant.return_value = {
+    @patch('src.app.delivery_config_service')
+    def test_get_delivery_config_success(self, mock_delivery_config_service, client, environment_variables):
+        """Test successful delivery config retrieval."""
+        mock_delivery_config_service.get_tenant_config.return_value = {
             'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::123456789012:role/TestRole',
             'log_group_name': '/aws/logs/test',
             'target_region': 'us-east-1',
             'enabled': True
         }
         
-        response = client.get("/api/v1/tenants/test-tenant")
+        response = client.get("/api/v1/tenants/test-tenant/delivery-configs/cloudwatch")
         
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         assert data["data"]["tenant_id"] == "test-tenant"
+        assert data["data"]["type"] == "cloudwatch"
     
-    @patch('src.app.tenant_service')
-    def test_get_tenant_not_found(self, mock_tenant_service, client, environment_variables):
-        """Test tenant not found."""
+    @patch('src.app.delivery_config_service')
+    def test_get_delivery_config_not_found(self, mock_delivery_config_service, client, environment_variables):
+        """Test delivery config not found."""
         from src.services.dynamo import TenantNotFoundError
-        mock_tenant_service.get_tenant.side_effect = TenantNotFoundError("Tenant not found")
+        mock_delivery_config_service.get_tenant_config.side_effect = TenantNotFoundError("Delivery configuration not found")
         
-        response = client.get("/api/v1/tenants/nonexistent")
+        response = client.get("/api/v1/tenants/nonexistent/delivery-configs/cloudwatch")
         
         assert response.status_code == 404
         data = response.json()
         assert "detail" in data
         assert "not found" in data["detail"].lower()
     
-    @patch('src.app.tenant_service')
-    def test_create_tenant_success(self, mock_tenant_service, client, environment_variables):
-        """Test successful tenant creation."""
-        tenant_data = {
+    @patch('src.app.delivery_config_service')
+    def test_create_delivery_config_success(self, mock_delivery_config_service, client, environment_variables):
+        """Test successful delivery config creation."""
+        config_data = {
             "tenant_id": "new-tenant",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/NewRole",
             "log_group_name": "/aws/logs/new-tenant",
             "target_region": "us-east-1",
             "enabled": True
         }
         
-        mock_tenant_service.create_tenant.return_value = tenant_data
+        mock_delivery_config_service.create_tenant_config.return_value = config_data
         
-        response = client.post("/api/v1/tenants", json=tenant_data)
+        response = client.post("/api/v1/tenants/new-tenant/delivery-configs", json=config_data)
         
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "success"
         assert data["data"]["tenant_id"] == "new-tenant"
+        assert data["data"]["type"] == "cloudwatch"
     
-    @patch('src.app.tenant_service')
-    def test_update_tenant_success(self, mock_tenant_service, client, environment_variables):
-        """Test successful tenant update."""
+    @patch('src.app.delivery_config_service')
+    def test_update_delivery_config_success(self, mock_delivery_config_service, client, environment_variables):
+        """Test successful delivery config update."""
         update_data = {
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/UpdatedRole",
             "log_group_name": "/aws/logs/updated",
@@ -122,26 +126,28 @@ class TestAPIEndpoints:
             "enabled": False
         }
         
-        updated_tenant = {
+        updated_config = {
             "tenant_id": "test-tenant",
+            "type": "cloudwatch",
             **update_data
         }
         
-        mock_tenant_service.update_tenant.return_value = updated_tenant
+        mock_delivery_config_service.update_tenant_config.return_value = updated_config
         
-        response = client.put("/api/v1/tenants/test-tenant", json=update_data)
+        response = client.put("/api/v1/tenants/test-tenant/delivery-configs/cloudwatch", json=update_data)
         
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         assert data["data"]["enabled"] is False
+        assert data["data"]["type"] == "cloudwatch"
     
-    @patch('src.app.tenant_service')
-    def test_delete_tenant_success(self, mock_tenant_service, client, environment_variables):
-        """Test successful tenant deletion."""
-        mock_tenant_service.delete_tenant.return_value = None
+    @patch('src.app.delivery_config_service')
+    def test_delete_delivery_config_success(self, mock_delivery_config_service, client, environment_variables):
+        """Test successful delivery config deletion."""
+        mock_delivery_config_service.delete_tenant_config.return_value = None
         
-        response = client.delete("/api/v1/tenants/test-tenant")
+        response = client.delete("/api/v1/tenants/test-tenant/delivery-configs/cloudwatch")
         
         assert response.status_code == 200
         data = response.json()
@@ -152,10 +158,11 @@ class TestAPIEndpoints:
         """Test validation error handling."""
         invalid_data = {
             "tenant_id": "",  # Invalid empty tenant_id
+            "type": "cloudwatch",
             "log_distribution_role_arn": "invalid-arn"
         }
         
-        response = client.post("/api/v1/tenants", json=invalid_data)
+        response = client.post("/api/v1/tenants/test-tenant/delivery-configs", json=invalid_data)
         
         assert response.status_code == 422
         data = response.json()
@@ -165,49 +172,71 @@ class TestAPIEndpoints:
 class TestAPIModels:
     """Test API model validation."""
     
-    def test_tenant_create_request_validation(self):
-        """Test tenant creation request validation."""
-        from src.models.tenant import TenantCreateRequest
+    def test_delivery_config_create_request_validation(self):
+        """Test delivery config creation request validation."""
+        from src.models.tenant import TenantDeliveryConfigCreateRequest
         
-        # Valid request
+        # Valid CloudWatch request
         valid_data = {
             "tenant_id": "test-tenant",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole",
             "log_group_name": "/aws/logs/test",
             "target_region": "us-east-1"
         }
         
-        request = TenantCreateRequest(**valid_data)
+        request = TenantDeliveryConfigCreateRequest(**valid_data)
         assert request.tenant_id == "test-tenant"
-        assert request.enabled is True  # Default value
+        assert request.type == "cloudwatch"
+        assert request.enabled is None  # No default in base model
     
-    def test_tenant_create_request_invalid_arn(self):
-        """Test tenant creation with invalid ARN."""
-        from src.models.tenant import TenantCreateRequest
+    def test_delivery_config_create_request_invalid_arn(self):
+        """Test delivery config creation with invalid ARN."""
+        from src.models.tenant import TenantDeliveryConfigCreateRequest
         from pydantic import ValidationError
         
         invalid_data = {
             "tenant_id": "test-tenant",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "invalid-arn",
             "log_group_name": "/aws/logs/test",
             "target_region": "us-east-1"
         }
         
         with pytest.raises(ValidationError) as exc_info:
-            TenantCreateRequest(**invalid_data)
+            TenantDeliveryConfigCreateRequest(**invalid_data)
         
         assert "arn" in str(exc_info.value).lower()
     
-    def test_tenant_update_request_partial(self):
-        """Test partial tenant update request."""
-        from src.models.tenant import TenantUpdateRequest
+    def test_delivery_config_update_request_partial(self):
+        """Test partial delivery config update request."""
+        from src.models.tenant import TenantDeliveryConfigUpdateRequest
         
         partial_data = {
             "enabled": False,
             "desired_logs": ["service1", "service2"]
         }
         
-        request = TenantUpdateRequest(**partial_data)
+        request = TenantDeliveryConfigUpdateRequest(**partial_data)
         assert request.enabled is False
         assert request.desired_logs == ["service1", "service2"]
         assert request.log_distribution_role_arn is None  # Optional field
+    
+    def test_s3_delivery_config_create_request_validation(self):
+        """Test S3 delivery config creation request validation."""
+        from src.models.tenant import TenantDeliveryConfigCreateRequest
+        
+        # Valid S3 request
+        valid_data = {
+            "tenant_id": "test-tenant",
+            "type": "s3",
+            "bucket_name": "my-log-bucket",
+            "bucket_prefix": "logs/",
+            "target_region": "us-east-1"
+        }
+        
+        request = TenantDeliveryConfigCreateRequest(**valid_data)
+        assert request.tenant_id == "test-tenant"
+        assert request.type == "s3"
+        assert request.bucket_name == "my-log-bucket"
+        assert request.bucket_prefix == "logs/"
