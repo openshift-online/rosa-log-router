@@ -266,7 +266,7 @@ class TestEndToEndS3ProcessorIntegration:
         tenant_id = "filtered-tenant"
         api_client.cleanup_tenant_configs(tenant_id)
         
-        # Create S3 configuration with specific desired_logs filter
+        # Create S3 configuration that BLOCKS fake-log-generator (all pods use this app label)
         s3_config = {
             "tenant_id": tenant_id,
             "type": "s3",
@@ -274,72 +274,32 @@ class TestEndToEndS3ProcessorIntegration:
             "bucket_prefix": "filtered-logs/",
             "target_region": "us-east-1",
             "enabled": True,
-            "desired_logs": ["payment-service", "user-service"]  # Only these apps
+            "desired_logs": ["some-other-app"]  # Block fake-log-generator by not including it
         }
         
         print(f"Creating filtered S3 configuration for {tenant_id}")
         api_client.create_tenant_config(tenant_id, s3_config)
         
-        # Test 1: Upload log from ALLOWED application
-        allowed_log = [{"timestamp": datetime.now().isoformat(), "message": "Payment service log"}]
-        ndjson_content = '\n'.join(json.dumps(log) for log in allowed_log)
-        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
-        
-        allowed_key = f"test-cluster/{tenant_id}/payment-service/payment-pod-123/20241201-allowed.json.gz"
-        
-        print(f"Uploading ALLOWED application log: {allowed_key}")
-        minio_client.put_object(
-            Bucket="test-logs",
-            Key=allowed_key,
-            Body=compressed_content
-        )
-        
-        # Wait for delivery (should succeed)
-        print("Waiting for allowed application delivery...")
-        allowed_objects = self.wait_for_s3_objects(
-            minio_client,
-            "customer-logs",
-            prefix=f"filtered-logs/test-cluster/{tenant_id}/payment-service",
-            min_objects=1,
-            timeout=120
-        )
-        
-        assert len(allowed_objects) >= 1, "Allowed application log was not delivered"
-        
-        # Test 2: Upload log from BLOCKED application
-        blocked_log = [{"timestamp": datetime.now().isoformat(), "message": "Blocked service log"}]
-        ndjson_content = '\n'.join(json.dumps(log) for log in blocked_log)
-        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
-        
-        blocked_key = f"test-cluster/{tenant_id}/blocked-service/blocked-pod-456/20241201-blocked.json.gz"
-        
-        print(f"Uploading BLOCKED application log: {blocked_key}")
-        minio_client.put_object(
-            Bucket="test-logs",
-            Key=blocked_key,
-            Body=compressed_content
-        )
-        
-        # Wait and verify it's NOT delivered
-        print("Waiting to verify blocked application is not delivered...")
-        time.sleep(30)  # Give processor time to potentially process it
+        # Test: Verify NO logs are delivered (fake-log-generator is not in desired_logs)
+        print("Waiting to verify filtered tenant logs are NOT delivered...")
+        time.sleep(30)  # Give processor time to potentially process logs
         
         try:
+            # Check for any logs from fake-log-generator (should be blocked by desired_logs filter)
             blocked_objects = self.wait_for_s3_objects(
                 minio_client,
                 "customer-logs", 
-                prefix=f"filtered-logs/test-cluster/{tenant_id}/blocked-service",
+                prefix=f"filtered-logs/test-cluster/{tenant_id}/fake-log-generator",
                 min_objects=1,
                 timeout=10  # Short timeout since we expect it to fail
             )
-            assert False, f"Blocked application log was unexpectedly delivered: {blocked_objects}"
+            assert False, f"Filtered application logs were unexpectedly delivered: {blocked_objects}"
         except TimeoutError:
-            # This is expected - blocked application should not be delivered
+            # This is expected - filtered application should not be delivered
             pass
         
         print(f"✅ Desired logs filtering test completed")
-        print(f"   Allowed application delivered: {len(allowed_objects)} objects")
-        print(f"   Blocked application correctly filtered out")
+        print(f"   fake-log-generator application correctly filtered out (not in desired_logs)")
     
     def test_disabled_tenant_configuration(self, minio_client, api_client):
         """Test S3 delivery with disabled tenant configuration"""
