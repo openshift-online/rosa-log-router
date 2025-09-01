@@ -290,40 +290,32 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                 # Get all enabled delivery configurations for this tenant
                 delivery_configs = get_tenant_delivery_configs(tenant_info['tenant_id'])
                 
-                # Check if there are any applicable delivery configurations before downloading S3 file
-                applicable_configs = []
+                # Process each delivery configuration independently with its own filtering
                 for delivery_config in delivery_configs:
                     delivery_type = delivery_config['type']
                     
-                    # Check if this delivery configuration should be processed
-                    if should_process_delivery_config(delivery_config, tenant_info['tenant_id'], delivery_type):
-                        # Check if this application should be processed based on desired_logs filtering
-                        if should_process_application(delivery_config, tenant_info['application']):
-                            applicable_configs.append(delivery_config)
-                        else:
-                            logger.info(f"Skipping {delivery_type} delivery for application '{tenant_info['application']}' due to desired_logs filtering")
-                    else:
-                        logger.info(f"Skipping {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' because it is disabled")
-                
-                # Skip S3 download if no delivery configurations will be processed
-                if not applicable_configs:
-                    logger.info(f"No applicable delivery configurations found for tenant '{tenant_info['tenant_id']}' application '{tenant_info['application']}' - skipping S3 download")
-                    continue
-                
-                # Download and process the log file once for all applicable delivery types
-                log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
-                
-                # Process each applicable delivery configuration independently
-                for delivery_config in applicable_configs:
-                    delivery_type = delivery_config['type']
-                    
                     try:
+                        # Check if this delivery configuration should be processed
+                        if not should_process_delivery_config(delivery_config, tenant_info['tenant_id'], delivery_type):
+                            logger.info(f"Skipping {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' because it is disabled")
+                            continue
                         
-                        # Deliver logs based on delivery type
+                        # Check if this application should be processed based on THIS config's desired_logs filtering
+                        if not should_process_application(delivery_config, tenant_info['application']):
+                            logger.info(f"Skipping {delivery_type} delivery for application '{tenant_info['application']}' due to desired_logs filtering")
+                            continue
+                        
+                        # This specific delivery config should process this application
+                        logger.info(f"Processing {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' application '{tenant_info['application']}'")
+                        
+                        # Deliver logs based on delivery type with independent processing
                         if delivery_type == 'cloudwatch':
+                            # CloudWatch requires downloading and processing log events
+                            log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
                             deliver_logs_to_cloudwatch(log_events, delivery_config, tenant_info, s3_timestamp)
                             delivery_stats['successful_deliveries'] += 1
                         elif delivery_type == 's3':
+                            # S3 delivery uses direct S3-to-S3 copy, no download needed
                             deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
                             delivery_stats['successful_deliveries'] += 1
                         else:

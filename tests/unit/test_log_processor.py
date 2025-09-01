@@ -246,7 +246,7 @@ class TestTenantConfiguration:
         assert should_process_delivery_config(config, 'acme-corp', 'cloudwatch') is True
     
     def test_should_process_delivery_config_disabled(self, environment_variables, dynamodb_table):
-        """Test should_process_delivery_config with disabled delivery config."""
+        """Test that disabled delivery config causes TenantNotFoundError since disabled configs are filtered out."""
         # Insert a disabled config into the table using the fixture for consistency
         table = dynamodb_table
         table.put_item(Item={
@@ -258,9 +258,11 @@ class TestTenantConfiguration:
             'enabled': False
         })
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
-            configs = get_tenant_delivery_configs('disabled-tenant')
-        config = configs[0]
-        assert should_process_delivery_config(config, 'disabled-tenant', 'cloudwatch') is False
+            # Should raise TenantNotFoundError because disabled configs are filtered out
+            with pytest.raises(TenantNotFoundError) as exc_info:
+                get_tenant_delivery_configs('disabled-tenant')
+            
+            assert "No enabled delivery configurations found for tenant: disabled-tenant" in str(exc_info.value)
     
     def test_should_process_application_with_desired_logs(self, environment_variables, dynamodb_table):
         """Test application filtering with desired_logs configuration."""
@@ -504,6 +506,239 @@ class TestLogProcessing:
         assert event is not None
         assert event['message'] == "Payment processed successfully"
         assert 1704099600000 <= event['timestamp'] <= 1704103200000
+
+
+class TestMultiDeliveryLogic:
+    """Test multi-delivery configuration logic with independent filtering."""
+    
+    @pytest.fixture
+    def multi_delivery_dynamodb_table(self, mock_aws_services):
+        """Create a test DynamoDB table with multi-delivery configurations."""
+        dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+        
+        table = dynamodb.create_table(
+            TableName='test-tenant-configs',
+            KeySchema=[
+                {'AttributeName': 'tenant_id', 'KeyType': 'HASH'},
+                {'AttributeName': 'type', 'KeyType': 'RANGE'}
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'tenant_id', 'AttributeType': 'S'},
+                {'AttributeName': 'type', 'AttributeType': 'S'}
+            ],
+            BillingMode='PAY_PER_REQUEST'
+        )
+        
+        # Add CloudWatch config with specific desired_logs
+        table.put_item(Item={
+            'tenant_id': 'multi-delivery-tenant',
+            'type': 'cloudwatch',
+            'log_distribution_role_arn': 'arn:aws:iam::123456789012:role/CloudWatchRole',
+            'log_group_name': '/aws/logs/multi-delivery-tenant',
+            'target_region': 'us-east-1',
+            'enabled': True,
+            'desired_logs': ['kube_api_server', 'etcd']
+        })
+        
+        # Add S3 config with different desired_logs
+        table.put_item(Item={
+            'tenant_id': 'multi-delivery-tenant',
+            'type': 's3',
+            'bucket_name': 'tenant-s3-logs',
+            'bucket_prefix': 'logs/',
+            'target_region': 'us-east-1',
+            'enabled': True,
+            'desired_logs': ['cluster_autoscaler', 'scheduler']
+        })
+        
+        # Add config with no desired_logs (should process all)
+        table.put_item(Item={
+            'tenant_id': 'all-apps-tenant',
+            'type': 'cloudwatch',
+            'log_distribution_role_arn': 'arn:aws:iam::123456789012:role/AllAppsRole',
+            'log_group_name': '/aws/logs/all-apps-tenant',
+            'target_region': 'us-east-1',
+            'enabled': True
+            # No desired_logs field - should process all applications
+        })
+        
+        return table
+    
+    def test_independent_delivery_filtering_cloudwatch_only(self, environment_variables, multi_delivery_dynamodb_table):
+        """Test that kube_api_server logs only go to CloudWatch config, not S3 config."""
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "test-cluster/multi-delivery-tenant/kube_api_server/kube_api_server_pod/20240101-test.json.gz"}
+                }
+            }]
+        }
+        
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('log_processor.download_and_process_log_file') as mock_download:
+                with patch('log_processor.deliver_logs_to_cloudwatch') as mock_cloudwatch:
+                    with patch('log_processor.deliver_logs_to_s3') as mock_s3:
+                        mock_download.return_value = ([], datetime.now())
+                        
+                        sqs_record = {
+                            "body": json.dumps({"Message": json.dumps(s3_event)}),
+                            "messageId": "test-message-id"
+                        }
+                        
+                        result = log_processor.process_sqs_record(sqs_record)
+                        
+                        # Should download file for CloudWatch delivery
+                        mock_download.assert_called_once()
+                        
+                        # Should deliver to CloudWatch (kube_api_server in CloudWatch config's desired_logs)
+                        mock_cloudwatch.assert_called_once()
+                        
+                        # Should NOT deliver to S3 (kube_api_server not in S3 config's desired_logs)
+                        mock_s3.assert_not_called()
+                        
+                        assert result['successful_deliveries'] == 1
+                        assert result['failed_deliveries'] == 0
+    
+    def test_independent_delivery_filtering_s3_only(self, environment_variables, multi_delivery_dynamodb_table):
+        """Test that cluster_autoscaler logs only go to S3 config, not CloudWatch config."""
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "test-cluster/multi-delivery-tenant/cluster_autoscaler/autoscaler_pod/20240101-test.json.gz"}
+                }
+            }]
+        }
+        
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('log_processor.download_and_process_log_file') as mock_download:
+                with patch('log_processor.deliver_logs_to_cloudwatch') as mock_cloudwatch:
+                    with patch('log_processor.deliver_logs_to_s3') as mock_s3:
+                        
+                        sqs_record = {
+                            "body": json.dumps({"Message": json.dumps(s3_event)}),
+                            "messageId": "test-message-id"
+                        }
+                        
+                        result = log_processor.process_sqs_record(sqs_record)
+                        
+                        # Should NOT download file (only S3 delivery, no CloudWatch)
+                        mock_download.assert_not_called()
+                        
+                        # Should NOT deliver to CloudWatch (cluster_autoscaler not in CloudWatch config's desired_logs)
+                        mock_cloudwatch.assert_not_called()
+                        
+                        # Should deliver to S3 (cluster_autoscaler in S3 config's desired_logs)
+                        mock_s3.assert_called_once()
+                        
+                        assert result['successful_deliveries'] == 1
+                        assert result['failed_deliveries'] == 0
+    
+    def test_independent_delivery_filtering_neither_config(self, environment_variables, multi_delivery_dynamodb_table):
+        """Test that unmatched application logs go to neither destination."""
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "test-cluster/multi-delivery-tenant/other_app/other_pod/20240101-test.json.gz"}
+                }
+            }]
+        }
+        
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('log_processor.download_and_process_log_file') as mock_download:
+                with patch('log_processor.deliver_logs_to_cloudwatch') as mock_cloudwatch:
+                    with patch('log_processor.deliver_logs_to_s3') as mock_s3:
+                        
+                        sqs_record = {
+                            "body": json.dumps({"Message": json.dumps(s3_event)}),
+                            "messageId": "test-message-id"
+                        }
+                        
+                        result = log_processor.process_sqs_record(sqs_record)
+                        
+                        # Should not download file (no applicable configs)
+                        mock_download.assert_not_called()
+                        
+                        # Should not deliver to either destination
+                        mock_cloudwatch.assert_not_called()
+                        mock_s3.assert_not_called()
+                        
+                        assert result['successful_deliveries'] == 0
+                        assert result['failed_deliveries'] == 0
+    
+    def test_independent_delivery_filtering_both_configs_overlapping(self, environment_variables, multi_delivery_dynamodb_table):
+        """Test overlapping desired_logs between configs by updating one config."""
+        # Update S3 config to also include kube_api_server
+        table = multi_delivery_dynamodb_table
+        table.update_item(
+            Key={'tenant_id': 'multi-delivery-tenant', 'type': 's3'},
+            UpdateExpression='SET desired_logs = :logs',
+            ExpressionAttributeValues={':logs': ['cluster_autoscaler', 'scheduler', 'kube_api_server']}
+        )
+        
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "test-cluster/multi-delivery-tenant/kube_api_server/kube_api_server_pod/20240101-test.json.gz"}
+                }
+            }]
+        }
+        
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('log_processor.download_and_process_log_file') as mock_download:
+                with patch('log_processor.deliver_logs_to_cloudwatch') as mock_cloudwatch:
+                    with patch('log_processor.deliver_logs_to_s3') as mock_s3:
+                        mock_download.return_value = ([], datetime.now())
+                        
+                        sqs_record = {
+                            "body": json.dumps({"Message": json.dumps(s3_event)}),
+                            "messageId": "test-message-id"
+                        }
+                        
+                        result = log_processor.process_sqs_record(sqs_record)
+                        
+                        # Should download file for CloudWatch delivery
+                        mock_download.assert_called_once()
+                        
+                        # Should deliver to BOTH destinations (kube_api_server now in both configs)
+                        mock_cloudwatch.assert_called_once()
+                        mock_s3.assert_called_once()
+                        
+                        assert result['successful_deliveries'] == 2
+                        assert result['failed_deliveries'] == 0
+    
+    def test_no_desired_logs_processes_all_applications(self, environment_variables, multi_delivery_dynamodb_table):
+        """Test that config with no desired_logs field processes all applications."""
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": "test-bucket"},
+                    "object": {"key": "test-cluster/all-apps-tenant/any_application/any_pod/20240101-test.json.gz"}
+                }
+            }]
+        }
+        
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            with patch('log_processor.download_and_process_log_file') as mock_download:
+                with patch('log_processor.deliver_logs_to_cloudwatch') as mock_cloudwatch:
+                    mock_download.return_value = ([], datetime.now())
+                    
+                    sqs_record = {
+                        "body": json.dumps({"Message": json.dumps(s3_event)}),
+                        "messageId": "test-message-id"
+                    }
+                    
+                    result = log_processor.process_sqs_record(sqs_record)
+                    
+                    # Should download and deliver (no desired_logs means process all apps)
+                    mock_download.assert_called_once()
+                    mock_cloudwatch.assert_called_once()
+                    
+                    assert result['successful_deliveries'] == 1
+                    assert result['failed_deliveries'] == 0
 
 
 class TestSQSRecordProcessing:
