@@ -1266,3 +1266,443 @@ sinks:
             event3 = json.loads(lines[2])
             assert event3['message'] == "Log 3"
             assert event3['timestamp'] == 1725108060.0  # Converted from ms to seconds
+
+
+class TestS3LogDelivery:
+    """Test S3 log delivery functionality."""
+    
+    def test_deliver_logs_to_s3_success(self, environment_variables, mock_aws_services):
+        """Test successful S3-to-S3 copy operation."""
+        # Create source and destination buckets
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        s3_client.create_bucket(Bucket='source-bucket')
+        s3_client.create_bucket(Bucket='destination-bucket')
+        
+        # Upload source file
+        source_content = b'{"message": "test log", "timestamp": "2024-01-01T00:00:00Z"}'
+        s3_client.put_object(
+            Bucket='source-bucket',
+            Key='test-cluster/acme-corp/payment-service/pod-123/file.json.gz',
+            Body=source_content
+        )
+        
+        # S3 delivery configuration
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'destination-bucket',
+            'bucket_prefix': 'customer-logs/',
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'acme-corp',
+            'cluster_id': 'test-cluster',
+            'namespace': 'acme-corp',
+            'application': 'payment-service',
+            'pod_name': 'pod-123'
+        }
+        
+        # Mock STS role assumption
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            mock_s3.copy_object.return_value = {}
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            # Import and call the function
+            from log_processor import deliver_logs_to_s3
+            
+            # Should not raise an exception
+            deliver_logs_to_s3('source-bucket', 'test-cluster/acme-corp/payment-service/pod-123/file.json.gz', delivery_config, tenant_info)
+            
+            # Verify role assumption
+            mock_sts.assume_role.assert_called_once()
+            assume_role_call = mock_sts.assume_role.call_args
+            assert 'S3LogDelivery-acme-corp-' in assume_role_call[1]['RoleSessionName']
+            
+            # Verify S3 copy operation
+            mock_s3.copy_object.assert_called_once()
+            copy_call = mock_s3.copy_object.call_args[1]
+            assert copy_call['Bucket'] == 'destination-bucket'
+            assert copy_call['Key'] == 'customer-logs/test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
+            assert copy_call['CopySource']['Bucket'] == 'source-bucket'
+            assert copy_call['CopySource']['Key'] == 'test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
+            assert copy_call['ACL'] == 'bucket-owner-full-control'
+            assert copy_call['MetadataDirective'] == 'REPLACE'
+            
+            # Verify metadata
+            metadata = copy_call['Metadata']
+            assert metadata['source-bucket'] == 'source-bucket'
+            assert metadata['tenant-id'] == 'acme-corp'
+            assert metadata['cluster-id'] == 'test-cluster'
+            assert metadata['application'] == 'payment-service'
+            assert metadata['pod-name'] == 'pod-123'
+    
+    def test_deliver_logs_to_s3_cross_region(self, environment_variables, mock_aws_services):
+        """Test S3 delivery to different target region."""
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'eu-destination-bucket',
+            'bucket_prefix': 'logs/',
+            'target_region': 'eu-west-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'eu-tenant',
+            'cluster_id': 'eu-cluster',
+            'namespace': 'eu-tenant',
+            'application': 'api-service',
+            'pod_name': 'api-pod-456'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            mock_s3.copy_object.return_value = {}
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    # Verify S3 client is created with correct region
+                    assert kwargs.get('region_name') == 'eu-west-1'
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3
+            
+            deliver_logs_to_s3('source-bucket', 'eu-cluster/eu-tenant/api-service/api-pod-456/file.json.gz', delivery_config, tenant_info)
+            
+            # Verify S3 client was created with target region
+            s3_client_calls = [call for call in mock_boto_client.call_args_list if call[0][0] == 's3']
+            assert len(s3_client_calls) == 1
+            assert s3_client_calls[0][1]['region_name'] == 'eu-west-1'
+    
+    def test_deliver_logs_to_s3_default_prefix(self, environment_variables, mock_aws_services):
+        """Test S3 delivery with default bucket prefix."""
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'test-bucket',
+            'target_region': 'us-east-1'
+            # No bucket_prefix specified
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster',
+            'namespace': 'test-tenant',
+            'application': 'web-service',
+            'pod_name': 'web-pod-789'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            mock_s3.copy_object.return_value = {}
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3
+            
+            deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/web-service/web-pod-789/file.json.gz', delivery_config, tenant_info)
+            
+            # Verify default prefix is used
+            mock_s3.copy_object.assert_called_once()
+            copy_call = mock_s3.copy_object.call_args[1]
+            expected_key = 'ROSA/cluster-logs/test-cluster/test-tenant/web-service/web-pod-789/file.json.gz'
+            assert copy_call['Key'] == expected_key
+    
+    def test_deliver_logs_to_s3_bucket_not_found(self, environment_variables, mock_aws_services):
+        """Test S3 delivery with non-existent destination bucket."""
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'nonexistent-bucket',
+            'bucket_prefix': 'logs/',
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster', 
+            'namespace': 'test-tenant',
+            'application': 'test-app',
+            'pod_name': 'test-pod'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            
+            # Simulate NoSuchBucket error
+            from botocore.exceptions import ClientError
+            mock_s3.copy_object.side_effect = ClientError(
+                {'Error': {'Code': 'NoSuchBucket', 'Message': 'The specified bucket does not exist'}},
+                'CopyObject'
+            )
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3, NonRecoverableError
+            
+            # Should raise NonRecoverableError
+            with pytest.raises(NonRecoverableError) as exc_info:
+                deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/test-app/test-pod/file.json.gz', delivery_config, tenant_info)
+            
+            assert "Destination S3 bucket 'nonexistent-bucket' does not exist" in str(exc_info.value)
+    
+    def test_deliver_logs_to_s3_access_denied(self, environment_variables, mock_aws_services):
+        """Test S3 delivery with access denied error."""
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'restricted-bucket',
+            'bucket_prefix': 'logs/',
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster',
+            'namespace': 'test-tenant', 
+            'application': 'test-app',
+            'pod_name': 'test-pod'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            
+            # Simulate AccessDenied error
+            from botocore.exceptions import ClientError
+            mock_s3.copy_object.side_effect = ClientError(
+                {'Error': {'Code': 'AccessDenied', 'Message': 'Access denied'}},
+                'CopyObject'
+            )
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3, NonRecoverableError
+            
+            # Should raise NonRecoverableError
+            with pytest.raises(NonRecoverableError) as exc_info:
+                deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/test-app/test-pod/file.json.gz', delivery_config, tenant_info)
+            
+            assert "Access denied to S3 bucket 'restricted-bucket'" in str(exc_info.value)
+    
+    def test_deliver_logs_to_s3_source_not_found(self, environment_variables, mock_aws_services):
+        """Test S3 delivery with missing source file."""
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'destination-bucket',
+            'bucket_prefix': 'logs/',
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster',
+            'namespace': 'test-tenant',
+            'application': 'test-app', 
+            'pod_name': 'test-pod'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            
+            # Simulate NoSuchKey error
+            from botocore.exceptions import ClientError
+            mock_s3.copy_object.side_effect = ClientError(
+                {'Error': {'Code': 'NoSuchKey', 'Message': 'The specified key does not exist'}},
+                'CopyObject'
+            )
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3, NonRecoverableError
+            
+            # Should raise NonRecoverableError
+            with pytest.raises(NonRecoverableError) as exc_info:
+                deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/test-app/test-pod/missing-file.json.gz', delivery_config, tenant_info)
+            
+            assert "Source S3 object s3://source-bucket/test-cluster/test-tenant/test-app/test-pod/missing-file.json.gz not found" in str(exc_info.value)
+    
+    def test_deliver_logs_to_s3_recoverable_error(self, environment_variables, mock_aws_services):
+        """Test S3 delivery with recoverable error (should be retried).""" 
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'temp-unavailable-bucket',
+            'bucket_prefix': 'logs/',
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster',
+            'namespace': 'test-tenant',
+            'application': 'test-app',
+            'pod_name': 'test-pod'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            
+            # Simulate temporary error (should be retried)
+            from botocore.exceptions import ClientError
+            mock_s3.copy_object.side_effect = ClientError(
+                {'Error': {'Code': 'ServiceUnavailable', 'Message': 'Service temporarily unavailable'}},
+                'CopyObject'
+            )
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3
+            
+            # Should raise ClientError (recoverable, will be retried)
+            with pytest.raises(ClientError) as exc_info:
+                deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/test-app/test-pod/file.json.gz', delivery_config, tenant_info)
+            
+            assert exc_info.value.response['Error']['Code'] == 'ServiceUnavailable'
+    
+    def test_deliver_logs_to_s3_prefix_slash_handling(self, environment_variables, mock_aws_services):
+        """Test S3 delivery prefix slash handling."""
+        # Test prefix without trailing slash
+        delivery_config = {
+            'type': 's3',
+            'bucket_name': 'test-bucket',
+            'bucket_prefix': 'customer-logs',  # No trailing slash
+            'target_region': 'us-east-1'
+        }
+        
+        tenant_info = {
+            'tenant_id': 'test-tenant',
+            'cluster_id': 'test-cluster',
+            'namespace': 'test-tenant',
+            'application': 'test-app',
+            'pod_name': 'test-pod'
+        }
+        
+        with patch('boto3.client') as mock_boto_client:
+            mock_sts = Mock()
+            mock_sts.assume_role.return_value = {
+                'Credentials': {
+                    'AccessKeyId': 'central-key',
+                    'SecretAccessKey': 'central-secret',
+                    'SessionToken': 'central-token'
+                }
+            }
+            mock_s3 = Mock()
+            mock_s3.copy_object.return_value = {}
+            
+            def boto_client_side_effect(service, **kwargs):
+                if service == 'sts':
+                    return mock_sts
+                elif service == 's3':
+                    return mock_s3
+                return Mock()
+            
+            mock_boto_client.side_effect = boto_client_side_effect
+            
+            from log_processor import deliver_logs_to_s3
+            
+            deliver_logs_to_s3('source-bucket', 'test-cluster/test-tenant/test-app/test-pod/file.json.gz', delivery_config, tenant_info)
+            
+            # Verify slash was added to prefix
+            mock_s3.copy_object.assert_called_once()
+            copy_call = mock_s3.copy_object.call_args[1]
+            expected_key = 'customer-logs/test-cluster/test-tenant/test-app/test-pod/file.json.gz'
+            assert copy_call['Key'] == expected_key

@@ -176,6 +176,149 @@ jobs:
           exit $TEST_EXIT_CODE
         fi
 
+    - name: Run S3 delivery unit tests
+      run: |
+        echo "Running S3 delivery unit tests..."
+        pytest tests/unit/test_log_processor.py::TestS3LogDelivery -v --tb=short
+        S3_UNIT_EXIT_CODE=$?
+        
+        if [ $S3_UNIT_EXIT_CODE -eq 0 ]; then
+          echo "✅ S3 delivery unit tests passed"
+        else
+          echo "❌ S3 delivery unit tests failed"
+          exit $S3_UNIT_EXIT_CODE
+        fi
+
+    - name: Verify S3 delivery configurations in DynamoDB
+      run: |
+        # Start port forwarding for DynamoDB Local in background
+        kubectl port-forward service/dynamodb-local 8001:8000 &
+        S3_PORT_FORWARD_PID=$!
+        
+        # Wait for port forward to be ready
+        echo "Waiting for DynamoDB Local port forward for S3 tests..."
+        sleep 10
+        
+        # Verify DynamoDB Local is accessible on alternate port
+        max_retries=30
+        for i in $(seq 1 $max_retries); do
+          if curl -s http://localhost:8001 > /dev/null 2>&1; then
+            echo "✅ DynamoDB Local accessible on localhost:8001 for S3 tests"
+            break
+          fi
+          echo "Waiting for DynamoDB Local S3 port... ($i/$max_retries)"
+          sleep 2
+        done
+        
+        if [ $i -eq $max_retries ]; then
+          echo "❌ Failed to connect to DynamoDB Local for S3 tests"
+          kill $S3_PORT_FORWARD_PID || true
+          exit 1
+        fi
+        
+        # Create test S3 configurations to verify multi-delivery model
+        echo "Creating test S3 delivery configurations..."
+        
+        # Use Python to create S3 configurations via DynamoDB Local
+        python3 << 'EOF'
+        import boto3
+        import json
+        
+        # Connect to DynamoDB Local
+        dynamodb = boto3.resource(
+            'dynamodb',
+            endpoint_url='http://localhost:8001',
+            region_name='us-east-1',
+            aws_access_key_id='test',
+            aws_secret_access_key='test'
+        )
+        
+        # Create test table for S3 configs
+        table_name = 'ci-s3-delivery-test'
+        try:
+            table = dynamodb.create_table(
+                TableName=table_name,
+                KeySchema=[
+                    {'AttributeName': 'tenant_id', 'KeyType': 'HASH'},
+                    {'AttributeName': 'type', 'KeyType': 'RANGE'}
+                ],
+                AttributeDefinitions=[
+                    {'AttributeName': 'tenant_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'type', 'AttributeType': 'S'}
+                ],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            table.wait_until_exists()
+            
+            # Create S3 delivery configuration
+            s3_config = {
+                'tenant_id': 'ci-s3-test-tenant',
+                'type': 's3',
+                'bucket_name': 'ci-test-logs-bucket',
+                'bucket_prefix': 'cluster-logs/',
+                'target_region': 'us-east-1',
+                'enabled': True,
+                'desired_logs': ['test-app', 'ci-service']
+            }
+            
+            table.put_item(Item=s3_config)
+            
+            # Verify S3 configuration was created
+            response = table.get_item(Key={'tenant_id': 'ci-s3-test-tenant', 'type': 's3'})
+            if 'Item' in response:
+                print("✅ S3 delivery configuration created successfully")
+                print(f"   Bucket: {response['Item']['bucket_name']}")
+                print(f"   Prefix: {response['Item']['bucket_prefix']}")
+                print(f"   Region: {response['Item']['target_region']}")
+                print(f"   Enabled: {response['Item']['enabled']}")
+            else:
+                print("❌ Failed to create S3 delivery configuration")
+                exit(1)
+                
+            # Create both CloudWatch and S3 for same tenant (multi-delivery test)
+            cloudwatch_config = {
+                'tenant_id': 'ci-multi-delivery-tenant',
+                'type': 'cloudwatch',
+                'log_distribution_role_arn': 'arn:aws:iam::123456789012:role/CITestRole',
+                'log_group_name': '/aws/logs/ci-multi-delivery-tenant',
+                'target_region': 'us-east-1',
+                'enabled': True
+            }
+            
+            s3_multi_config = {
+                'tenant_id': 'ci-multi-delivery-tenant',
+                'type': 's3',
+                'bucket_name': 'ci-multi-delivery-bucket',
+                'bucket_prefix': 'multi-tenant-logs/',
+                'target_region': 'us-east-1',
+                'enabled': True
+            }
+            
+            table.put_item(Item=cloudwatch_config)
+            table.put_item(Item=s3_multi_config)
+            
+            # Verify multi-delivery configuration
+            cw_response = table.get_item(Key={'tenant_id': 'ci-multi-delivery-tenant', 'type': 'cloudwatch'})
+            s3_response = table.get_item(Key={'tenant_id': 'ci-multi-delivery-tenant', 'type': 's3'})
+            
+            if 'Item' in cw_response and 'Item' in s3_response:
+                print("✅ Multi-delivery configuration (CloudWatch + S3) created successfully")
+                print(f"   CloudWatch: {cw_response['Item']['log_group_name']}")
+                print(f"   S3: {s3_response['Item']['bucket_name']}")
+            else:
+                print("❌ Failed to create multi-delivery configuration")
+                exit(1)
+            
+            print(f"✅ S3 delivery configuration testing completed successfully")
+            
+        except Exception as e:
+            print(f"❌ Error testing S3 delivery configurations: {str(e)}")
+            exit(1)
+        EOF
+        
+        # Cleanup port forward
+        kill $S3_PORT_FORWARD_PID || true
+
     - name: Show integration test results
       run: |
         echo "=== Integration Test Summary ==="
@@ -186,6 +329,9 @@ jobs:
         echo "✅ Log collection and processing: OK"
         echo "✅ Log delivery to MinIO bucket: OK"
         echo "✅ API integration tests with DynamoDB Local: OK"
+        echo "✅ S3 delivery unit tests: OK"
+        echo "✅ S3 delivery configuration validation: OK"
+        echo "✅ Multi-delivery configuration (CloudWatch + S3): OK"
         echo ""
         echo "Integration test completed successfully!"
 
