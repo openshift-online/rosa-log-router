@@ -13,10 +13,10 @@ from pydantic import ValidationError
 # Import our utilities
 from src.models.responses import success_response, error_response, not_found_response, validation_error_response
 from src.utils.logger import setup_logging
-from src.services.dynamo import TenantService, TenantNotFoundError, DynamoDBError
+from src.services.dynamo import TenantDeliveryConfigService, TenantNotFoundError, DynamoDBError
 from src.models.tenant import (
-    TenantCreateRequest, TenantUpdateRequest, TenantPatchRequest,
-    TenantResponse, TenantListResponse, TenantValidationResponse
+    TenantDeliveryConfigCreateRequest, TenantDeliveryConfigUpdateRequest, TenantDeliveryConfigPatchRequest,
+    TenantDeliveryConfigResponse, TenantDeliveryConfigListResponse, TenantDeliveryConfigValidationResponse
 )
 
 # Set up logging
@@ -24,9 +24,9 @@ logger = setup_logging()
 
 # Create FastAPI app
 app = FastAPI(
-    title="Tenant Management API",
-    description="REST API for managing multi-tenant logging configuration",
-    version="1.0.0",
+    title="Multi-Tenant Logging Configuration API",
+    description="REST API for managing multi-tenant logging delivery configurations (CloudWatch and S3)",
+    version="2.0.0",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc"
 )
@@ -37,8 +37,8 @@ app = FastAPI(
 TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Initialize tenant service
-tenant_service = TenantService(table_name=TENANT_CONFIG_TABLE, region=AWS_REGION)
+# Initialize tenant delivery config service
+delivery_config_service = TenantDeliveryConfigService(table_name=TENANT_CONFIG_TABLE, region=AWS_REGION)
 
 @app.get("/api/v1/health")
 async def health_check():
@@ -51,189 +51,210 @@ async def health_check():
         raise HTTPException(status_code=500, detail="Health check failed")
 
 
-@app.get("/api/v1/tenants", response_model=Dict[str, Any])
-async def list_tenants(limit: int = 50, last_key: str = None):
-    """List all tenants with pagination"""
+@app.get("/api/v1/delivery-configs", response_model=Dict[str, Any])
+async def list_all_delivery_configs(limit: int = 50, last_key: str = None):
+    """List all delivery configurations with pagination"""
     try:
-        logger.info(f"Listing tenants with limit={limit}, last_key={last_key}")
+        logger.info(f"Listing all delivery configs with limit={limit}, last_key={last_key}")
         
-        result = tenant_service.list_tenants(limit=limit, last_key=last_key)
+        # Parse last_key if provided (format: "tenant_id#type")
+        parsed_last_key = None
+        if last_key:
+            try:
+                tenant_id, delivery_type = last_key.split('#', 1)
+                parsed_last_key = {'tenant_id': tenant_id, 'type': delivery_type}
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid last_key format. Expected 'tenant_id#type'")
         
-        # Convert to expected format for backward compatibility
-        response_data = {
-            "tenants": result["tenants"],
-            "total": result["count"],
-            "limit": result["limit"]
-        }
+        result = delivery_config_service.list_tenant_configs(limit=limit, last_key=parsed_last_key)
         
-        if "last_key" in result:
-            response_data["next_key"] = result["last_key"]
-            
-        return {"data": response_data, "status": "success"}
+        return {"data": result, "status": "success"}
         
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error listing tenants: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to list tenants")
+        logger.error(f"DynamoDB error listing delivery configs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list delivery configurations")
     except Exception as e:
-        logger.error(f"Unexpected error listing tenants: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to list tenants")
+        logger.error(f"Unexpected error listing delivery configs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list delivery configurations")
 
 
-@app.get("/api/v1/tenants/{tenant_id}")
-async def get_tenant(tenant_id: str):
-    """Get a specific tenant configuration"""
+@app.get("/api/v1/tenants/{tenant_id}/delivery-configs", response_model=Dict[str, Any])
+async def list_tenant_delivery_configs(tenant_id: str):
+    """List all delivery configurations for a tenant"""
     try:
-        logger.info(f"Getting tenant: {tenant_id}")
+        logger.info(f"Listing delivery configs for tenant: {tenant_id}")
         
-        tenant_data = tenant_service.get_tenant(tenant_id)
-        return {"data": tenant_data, "status": "success"}
+        configs = delivery_config_service.get_tenant_configs(tenant_id)
+        
+        return {"data": {"configurations": configs, "count": len(configs)}, "status": "success"}
+        
+    except DynamoDBError as e:
+        logger.error(f"DynamoDB error listing delivery configs for tenant {tenant_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list delivery configurations")
+    except Exception as e:
+        logger.error(f"Unexpected error listing delivery configs for tenant {tenant_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list delivery configurations")
+
+
+@app.get("/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}")
+async def get_tenant_delivery_config(tenant_id: str, delivery_type: str):
+    """Get a specific tenant delivery configuration"""
+    try:
+        logger.info(f"Getting delivery config: {tenant_id}/{delivery_type}")
+        
+        config_data = delivery_config_service.get_tenant_config(tenant_id, delivery_type)
+        return {"data": config_data, "status": "success"}
         
     except TenantNotFoundError as e:
-        logger.warning(f"Tenant not found: {tenant_id}")
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        logger.warning(f"Delivery config not found: {tenant_id}/{delivery_type}")
+        raise HTTPException(status_code=404, detail=f"Delivery configuration '{tenant_id}/{delivery_type}' not found")
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error getting tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get tenant")
+        logger.error(f"DynamoDB error getting delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get delivery configuration")
     except Exception as e:
-        logger.error(f"Unexpected error getting tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get tenant")
+        logger.error(f"Unexpected error getting delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get delivery configuration")
 
 
-@app.post("/api/v1/tenants")
-async def create_tenant(tenant_data: TenantCreateRequest):
-    """Create a new tenant"""
+@app.post("/api/v1/tenants/{tenant_id}/delivery-configs")
+async def create_tenant_delivery_config(tenant_id: str, config_data: TenantDeliveryConfigCreateRequest):
+    """Create a new tenant delivery configuration"""
     try:
-        logger.info(f"Creating tenant: {tenant_data.tenant_id}")
+        # Ensure tenant_id matches URL parameter
+        if config_data.tenant_id != tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id in URL must match tenant_id in request body")
+        
+        logger.info(f"Creating delivery config: {tenant_id}/{config_data.type}")
         
         # Convert pydantic model to dict for DynamoDB
-        tenant_dict = tenant_data.model_dump()
+        config_dict = config_data.model_dump(exclude_none=True)
         
-        # Create tenant in DynamoDB
-        created_tenant = tenant_service.create_tenant(tenant_dict)
+        # Create delivery config in DynamoDB
+        created_config = delivery_config_service.create_tenant_config(config_dict)
         
         return JSONResponse(
             status_code=201,
-            content={"data": created_tenant, "status": "success", "message": "Tenant created successfully"}
+            content={"data": created_config, "status": "success", "message": "Delivery configuration created successfully"}
         )
         
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error creating tenant: {str(e)}")
+        logger.error(f"DynamoDB error creating delivery config: {str(e)}")
         if "already exists" in str(e).lower():
             raise HTTPException(status_code=400, detail=str(e))
         else:
-            raise HTTPException(status_code=500, detail="Failed to create tenant")
+            raise HTTPException(status_code=500, detail="Failed to create delivery configuration")
     except ValidationError as e:
-        logger.warning(f"Validation error creating tenant: {str(e)}")
+        logger.warning(f"Validation error creating delivery config: {str(e)}")
         raise HTTPException(status_code=422, detail=e.errors())
     except Exception as e:
-        logger.error(f"Unexpected error creating tenant: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to create tenant")
+        logger.error(f"Unexpected error creating delivery config: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create delivery configuration")
 
 
-@app.put("/api/v1/tenants/{tenant_id}")
-async def update_tenant(tenant_id: str, tenant_data: TenantUpdateRequest):
-    """Update a tenant configuration"""
+@app.put("/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}")
+async def update_tenant_delivery_config(tenant_id: str, delivery_type: str, config_data: TenantDeliveryConfigUpdateRequest):
+    """Update a tenant delivery configuration"""
     try:
-        logger.info(f"Updating tenant: {tenant_id}")
+        logger.info(f"Updating delivery config: {tenant_id}/{delivery_type}")
         
         # Convert pydantic model to dict, excluding None values
-        update_dict = tenant_data.model_dump(exclude_none=True)
+        update_dict = config_data.model_dump(exclude_none=True)
         
         if not update_dict:
             raise HTTPException(status_code=400, detail="No fields provided for update")
         
-        # Update tenant in DynamoDB
-        updated_tenant = tenant_service.update_tenant(tenant_id, update_dict)
+        # Update delivery config in DynamoDB
+        updated_config = delivery_config_service.update_tenant_config(tenant_id, delivery_type, update_dict)
         
-        return {"data": updated_tenant, "status": "success", "message": "Tenant updated successfully"}
+        return {"data": updated_config, "status": "success", "message": "Delivery configuration updated successfully"}
         
     except TenantNotFoundError as e:
-        logger.warning(f"Tenant not found for update: {tenant_id}")
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        logger.warning(f"Delivery config not found for update: {tenant_id}/{delivery_type}")
+        raise HTTPException(status_code=404, detail=f"Delivery configuration '{tenant_id}/{delivery_type}' not found")
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error updating tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to update tenant")
+        logger.error(f"DynamoDB error updating delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update delivery configuration")
     except ValidationError as e:
-        logger.warning(f"Validation error updating tenant {tenant_id}: {str(e)}")
+        logger.warning(f"Validation error updating delivery config {tenant_id}/{delivery_type}: {str(e)}")
         raise HTTPException(status_code=422, detail=e.errors())
     except Exception as e:
-        logger.error(f"Unexpected error updating tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to update tenant")
+        logger.error(f"Unexpected error updating delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update delivery configuration")
 
 
-@app.patch("/api/v1/tenants/{tenant_id}")
-async def patch_tenant(tenant_id: str, tenant_data: TenantPatchRequest):
-    """Partially update a tenant (e.g., enable/disable)"""
+@app.patch("/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}")
+async def patch_tenant_delivery_config(tenant_id: str, delivery_type: str, config_data: TenantDeliveryConfigPatchRequest):
+    """Partially update a tenant delivery configuration (e.g., enable/disable)"""
     try:
-        logger.info(f"Patching tenant: {tenant_id}")
+        logger.info(f"Patching delivery config: {tenant_id}/{delivery_type}")
         
         # Convert pydantic model to dict, excluding None values
-        patch_dict = tenant_data.model_dump(exclude_none=True)
+        patch_dict = config_data.model_dump(exclude_none=True)
         
         if not patch_dict:
             raise HTTPException(status_code=400, detail="No fields provided for patch")
         
-        # Patch tenant in DynamoDB
-        patched_tenant = tenant_service.patch_tenant(tenant_id, patch_dict)
+        # Patch delivery config in DynamoDB
+        patched_config = delivery_config_service.patch_tenant_config(tenant_id, delivery_type, patch_dict)
         
-        return {"data": patched_tenant, "status": "success", "message": "Tenant patched successfully"}
+        return {"data": patched_config, "status": "success", "message": "Delivery configuration patched successfully"}
         
     except TenantNotFoundError as e:
-        logger.warning(f"Tenant not found for patch: {tenant_id}")
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        logger.warning(f"Delivery config not found for patch: {tenant_id}/{delivery_type}")
+        raise HTTPException(status_code=404, detail=f"Delivery configuration '{tenant_id}/{delivery_type}' not found")
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error patching tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to patch tenant")
+        logger.error(f"DynamoDB error patching delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to patch delivery configuration")
     except ValidationError as e:
-        logger.warning(f"Validation error patching tenant {tenant_id}: {str(e)}")
+        logger.warning(f"Validation error patching delivery config {tenant_id}/{delivery_type}: {str(e)}")
         raise HTTPException(status_code=422, detail=e.errors())
     except Exception as e:
-        logger.error(f"Unexpected error patching tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to patch tenant")
+        logger.error(f"Unexpected error patching delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to patch delivery configuration")
 
 
-@app.delete("/api/v1/tenants/{tenant_id}")
-async def delete_tenant(tenant_id: str):
-    """Delete a tenant configuration"""
+@app.delete("/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}")
+async def delete_tenant_delivery_config(tenant_id: str, delivery_type: str):
+    """Delete a tenant delivery configuration"""
     try:
-        logger.info(f"Deleting tenant: {tenant_id}")
+        logger.info(f"Deleting delivery config: {tenant_id}/{delivery_type}")
         
-        # Delete tenant from DynamoDB
-        tenant_service.delete_tenant(tenant_id)
+        # Delete delivery config from DynamoDB
+        delivery_config_service.delete_tenant_config(tenant_id, delivery_type)
         
-        return {"status": "success", "message": f"Tenant '{tenant_id}' deleted successfully"}
+        return {"status": "success", "message": f"Delivery configuration '{tenant_id}/{delivery_type}' deleted successfully"}
         
     except TenantNotFoundError as e:
-        logger.warning(f"Tenant not found for deletion: {tenant_id}")
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        logger.warning(f"Delivery config not found for deletion: {tenant_id}/{delivery_type}")
+        raise HTTPException(status_code=404, detail=f"Delivery configuration '{tenant_id}/{delivery_type}' not found")
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error deleting tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to delete tenant")
+        logger.error(f"DynamoDB error deleting delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete delivery configuration")
     except Exception as e:
-        logger.error(f"Unexpected error deleting tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to delete tenant")
+        logger.error(f"Unexpected error deleting delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete delivery configuration")
 
 
-@app.get("/api/v1/tenants/{tenant_id}/validate")
-async def validate_tenant(tenant_id: str):
-    """Validate a tenant configuration"""
+@app.get("/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}/validate")
+async def validate_tenant_delivery_config(tenant_id: str, delivery_type: str):
+    """Validate a tenant delivery configuration"""
     try:
-        logger.info(f"Validating tenant: {tenant_id}")
+        logger.info(f"Validating delivery config: {tenant_id}/{delivery_type}")
         
-        # Validate tenant configuration
-        validation_result = tenant_service.validate_tenant_config(tenant_id)
+        # Validate delivery configuration
+        validation_result = delivery_config_service.validate_tenant_config(tenant_id, delivery_type)
         
         return {"data": validation_result, "status": "success"}
         
     except TenantNotFoundError as e:
-        logger.warning(f"Tenant not found for validation: {tenant_id}")
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+        logger.warning(f"Delivery config not found for validation: {tenant_id}/{delivery_type}")
+        raise HTTPException(status_code=404, detail=f"Delivery configuration '{tenant_id}/{delivery_type}' not found")
     except DynamoDBError as e:
-        logger.error(f"DynamoDB error validating tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to validate tenant")
+        logger.error(f"DynamoDB error validating delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to validate delivery configuration")
     except Exception as e:
-        logger.error(f"Unexpected error validating tenant {tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to validate tenant")
+        logger.error(f"Unexpected error validating delivery config {tenant_id}/{delivery_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to validate delivery configuration")
 
 
 # Lambda handler using Mangum

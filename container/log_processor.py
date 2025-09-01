@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 import boto3
+from botocore.exceptions import ClientError
 
 # Configure logging
 logging.basicConfig(
@@ -271,24 +272,38 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
                 # Extract tenant information from object key
                 tenant_info = extract_tenant_info_from_key(object_key)
                 
-                # Get tenant configuration
-                tenant_config = get_tenant_configuration(tenant_info['tenant_id'])
+                # Get all enabled delivery configurations for this tenant
+                delivery_configs = get_tenant_delivery_configs(tenant_info['tenant_id'])
                 
-                # Check if this tenant should be processed based on enabled status
-                if not should_process_tenant(tenant_config, tenant_info['tenant_id']):
-                    logger.info(f"Skipping processing for tenant '{tenant_info['tenant_id']}' because tenant is disabled")
-                    continue
-                
-                # Check if this application should be processed based on desired_logs filtering
-                if not should_process_application(tenant_config, tenant_info['application']):
-                    logger.info(f"Skipping processing for application '{tenant_info['application']}' due to desired_logs filtering")
-                    continue
-                
-                # Download and process the log file
+                # Download and process the log file once for all delivery types
                 log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
                 
-                # Deliver logs to customer account
-                deliver_logs_to_customer(log_events, tenant_config, tenant_info, s3_timestamp)
+                # Process each delivery configuration independently
+                for delivery_config in delivery_configs:
+                    delivery_type = delivery_config['type']
+                    
+                    try:
+                        # Check if this delivery configuration should be processed based on enabled status
+                        if not should_process_delivery_config(delivery_config, tenant_info['tenant_id'], delivery_type):
+                            logger.info(f"Skipping {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' because it is disabled")
+                            continue
+                        
+                        # Check if this application should be processed based on desired_logs filtering
+                        if not should_process_application(delivery_config, tenant_info['application']):
+                            logger.info(f"Skipping {delivery_type} delivery for application '{tenant_info['application']}' due to desired_logs filtering")
+                            continue
+                        
+                        # Deliver logs based on delivery type
+                        if delivery_type == 'cloudwatch':
+                            deliver_logs_to_cloudwatch(log_events, delivery_config, tenant_info, s3_timestamp)
+                        elif delivery_type == 's3':
+                            deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
+                        else:
+                            logger.warning(f"Unknown delivery type '{delivery_type}' for tenant '{tenant_info['tenant_id']}' - skipping")
+                            
+                    except Exception as delivery_error:
+                        logger.error(f"Failed to deliver logs via {delivery_type} for tenant '{tenant_info['tenant_id']}': {str(delivery_error)}")
+                        # Continue with other delivery types even if one fails
                 
             except TenantNotFoundError as e:
                 logger.warning(f"Tenant not found for S3 object {object_key}: {str(e)}. Message will be removed from queue.")
@@ -345,47 +360,80 @@ def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     logger.info(f"Extracted tenant info: {tenant_info}")
     return tenant_info
 
-def validate_tenant_config(config: Dict[str, Any], tenant_id: str) -> None:
+def validate_tenant_delivery_config(config: Dict[str, Any], tenant_id: str) -> None:
     """
-    Validate that tenant configuration contains all required fields
+    Validate that tenant delivery configuration contains all required fields for its type
     """
-    required_fields = ['log_distribution_role_arn', 'log_group_name', 'target_region']
+    delivery_type = config.get('type')
+    if not delivery_type:
+        raise TenantNotFoundError(f"Tenant {tenant_id} delivery configuration missing 'type' field")
     
-    for field in required_fields:
-        if field not in config:
-            raise TenantNotFoundError(f"Tenant {tenant_id} is missing required field: {field}")
-        
-        value = config[field]
-        if not value or (isinstance(value, str) and not value.strip()):
-            raise TenantNotFoundError(f"Tenant {tenant_id} has empty or invalid value for required field: {field}")
+    if delivery_type == 'cloudwatch':
+        required_fields = ['log_distribution_role_arn', 'log_group_name']
+        for field in required_fields:
+            if field not in config:
+                raise TenantNotFoundError(f"Tenant {tenant_id} CloudWatch delivery config missing required field: {field}")
+            
+            value = config[field]
+            if not value or (isinstance(value, str) and not value.strip()):
+                raise TenantNotFoundError(f"Tenant {tenant_id} CloudWatch delivery config has empty or invalid value for required field: {field}")
+    
+    elif delivery_type == 's3':
+        required_fields = ['bucket_name']
+        for field in required_fields:
+            if field not in config:
+                raise TenantNotFoundError(f"Tenant {tenant_id} S3 delivery config missing required field: {field}")
+            
+            value = config[field]
+            if not value or (isinstance(value, str) and not value.strip()):
+                raise TenantNotFoundError(f"Tenant {tenant_id} S3 delivery config has empty or invalid value for required field: {field}")
+    
+    else:
+        raise TenantNotFoundError(f"Tenant {tenant_id} has invalid delivery type: {delivery_type}")
 
-def get_tenant_configuration(tenant_id: str) -> Dict[str, Any]:
+def get_tenant_delivery_configs(tenant_id: str) -> List[Dict[str, Any]]:
     """
-    Retrieve tenant configuration from DynamoDB
+    Retrieve all enabled tenant delivery configurations from DynamoDB
     """
     try:
         dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
         table = dynamodb.Table(TENANT_CONFIG_TABLE)
-        response = table.get_item(Key={'tenant_id': tenant_id})
         
-        if 'Item' not in response:
-            raise TenantNotFoundError(f"No configuration found for tenant: {tenant_id}")
+        # Query all delivery configurations for this tenant
+        response = table.query(
+            KeyConditionExpression='tenant_id = :tenant_id',
+            ExpressionAttributeValues={
+                ':tenant_id': tenant_id
+            }
+        )
         
-        config = response['Item']
+        configs = response.get('Items', [])
+        if not configs:
+            raise TenantNotFoundError(f"No delivery configurations found for tenant: {tenant_id}")
         
-        # Validate required fields
-        validate_tenant_config(config, tenant_id)
+        # Filter for enabled configurations (default to True if not present)
+        enabled_configs = []
+        for config in configs:
+            if config.get('enabled', True):
+                # Validate required fields for each delivery type
+                validate_tenant_delivery_config(config, tenant_id)
+                enabled_configs.append(dict(config))
         
-        # Log tenant configuration details including desired_logs and enabled status
-        desired_logs = config.get('desired_logs')
-        enabled = config.get('enabled', True)  # Default to True if not present for backward compatibility
+        if not enabled_configs:
+            raise TenantNotFoundError(f"No enabled delivery configurations found for tenant: {tenant_id}")
         
-        if desired_logs:
-            logger.info(f"Retrieved config for tenant {tenant_id} with desired_logs filtering: {desired_logs}, enabled: {enabled}")
-        else:
-            logger.info(f"Retrieved config for tenant {tenant_id} (no desired_logs filtering - all applications will be processed), enabled: {enabled}")
+        # Log configuration details
+        config_types = [config['type'] for config in enabled_configs]
+        logger.info(f"Retrieved {len(enabled_configs)} enabled delivery config(s) for tenant {tenant_id}: {config_types}")
         
-        return config
+        for config in enabled_configs:
+            desired_logs = config.get('desired_logs')
+            if desired_logs:
+                logger.info(f"  {config['type']} delivery with desired_logs filtering: {desired_logs}")
+            else:
+                logger.info(f"  {config['type']} delivery (no desired_logs filtering - all applications will be processed)")
+        
+        return enabled_configs
         
     except TenantNotFoundError:
         # Re-raise TenantNotFoundError as-is
@@ -396,21 +444,21 @@ def get_tenant_configuration(tenant_id: str) -> Dict[str, Any]:
             logger.warning(f"Invalid tenant_id (empty string) for DynamoDB lookup: '{tenant_id}'. This indicates a malformed S3 object path.")
             raise TenantNotFoundError(f"Invalid tenant_id (empty string) from malformed S3 path")
         
-        logger.error(f"Failed to get tenant configuration for {tenant_id}: {str(e)}")
+        logger.error(f"Failed to get tenant delivery configurations for {tenant_id}: {str(e)}")
         raise
 
-def should_process_application(tenant_config: Dict[str, Any], application_name: str) -> bool:
+def should_process_application(delivery_config: Dict[str, Any], application_name: str) -> bool:
     """
-    Check if the application should be processed based on tenant's desired_logs configuration
+    Check if the application should be processed based on delivery configuration's desired_logs
     
     Args:
-        tenant_config: Tenant configuration from DynamoDB
+        delivery_config: Delivery configuration from DynamoDB
         application_name: Name of the application from S3 object key
     
     Returns:
         True if application should be processed, False if it should be filtered out
     """
-    desired_logs = tenant_config.get('desired_logs')
+    desired_logs = delivery_config.get('desired_logs')
     
     # If no desired_logs specified, process all applications (backward compatibility)
     if not desired_logs:
@@ -434,23 +482,24 @@ def should_process_application(tenant_config: Dict[str, Any], application_name: 
     
     return should_process
 
-def should_process_tenant(tenant_config: Dict[str, Any], tenant_id: str) -> bool:
+def should_process_delivery_config(delivery_config: Dict[str, Any], tenant_id: str, delivery_type: str) -> bool:
     """
-    Check if the tenant should be processed based on tenant's enabled configuration
+    Check if the delivery configuration should be processed based on enabled status
     
     Args:
-        tenant_config: Tenant configuration from DynamoDB
+        delivery_config: Delivery configuration from DynamoDB
         tenant_id: ID of the tenant
+        delivery_type: Type of delivery configuration
     
     Returns:
-        True if tenant should be processed, False if it should be filtered out
+        True if delivery config should be processed, False if it should be filtered out
     """
-    enabled = tenant_config.get('enabled', True)  # Default to True if not present
+    enabled = delivery_config.get('enabled', True)  # Default to True if not present
     
     if enabled:
-        logger.info(f"Tenant '{tenant_id}' is enabled - will process logs")
+        logger.info(f"Tenant '{tenant_id}' {delivery_type} delivery is enabled - will process logs")
     else:
-        logger.info(f"Tenant '{tenant_id}' is disabled - will skip processing")
+        logger.info(f"Tenant '{tenant_id}' {delivery_type} delivery is disabled - will skip processing")
     
     return enabled
 
@@ -609,9 +658,9 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
         logger.warning(f"Failed to convert log record: {str(e)}, record: {str(log_record)[:200]}...")
         return None
 
-def deliver_logs_to_customer(
+def deliver_logs_to_cloudwatch(
     log_events: List[Dict[str, Any]], 
-    tenant_config: Dict[str, Any],
+    delivery_config: Dict[str, Any],
     tenant_info: Dict[str, str],
     s3_timestamp: int
 ) -> None:
@@ -637,23 +686,24 @@ def deliver_logs_to_customer(
         session_id = str(uuid.uuid4())
         
         # Prepare log group and stream names
-        log_group_name = tenant_config['log_group_name']
+        log_group_name = delivery_config['log_group_name']
         log_stream_name = tenant_info['pod_name']
+        target_region = delivery_config.get('target_region', AWS_REGION)
         
         # Use Vector to deliver logs with native assume_role for second hop
         deliver_logs_with_vector(
             log_events=log_events,
             central_credentials=central_credentials,
-            customer_role_arn=tenant_config['log_distribution_role_arn'],
+            customer_role_arn=delivery_config['log_distribution_role_arn'],
             external_id=current_account_id,
-            region=tenant_config['target_region'],
+            region=target_region,
             log_group=log_group_name,
             log_stream=log_stream_name,
             session_id=session_id,
             s3_timestamp=s3_timestamp
         )
         
-        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} using Vector")
+        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} CloudWatch Logs using Vector")
         
     except Exception as e:
         logger.error(f"Failed to deliver logs to customer {tenant_info['tenant_id']}: {str(e)}")
@@ -837,6 +887,108 @@ def deliver_logs_with_vector(
         # Ensure process is terminated
         if vector_process and vector_process.poll() is None:
             vector_process.kill()
+
+
+def deliver_logs_to_s3(
+    source_bucket: str,
+    source_key: str,
+    delivery_config: Dict[str, Any],
+    tenant_info: Dict[str, str]
+) -> None:
+    """
+    Deliver log file to customer's S3 bucket using direct S3-to-S3 copy
+    """
+    try:
+        sts_client = boto3.client('sts', region_name=AWS_REGION)
+        
+        # Assume the central log distribution role (single-hop)
+        central_role_response = sts_client.assume_role(
+            RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
+            RoleSessionName=f"S3LogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
+        )
+        
+        # Create S3 client with central role credentials
+        central_credentials = central_role_response['Credentials']
+        s3_client = boto3.client(
+            's3',
+            region_name=delivery_config.get('target_region', AWS_REGION),
+            aws_access_key_id=central_credentials['AccessKeyId'],
+            aws_secret_access_key=central_credentials['SecretAccessKey'],
+            aws_session_token=central_credentials['SessionToken']
+        )
+        
+        # Prepare destination S3 details
+        destination_bucket = delivery_config['bucket_name']
+        bucket_prefix = delivery_config.get('bucket_prefix', 'ROSA/cluster-logs/')
+        
+        # Ensure prefix ends with slash
+        if bucket_prefix and not bucket_prefix.endswith('/'):
+            bucket_prefix += '/'
+        
+        # Create destination key maintaining directory structure
+        # Format: {prefix}{tenant_id}/{cluster_id}/{application}/{pod_name}/{filename}
+        source_filename = source_key.split('/')[-1]  # Extract just the filename
+        destination_key = (
+            f"{bucket_prefix}{tenant_info['tenant_id']}/"
+            f"{tenant_info['cluster_id']}/{tenant_info['application']}/"
+            f"{tenant_info['pod_name']}/{source_filename}"
+        )
+        
+        logger.info(f"Starting S3-to-S3 copy for tenant {tenant_info['tenant_id']}")
+        logger.info(f"Source: s3://{source_bucket}/{source_key}")
+        logger.info(f"Destination: s3://{destination_bucket}/{destination_key}")
+        
+        # Copy source for the S3 copy operation
+        copy_source = {
+            'Bucket': source_bucket,
+            'Key': source_key
+        }
+        
+        # Additional metadata for traceability
+        metadata = {
+            'source-bucket': source_bucket,
+            'source-key': source_key,
+            'tenant-id': tenant_info['tenant_id'],
+            'cluster-id': tenant_info['cluster_id'],
+            'application': tenant_info['application'],
+            'pod-name': tenant_info['pod_name'],
+            'delivery-timestamp': str(int(datetime.now().timestamp()))
+        }
+        
+        # Perform S3-to-S3 copy with bucket-owner-full-control ACL
+        try:
+            s3_client.copy_object(
+                Bucket=destination_bucket,
+                Key=destination_key,
+                CopySource=copy_source,
+                ACL='bucket-owner-full-control',
+                Metadata=metadata,
+                MetadataDirective='REPLACE'
+            )
+            
+            logger.info(f"Successfully copied log file to S3 for tenant {tenant_info['tenant_id']}")
+            logger.info(f"Delivered to: s3://{destination_bucket}/{destination_key}")
+            
+        except ClientError as copy_error:
+            error_code = copy_error.response['Error']['Code']
+            
+            if error_code == 'NoSuchBucket':
+                raise NonRecoverableError(f"Destination S3 bucket '{destination_bucket}' does not exist")
+            elif error_code == 'AccessDenied':
+                raise NonRecoverableError(f"Access denied to S3 bucket '{destination_bucket}'. Check bucket policy and Central Role permissions")
+            elif error_code == 'NoSuchKey':
+                raise NonRecoverableError(f"Source S3 object s3://{source_bucket}/{source_key} not found")
+            else:
+                # For other errors, treat as recoverable (temporary issues)
+                logger.error(f"S3 copy operation failed with error {error_code}: {str(copy_error)}")
+                raise
+        
+    except NonRecoverableError:
+        # Re-raise non-recoverable errors
+        raise
+    except Exception as e:
+        logger.error(f"Failed to deliver logs to S3 for tenant {tenant_info['tenant_id']}: {str(e)}")
+        raise
 
 
 

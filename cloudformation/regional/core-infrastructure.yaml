@@ -177,7 +177,8 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # DynamoDB Table for tenant configurations
+  # DynamoDB Table for tenant delivery configurations
+  # Uses composite key: tenant_id (PK) + type (SK) for multi-delivery support
   TenantConfigTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -186,34 +187,18 @@ Resources:
       AttributeDefinitions:
         - AttributeName: tenant_id
           AttributeType: S
-        - AttributeName: account_id
+        - AttributeName: type
           AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-        - AttributeName: target_region
-          AttributeType: S
+        - AttributeName: ttl
+          AttributeType: N
       KeySchema:
         - AttributeName: tenant_id
           KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: AccountIdIndex
-          KeySchema:
-            - AttributeName: account_id
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: StatusIndex
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: TargetRegionIndex
-          KeySchema:
-            - AttributeName: target_region
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+        - AttributeName: type
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -229,6 +214,8 @@ Resources:
           Value: !Ref Environment
         - Key: ManagedBy
           Value: cloudformation
+        - Key: Schema
+          Value: composite-key-v2
 
 
   # Central S3 Writer Role for cross-account S3 access
@@ -320,10 +307,6 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:BatchGetItem
                 Resource: !GetAtt TenantConfigTable.Arn
-              - Effect: Allow
-                Action:
-                  - dynamodb:Query
-                Resource: !Sub '${TenantConfigTable.Arn}/index/*'
               - Effect: Allow
                 Action:
                   - s3:GetObject
