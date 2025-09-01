@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../shared'))
 
 from typing import List, Optional, Union, Literal
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, ValidationError
+from pydantic import BaseModel, Field, field_validator
 from validation_utils import normalize_bucket_prefix
 
 
@@ -187,15 +187,12 @@ class TenantDeliveryConfigCreateRequest(BaseModel):
     
     def model_post_init(self, __context) -> None:
         """Validate type-specific required fields"""
-        try:
-            validate_delivery_type_fields(
-                self.type,
-                log_distribution_role_arn=self.log_distribution_role_arn,
-                log_group_name=self.log_group_name,
-                bucket_name=self.bucket_name
-            )
-        except ValueError as e:
-            raise ValidationError(str(e))
+        validate_delivery_type_fields(
+            self.type,
+            log_distribution_role_arn=self.log_distribution_role_arn,
+            log_group_name=self.log_group_name,
+            bucket_name=self.bucket_name
+        )
 
 
 class TenantDeliveryConfigUpdateRequest(BaseModel):
