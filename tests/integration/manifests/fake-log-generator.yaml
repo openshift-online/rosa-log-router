@@ -1,20 +1,54 @@
+# Namespace for e2e-test-tenant
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-test-tenant
+  labels:
+    testing.environment: github-actions
+    tenant-id: e2e-test-tenant
+
+---
+# Namespace for multi-delivery-tenant  
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multi-delivery-tenant
+  labels:
+    testing.environment: github-actions
+    tenant-id: multi-delivery-tenant
+
+---
+# Namespace for filtered-tenant
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: filtered-tenant
+  labels:
+    testing.environment: github-actions
+    tenant-id: filtered-tenant
+
+---
+# Fake log generator for e2e-test-tenant
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fake-log-generator
-  namespace: default
+  name: fake-log-generator-e2e
+  namespace: e2e-test-tenant
   labels:
     app: fake-log-generator
+    tenant-id: e2e-test-tenant
     testing.environment: github-actions
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: fake-log-generator
+      tenant-id: e2e-test-tenant
   template:
     metadata:
       labels:
         app: fake-log-generator
+        tenant-id: e2e-test-tenant
         testing.environment: github-actions
     spec:
       initContainers:
@@ -29,43 +63,90 @@ spec:
           import json
           import time
           import random
+          import os
           from datetime import datetime, timezone
+          
+          # Get environment variables for context
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
           
           # Simple log generator for testing
           def generate_plain_text_log():
               levels = ["INFO", "DEBUG", "WARN", "ERROR"]
-              modules = ["auth.service", "database.connection", "api.handler"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
               
               level = random.choice(levels)
               module = random.choice(modules)
-              message = f"Test log message {random.randint(1000, 9999)}"
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
               timestamp = datetime.now(timezone.utc).isoformat()
               
               return f"{timestamp} {level} {module}: {message}"
           
           def generate_json_log():
               levels = ["INFO", "DEBUG", "WARN", "ERROR"]
-              modules = ["auth.service", "database.connection", "api.handler"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+                  actions = ["user_login", "db_query", "api_request"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+                  actions = ["process_payment", "update_user", "send_notification"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                      actions = ["validate_payment", "check_fraud", "process_transaction"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                      actions = ["authenticate_user", "update_profile", "manage_session"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+                      actions = ["blocked_action", "denied_request", "filtered_operation"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+                  actions = ["generic_action", "test_operation", "default_task"]
               
               return json.dumps({
                   "timestamp": datetime.now(timezone.utc).isoformat(),
                   "level": random.choice(levels),
                   "module": random.choice(modules),
-                  "message": f"JSON test log {random.randint(1000, 9999)}",
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
                   "request_id": f"req-{random.randint(10000, 99999)}",
-                  "user_id": f"user-{random.randint(100, 999)}"
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
               })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
           
           # Generate logs indefinitely with mixed formats
           while True:
-              batch_size = random.randint(50, 100)
+              batch_size = random.randint(10, 25)  # Smaller batches for testing
               for _ in range(batch_size):
                   # 60% plain text, 40% JSON to test both formats
                   if random.random() < 0.6:
                       print(generate_plain_text_log())
                   else:
                       print(generate_json_log())
-              time.sleep(random.uniform(0.5, 1.5))
+              time.sleep(random.uniform(2.0, 5.0))  # Slower for integration testing
           EOF
           chmod +x /app/fake_log_generator.py
         volumeMounts:
@@ -86,6 +167,655 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "e2e-test-tenant"
+        - name: APP_NAME
+          value: "fake-log-generator"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: script-volume
+        emptyDir: {}
+
+---
+# Fake log generator for multi-delivery-tenant
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-multi
+  namespace: multi-delivery-tenant
+  labels:
+    app: fake-log-generator
+    tenant-id: multi-delivery-tenant
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      tenant-id: multi-delivery-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        tenant-id: multi-delivery-tenant
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-script
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          # Use the same script as above
+          cat > /app/fake_log_generator.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import time
+          import random
+          import os
+          from datetime import datetime, timezone
+          
+          # Get environment variables for context
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
+          
+          # Simple log generator for testing
+          def generate_plain_text_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+              
+              level = random.choice(levels)
+              module = random.choice(modules)
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
+              timestamp = datetime.now(timezone.utc).isoformat()
+              
+              return f"{timestamp} {level} {module}: {message}"
+          
+          def generate_json_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+                  actions = ["user_login", "db_query", "api_request"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+                  actions = ["process_payment", "update_user", "send_notification"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                      actions = ["validate_payment", "check_fraud", "process_transaction"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                      actions = ["authenticate_user", "update_profile", "manage_session"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+                      actions = ["blocked_action", "denied_request", "filtered_operation"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+                  actions = ["generic_action", "test_operation", "default_task"]
+              
+              return json.dumps({
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "level": random.choice(levels),
+                  "module": random.choice(modules),
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
+                  "request_id": f"req-{random.randint(10000, 99999)}",
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
+              })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
+          
+          # Generate logs indefinitely with mixed formats
+          while True:
+              batch_size = random.randint(10, 25)  # Smaller batches for testing
+              for _ in range(batch_size):
+                  # 60% plain text, 40% JSON to test both formats
+                  if random.random() < 0.6:
+                      print(generate_plain_text_log())
+                  else:
+                      print(generate_json_log())
+              time.sleep(random.uniform(2.0, 5.0))  # Slower for integration testing
+          EOF
+          chmod +x /app/fake_log_generator.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      containers:
+      - name: fake-log-generator
+        image: python:3.13-slim
+        command:
+        - python3
+        - /app/fake_log_generator.py
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "multi-delivery-tenant"
+        - name: APP_NAME
+          value: "fake-log-generator"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: script-volume
+        emptyDir: {}
+
+---
+# Filtered tenant - Payment Service (ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: filtered-tenant
+  labels:
+    app: fake-log-generator
+    service: payment-service
+    tenant-id: filtered-tenant
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: payment-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: payment-service
+        tenant-id: filtered-tenant
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-script
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          # Same script as above
+          cat > /app/fake_log_generator.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import time
+          import random
+          import os
+          from datetime import datetime, timezone
+          
+          # Get environment variables for context
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
+          
+          # Simple log generator for testing
+          def generate_plain_text_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+              
+              level = random.choice(levels)
+              module = random.choice(modules)
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
+              timestamp = datetime.now(timezone.utc).isoformat()
+              
+              return f"{timestamp} {level} {module}: {message}"
+          
+          def generate_json_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+                  actions = ["user_login", "db_query", "api_request"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+                  actions = ["process_payment", "update_user", "send_notification"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                      actions = ["validate_payment", "check_fraud", "process_transaction"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                      actions = ["authenticate_user", "update_profile", "manage_session"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+                      actions = ["blocked_action", "denied_request", "filtered_operation"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+                  actions = ["generic_action", "test_operation", "default_task"]
+              
+              return json.dumps({
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "level": random.choice(levels),
+                  "module": random.choice(modules),
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
+                  "request_id": f"req-{random.randint(10000, 99999)}",
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
+              })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
+          
+          # Generate logs indefinitely with mixed formats
+          while True:
+              batch_size = random.randint(10, 25)  # Smaller batches for testing
+              for _ in range(batch_size):
+                  # 60% plain text, 40% JSON to test both formats
+                  if random.random() < 0.6:
+                      print(generate_plain_text_log())
+                  else:
+                      print(generate_json_log())
+              time.sleep(random.uniform(2.0, 5.0))  # Slower for integration testing
+          EOF
+          chmod +x /app/fake_log_generator.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      containers:
+      - name: fake-log-generator
+        image: python:3.13-slim
+        command:
+        - python3
+        - /app/fake_log_generator.py
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "filtered-tenant"
+        - name: APP_NAME
+          value: "payment-service"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: script-volume
+        emptyDir: {}
+
+---
+# Filtered tenant - User Service (ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: filtered-tenant
+  labels:
+    app: fake-log-generator
+    service: user-service
+    tenant-id: filtered-tenant
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: user-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: user-service
+        tenant-id: filtered-tenant
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-script
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          # Same script content for consistency
+          cat > /app/fake_log_generator.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import time
+          import random
+          import os
+          from datetime import datetime, timezone
+          
+          # Get environment variables for context
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
+          
+          # Simple log generator for testing
+          def generate_plain_text_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+              
+              level = random.choice(levels)
+              module = random.choice(modules)
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
+              timestamp = datetime.now(timezone.utc).isoformat()
+              
+              return f"{timestamp} {level} {module}: {message}"
+          
+          def generate_json_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+                  actions = ["user_login", "db_query", "api_request"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+                  actions = ["process_payment", "update_user", "send_notification"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                      actions = ["validate_payment", "check_fraud", "process_transaction"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                      actions = ["authenticate_user", "update_profile", "manage_session"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+                      actions = ["blocked_action", "denied_request", "filtered_operation"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+                  actions = ["generic_action", "test_operation", "default_task"]
+              
+              return json.dumps({
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "level": random.choice(levels),
+                  "module": random.choice(modules),
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
+                  "request_id": f"req-{random.randint(10000, 99999)}",
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
+              })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
+          
+          # Generate logs indefinitely with mixed formats
+          while True:
+              batch_size = random.randint(10, 25)  # Smaller batches for testing
+              for _ in range(batch_size):
+                  # 60% plain text, 40% JSON to test both formats
+                  if random.random() < 0.6:
+                      print(generate_plain_text_log())
+                  else:
+                      print(generate_json_log())
+              time.sleep(random.uniform(2.0, 5.0))  # Slower for integration testing
+          EOF
+          chmod +x /app/fake_log_generator.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      containers:
+      - name: fake-log-generator
+        image: python:3.13-slim
+        command:
+        - python3
+        - /app/fake_log_generator.py
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "filtered-tenant"
+        - name: APP_NAME
+          value: "user-service"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: script-volume
+        emptyDir: {}
+
+---
+# Filtered tenant - Blocked Service (NOT ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blocked-service
+  namespace: filtered-tenant
+  labels:
+    app: fake-log-generator
+    service: blocked-service
+    tenant-id: filtered-tenant
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: blocked-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: blocked-service
+        tenant-id: filtered-tenant
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-script
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          # Same script content
+          cat > /app/fake_log_generator.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import time
+          import random
+          import os
+          from datetime import datetime, timezone
+          
+          # Get environment variables for context
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
+          
+          # Simple log generator for testing
+          def generate_plain_text_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+              
+              level = random.choice(levels)
+              module = random.choice(modules)
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
+              timestamp = datetime.now(timezone.utc).isoformat()
+              
+              return f"{timestamp} {level} {module}: {message}"
+          
+          def generate_json_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              
+              # Use context-aware modules based on tenant/app
+              if TENANT_ID == "e2e-test-tenant":
+                  modules = ["auth.service", "database.connection", "api.handler"]
+                  actions = ["user_login", "db_query", "api_request"]
+              elif TENANT_ID == "multi-delivery-tenant":
+                  modules = ["payment.processor", "user.manager", "notification.sender"]
+                  actions = ["process_payment", "update_user", "send_notification"]
+              elif TENANT_ID == "filtered-tenant":
+                  if APP_NAME == "payment-service":
+                      modules = ["payment.gateway", "transaction.validator", "fraud.detector"]
+                      actions = ["validate_payment", "check_fraud", "process_transaction"]
+                  elif APP_NAME == "user-service":
+                      modules = ["user.auth", "profile.manager", "session.handler"]
+                      actions = ["authenticate_user", "update_profile", "manage_session"]
+                  else:
+                      modules = ["blocked.service", "denied.handler", "filtered.module"]
+                      actions = ["blocked_action", "denied_request", "filtered_operation"]
+              else:
+                  modules = ["generic.service", "test.module", "default.handler"]
+                  actions = ["generic_action", "test_operation", "default_task"]
+              
+              return json.dumps({
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "level": random.choice(levels),
+                  "module": random.choice(modules),
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
+                  "request_id": f"req-{random.randint(10000, 99999)}",
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
+              })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
+          
+          # Generate logs indefinitely with mixed formats
+          while True:
+              batch_size = random.randint(10, 25)  # Smaller batches for testing
+              for _ in range(batch_size):
+                  # 60% plain text, 40% JSON to test both formats
+                  if random.random() < 0.6:
+                      print(generate_plain_text_log())
+                  else:
+                      print(generate_json_log())
+              time.sleep(random.uniform(2.0, 5.0))  # Slower for integration testing
+          EOF
+          chmod +x /app/fake_log_generator.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      containers:
+      - name: fake-log-generator
+        image: python:3.13-slim
+        command:
+        - python3
+        - /app/fake_log_generator.py
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "filtered-tenant"
+        - name: APP_NAME
+          value: "blocked-service"
         volumeMounts:
         - name: script-volume
           mountPath: /app

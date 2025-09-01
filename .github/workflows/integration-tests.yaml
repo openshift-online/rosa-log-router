@@ -44,14 +44,33 @@ jobs:
         
         echo "DynamoDB Local is ready"
 
+    - name: Deploy tenant configuration API
+      run: |
+        kubectl apply -f tests/integration/manifests/api.yaml
+        
+        # Wait for API to be ready
+        kubectl wait --for=condition=ready pod -l app=tenant-config-api --timeout=300s
+        
+        echo "Tenant configuration API is ready"
+
+    - name: Deploy log processor
+      run: |
+        kubectl apply -f tests/integration/manifests/log-processor.yaml
+        
+        # Wait for log processor to be ready
+        kubectl wait --for=condition=ready pod -l app=log-processor --timeout=300s
+        
+        echo "Log processor is ready"
+
     - name: Deploy fake log generators
       run: |
         kubectl apply -f tests/integration/manifests/fake-log-generator.yaml
+        kubectl apply -f tests/integration/manifests/fake-log-generator-default.yaml
         
-        # Wait for fake log generators to be ready
-        kubectl wait --for=condition=ready pod -l app=fake-log-generator --timeout=300s
+        # Wait for fake log generators to be ready in all namespaces
+        kubectl wait --for=condition=ready pod -l app=fake-log-generator --timeout=300s --all-namespaces
         
-        echo "Fake log generators are ready"
+        echo "Fake log generators are ready in all tenant namespaces"
 
     - name: Deploy Vector collector
       run: |
@@ -133,207 +152,82 @@ jobs:
       run: |
         pip install -r tests/requirements.txt
 
-    - name: Run API integration tests
+    - name: Run true end-to-end S3 processor integration tests
       run: |
-        # Start port forwarding for DynamoDB Local in background
-        kubectl port-forward service/dynamodb-local 8000:8000 &
-        PORT_FORWARD_PID=$!
+        # Start port forwarding for services
+        echo "Starting port forwards for integration testing..."
         
-        # Wait for port forward to be ready
-        echo "Waiting for DynamoDB Local port forward..."
-        sleep 10
+        # Port forward MinIO
+        kubectl port-forward service/minio 9000:9000 &
+        MINIO_PID=$!
         
-        # Verify DynamoDB Local is accessible
+        # Port forward tenant config API
+        kubectl port-forward service/tenant-config-api 8080:8080 &
+        API_PID=$!
+        
+        # Wait for port forwards to be ready
+        echo "Waiting for services to be accessible..."
+        sleep 15
+        
+        # Verify services are accessible
         max_retries=30
+        
+        # Check MinIO
         for i in $(seq 1 $max_retries); do
-          if curl -s http://localhost:8000 > /dev/null 2>&1; then
-            echo "✅ DynamoDB Local accessible on localhost:8000"
+          if curl -s http://localhost:9000/minio/health/live > /dev/null 2>&1; then
+            echo "✅ MinIO accessible on localhost:9000"
             break
           fi
-          echo "Waiting for DynamoDB Local... ($i/$max_retries)"
+          echo "Waiting for MinIO... ($i/$max_retries)"
           sleep 2
         done
         
-        if [ $i -eq $max_retries ]; then
-          echo "❌ Failed to connect to DynamoDB Local"
-          kill $PORT_FORWARD_PID || true
-          exit 1
-        fi
+        # Check API
+        for i in $(seq 1 $max_retries); do
+          if curl -s http://localhost:8080/health > /dev/null 2>&1; then
+            echo "✅ Tenant Config API accessible on localhost:8080"
+            break
+          fi
+          echo "Waiting for API... ($i/$max_retries)"
+          sleep 2
+        done
         
-        # Run integration tests
-        echo "Running API integration tests..."
-        pytest tests/integration/test_api_integration.py -v -m integration --tb=short
+        # Run the true end-to-end integration tests
+        echo "Running true end-to-end S3 processor integration tests..."
+        pytest tests/integration/test_processor_s3_integration.py::TestEndToEndS3ProcessorIntegration -v -m integration --tb=short
         TEST_EXIT_CODE=$?
         
-        # Cleanup port forward
-        kill $PORT_FORWARD_PID || true
+        # Cleanup port forwards
+        kill $MINIO_PID $API_PID 2>/dev/null || true
         
         # Exit with test result
         if [ $TEST_EXIT_CODE -eq 0 ]; then
-          echo "✅ API integration tests passed"
+          echo "✅ True end-to-end S3 processor integration tests passed"
         else
-          echo "❌ API integration tests failed"
+          echo "❌ True end-to-end S3 processor integration tests failed"
           exit $TEST_EXIT_CODE
         fi
 
-    - name: Run S3 delivery unit tests
-      run: |
-        echo "Running S3 delivery unit tests..."
-        pytest tests/unit/test_log_processor.py::TestS3LogDelivery -v --tb=short
-        S3_UNIT_EXIT_CODE=$?
-        
-        if [ $S3_UNIT_EXIT_CODE -eq 0 ]; then
-          echo "✅ S3 delivery unit tests passed"
-        else
-          echo "❌ S3 delivery unit tests failed"
-          exit $S3_UNIT_EXIT_CODE
-        fi
-
-    - name: Verify S3 delivery configurations in DynamoDB
-      run: |
-        # Start port forwarding for DynamoDB Local in background
-        kubectl port-forward service/dynamodb-local 8001:8000 &
-        S3_PORT_FORWARD_PID=$!
-        
-        # Wait for port forward to be ready
-        echo "Waiting for DynamoDB Local port forward for S3 tests..."
-        sleep 10
-        
-        # Verify DynamoDB Local is accessible on alternate port
-        max_retries=30
-        for i in $(seq 1 $max_retries); do
-          if curl -s http://localhost:8001 > /dev/null 2>&1; then
-            echo "✅ DynamoDB Local accessible on localhost:8001 for S3 tests"
-            break
-          fi
-          echo "Waiting for DynamoDB Local S3 port... ($i/$max_retries)"
-          sleep 2
-        done
-        
-        if [ $i -eq $max_retries ]; then
-          echo "❌ Failed to connect to DynamoDB Local for S3 tests"
-          kill $S3_PORT_FORWARD_PID || true
-          exit 1
-        fi
-        
-        # Create test S3 configurations to verify multi-delivery model
-        echo "Creating test S3 delivery configurations..."
-        
-        # Use Python to create S3 configurations via DynamoDB Local
-        python3 << 'EOF'
-        import boto3
-        import json
-        
-        # Connect to DynamoDB Local
-        dynamodb = boto3.resource(
-            'dynamodb',
-            endpoint_url='http://localhost:8001',
-            region_name='us-east-1',
-            aws_access_key_id='test',
-            aws_secret_access_key='test'
-        )
-        
-        # Create test table for S3 configs
-        table_name = 'ci-s3-delivery-test'
-        try:
-            table = dynamodb.create_table(
-                TableName=table_name,
-                KeySchema=[
-                    {'AttributeName': 'tenant_id', 'KeyType': 'HASH'},
-                    {'AttributeName': 'type', 'KeyType': 'RANGE'}
-                ],
-                AttributeDefinitions=[
-                    {'AttributeName': 'tenant_id', 'AttributeType': 'S'},
-                    {'AttributeName': 'type', 'AttributeType': 'S'}
-                ],
-                BillingMode='PAY_PER_REQUEST'
-            )
-            table.wait_until_exists()
-            
-            # Create S3 delivery configuration
-            s3_config = {
-                'tenant_id': 'ci-s3-test-tenant',
-                'type': 's3',
-                'bucket_name': 'ci-test-logs-bucket',
-                'bucket_prefix': 'cluster-logs/',
-                'target_region': 'us-east-1',
-                'enabled': True,
-                'desired_logs': ['test-app', 'ci-service']
-            }
-            
-            table.put_item(Item=s3_config)
-            
-            # Verify S3 configuration was created
-            response = table.get_item(Key={'tenant_id': 'ci-s3-test-tenant', 'type': 's3'})
-            if 'Item' in response:
-                print("✅ S3 delivery configuration created successfully")
-                print(f"   Bucket: {response['Item']['bucket_name']}")
-                print(f"   Prefix: {response['Item']['bucket_prefix']}")
-                print(f"   Region: {response['Item']['target_region']}")
-                print(f"   Enabled: {response['Item']['enabled']}")
-            else:
-                print("❌ Failed to create S3 delivery configuration")
-                exit(1)
-                
-            # Create both CloudWatch and S3 for same tenant (multi-delivery test)
-            cloudwatch_config = {
-                'tenant_id': 'ci-multi-delivery-tenant',
-                'type': 'cloudwatch',
-                'log_distribution_role_arn': 'arn:aws:iam::123456789012:role/CITestRole',
-                'log_group_name': '/aws/logs/ci-multi-delivery-tenant',
-                'target_region': 'us-east-1',
-                'enabled': True
-            }
-            
-            s3_multi_config = {
-                'tenant_id': 'ci-multi-delivery-tenant',
-                'type': 's3',
-                'bucket_name': 'ci-multi-delivery-bucket',
-                'bucket_prefix': 'multi-tenant-logs/',
-                'target_region': 'us-east-1',
-                'enabled': True
-            }
-            
-            table.put_item(Item=cloudwatch_config)
-            table.put_item(Item=s3_multi_config)
-            
-            # Verify multi-delivery configuration
-            cw_response = table.get_item(Key={'tenant_id': 'ci-multi-delivery-tenant', 'type': 'cloudwatch'})
-            s3_response = table.get_item(Key={'tenant_id': 'ci-multi-delivery-tenant', 'type': 's3'})
-            
-            if 'Item' in cw_response and 'Item' in s3_response:
-                print("✅ Multi-delivery configuration (CloudWatch + S3) created successfully")
-                print(f"   CloudWatch: {cw_response['Item']['log_group_name']}")
-                print(f"   S3: {s3_response['Item']['bucket_name']}")
-            else:
-                print("❌ Failed to create multi-delivery configuration")
-                exit(1)
-            
-            print(f"✅ S3 delivery configuration testing completed successfully")
-            
-        except Exception as e:
-            print(f"❌ Error testing S3 delivery configurations: {str(e)}")
-            exit(1)
-        EOF
-        
-        # Cleanup port forward
-        kill $S3_PORT_FORWARD_PID || true
-
     - name: Show integration test results
       run: |
-        echo "=== Integration Test Summary ==="
-        echo "✅ MinIO deployment: OK"
+        echo "=== True End-to-End Integration Test Summary ==="
+        echo "✅ MinIO deployment (source & destination buckets): OK"
         echo "✅ DynamoDB Local deployment: OK"
-        echo "✅ Fake log generator deployment: OK" 
+        echo "✅ Tenant Configuration API deployment: OK"
+        echo "✅ Log Processor deployment: OK"
+        echo "✅ Multi-tenant fake log generators deployment: OK" 
         echo "✅ Vector collector deployment: OK"
         echo "✅ Log collection and processing: OK"
         echo "✅ Log delivery to MinIO bucket: OK"
-        echo "✅ API integration tests with DynamoDB Local: OK"
-        echo "✅ S3 delivery unit tests: OK"
-        echo "✅ S3 delivery configuration validation: OK"
-        echo "✅ Multi-delivery configuration (CloudWatch + S3): OK"
+        echo "✅ True end-to-end S3 processor integration tests: OK"
+        echo "   - Basic S3 delivery with real API and MinIO"
+        echo "   - Multi-delivery configuration (CloudWatch + S3)"
+        echo "   - Desired logs filtering validation"
+        echo "   - Disabled tenant configuration handling"
+        echo "   - Cross-region S3 delivery support"
         echo ""
-        echo "Integration test completed successfully!"
+        echo "True end-to-end integration test completed successfully!"
+        echo "All components working together: Vector → MinIO → Processor → API → S3"
 
     - name: Cleanup (if test fails)
       if: failure()
@@ -345,8 +239,14 @@ jobs:
         echo "Vector logs:"
         kubectl logs -l app.kubernetes.io/name=vector --tail=50 || echo "No Vector logs"
         echo ""
-        echo "Fake log generator logs:"
-        kubectl logs -l app=fake-log-generator --tail=20 || echo "No generator logs"
+        echo "Fake log generator logs (all namespaces):"
+        kubectl logs -l app=fake-log-generator --tail=20 --all-namespaces || echo "No generator logs"
+        echo ""
+        echo "Log processor logs:"
+        kubectl logs -l app=log-processor --tail=20 || echo "No processor logs"
+        echo ""
+        echo "Tenant config API logs:"
+        kubectl logs -l app=tenant-config-api --tail=20 || echo "No API logs"
         echo ""
         echo "MinIO logs:"
         kubectl logs -l app=minio --tail=20 || echo "No MinIO logs"

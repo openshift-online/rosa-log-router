@@ -22,6 +22,17 @@ from typing import Dict, List, Any, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+# Add shared utilities to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../shared'))
+try:
+    from validation_utils import normalize_bucket_prefix
+except ImportError:
+    # Fallback for cases where shared module isn't available
+    def normalize_bucket_prefix(prefix: str) -> str:
+        if prefix and not prefix.endswith('/'):
+            return prefix + '/'
+        return prefix
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -319,8 +330,8 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                             deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
                             delivery_stats['successful_deliveries'] += 1
                         else:
-                            logger.warning(f"Unknown delivery type '{delivery_type}' for tenant '{tenant_info['tenant_id']}' - skipping")
-                            delivery_stats['failed_deliveries'] += 1
+                            logger.error(f"Unknown delivery type '{delivery_type}' for tenant '{tenant_info['tenant_id']}' - skipping")
+                            delivery_stats['unknown_delivery_types'] = delivery_stats.get('unknown_delivery_types', 0) + 1
                             
                     except Exception as delivery_error:
                         logger.error(f"Failed to deliver logs via {delivery_type} for tenant '{tenant_info['tenant_id']}': {str(delivery_error)}")
@@ -997,9 +1008,8 @@ def deliver_logs_to_s3(
         destination_bucket = delivery_config['bucket_name']
         bucket_prefix = delivery_config.get('bucket_prefix', 'ROSA/cluster-logs/')
         
-        # Ensure prefix ends with slash
-        if bucket_prefix and not bucket_prefix.endswith('/'):
-            bucket_prefix += '/'
+        # Normalize prefix using shared utility
+        bucket_prefix = normalize_bucket_prefix(bucket_prefix)
         
         # Create destination key maintaining directory structure
         # Format: {prefix}{cluster_id}/{namespace}/{application}/{pod_name}/{filename}
