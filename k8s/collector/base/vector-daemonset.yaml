@@ -32,7 +32,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: VECTOR_LOG
-          value: "INFO"
+          value: "WARN"
         - name: VECTOR_REQUIRE_HEALTHY
           value: "true"
         ports:
