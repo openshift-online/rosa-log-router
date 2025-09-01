@@ -2,7 +2,7 @@
 API Integration Tests with DynamoDB Local
 
 These tests validate the API endpoints against a real DynamoDB Local instance
-running in Minikube, providing end-to-end validation of the tenant management API.
+running in Minikube, providing end-to-end validation of the tenant delivery configuration API.
 """
 
 import pytest
@@ -13,88 +13,102 @@ from typing import Dict, Any
 pytestmark = pytest.mark.integration
 
 
-class TestTenantServiceIntegration:
-    """Integration tests for TenantService with real DynamoDB Local"""
+class TestTenantDeliveryConfigServiceIntegration:
+    """Integration tests for TenantDeliveryConfigService with real DynamoDB Local"""
     
-    def test_tenant_crud_operations(self, tenant_service, sample_integration_tenant):
+    def test_delivery_config_crud_operations(self, delivery_config_service, sample_integration_cloudwatch_config):
         """Test complete CRUD operations with real DynamoDB"""
-        tenant_data = sample_integration_tenant
-        tenant_id = tenant_data["tenant_id"]
+        config_data = sample_integration_cloudwatch_config
+        tenant_id = config_data["tenant_id"]
+        delivery_type = config_data["type"]
         
-        # CREATE: Create tenant
-        created = tenant_service.create_tenant(tenant_data)
+        # CREATE: Create delivery configuration
+        created = delivery_config_service.create_tenant_config(config_data)
         assert created["tenant_id"] == tenant_id
+        assert created["type"] == delivery_type
         assert created["enabled"] is True
-        assert created["log_distribution_role_arn"] == tenant_data["log_distribution_role_arn"]
+        assert created["log_distribution_role_arn"] == config_data["log_distribution_role_arn"]
         
-        # READ: Get tenant
-        retrieved = tenant_service.get_tenant(tenant_id)
+        # READ: Get delivery configuration
+        retrieved = delivery_config_service.get_tenant_config(tenant_id, delivery_type)
         assert retrieved["tenant_id"] == tenant_id
-        assert retrieved["log_group_name"] == tenant_data["log_group_name"]
-        assert retrieved["target_region"] == tenant_data["target_region"]
-        assert retrieved["desired_logs"] == tenant_data["desired_logs"]
+        assert retrieved["type"] == delivery_type
+        assert retrieved["log_group_name"] == config_data["log_group_name"]
+        assert retrieved["target_region"] == config_data["target_region"]
+        assert retrieved["desired_logs"] == config_data["desired_logs"]
         
-        # UPDATE: Modify tenant
+        # UPDATE: Modify delivery configuration
         update_data = {
             "log_group_name": "/aws/logs/updated-integration-tenant",
             "enabled": False,
             "desired_logs": ["updated-app"]
         }
-        updated = tenant_service.update_tenant(tenant_id, update_data)
+        updated = delivery_config_service.update_tenant_config(tenant_id, delivery_type, update_data)
         assert updated["log_group_name"] == "/aws/logs/updated-integration-tenant"
         assert updated["enabled"] is False
         assert updated["desired_logs"] == ["updated-app"]
         # Unchanged fields should persist
-        assert updated["log_distribution_role_arn"] == tenant_data["log_distribution_role_arn"]
-        assert updated["target_region"] == tenant_data["target_region"]
+        assert updated["log_distribution_role_arn"] == config_data["log_distribution_role_arn"]
+        assert updated["target_region"] == config_data["target_region"]
         
-        # DELETE: Remove tenant
-        deleted = tenant_service.delete_tenant(tenant_id)
+        # DELETE: Remove delivery configuration
+        deleted = delivery_config_service.delete_tenant_config(tenant_id, delivery_type)
         assert deleted is True
         
         # Verify deletion
         from src.services.dynamo import TenantNotFoundError
         with pytest.raises(TenantNotFoundError):
-            tenant_service.get_tenant(tenant_id)
+            delivery_config_service.get_tenant_config(tenant_id, delivery_type)
     
-    def test_tenant_list_operations(self, populated_integration_table):
-        """Test tenant listing operations with real DynamoDB"""
-        tenant_service = populated_integration_table
+    def test_delivery_config_list_operations(self, populated_integration_table):
+        """Test delivery configuration listing operations with real DynamoDB"""
+        delivery_config_service = populated_integration_table
         
-        # List all tenants
-        result = tenant_service.list_tenants()
-        assert result["count"] == 3
-        assert len(result["tenants"]) == 3
+        # List all delivery configurations
+        result = delivery_config_service.list_tenant_configs()
+        assert result["count"] == 4  # 2 tenants x 2 delivery types each
+        assert len(result["configurations"]) == 4
         assert result["limit"] == 50
         
-        # Verify all test tenants are present
-        tenant_ids = [t["tenant_id"] for t in result["tenants"]]
-        assert "integration-tenant-1" in tenant_ids
-        assert "integration-tenant-2" in tenant_ids
-        assert "integration-tenant-3" in tenant_ids
+        # Verify all test configurations are present
+        config_keys = [(c["tenant_id"], c["type"]) for c in result["configurations"]]
+        assert ("integration-tenant-1", "cloudwatch") in config_keys
+        assert ("integration-tenant-1", "s3") in config_keys
+        assert ("integration-tenant-2", "cloudwatch") in config_keys
+        assert ("integration-tenant-2", "s3") in config_keys
         
         # Test limited listing
-        limited_result = tenant_service.list_tenants(limit=2)
+        limited_result = delivery_config_service.list_tenant_configs(limit=2)
         assert limited_result["count"] == 2
-        assert len(limited_result["tenants"]) == 2
+        assert len(limited_result["configurations"]) == 2
         assert limited_result["limit"] == 2
         assert "last_key" in limited_result
+        
+        # Test tenant-specific listing
+        tenant_configs = delivery_config_service.get_tenant_configs("integration-tenant-1")
+        assert len(tenant_configs) == 2
+        tenant_types = [c["type"] for c in tenant_configs]
+        assert "cloudwatch" in tenant_types
+        assert "s3" in tenant_types
     
-    def test_tenant_validation_integration(self, tenant_service):
-        """Test tenant configuration validation with real DynamoDB"""
-        # Create tenant with invalid configuration
-        invalid_tenant = {
+    def test_delivery_config_validation_integration(self, delivery_config_service):
+        """Test delivery configuration validation with real DynamoDB"""
+        # Create delivery configuration with invalid configuration
+        invalid_config = {
             "tenant_id": "invalid-integration-tenant",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "invalid-arn-format",
             "log_group_name": "",  # Empty required field
             "target_region": "invalid-region!"
         }
-        tenant_service.create_tenant(invalid_tenant)
+        delivery_config_service.create_tenant_config(invalid_config)
         
         # Validate configuration
-        validation_result = tenant_service.validate_tenant_config("invalid-integration-tenant")
+        validation_result = delivery_config_service.validate_tenant_config(
+            "invalid-integration-tenant", "cloudwatch")
         
         assert validation_result["tenant_id"] == "invalid-integration-tenant"
+        assert validation_result["type"] == "cloudwatch"
         assert validation_result["valid"] is False
         assert len(validation_result["checks"]) > 0
         
@@ -117,30 +131,30 @@ class TestTenantServiceIntegration:
         region_check = check_results["target_region"]
         assert region_check["status"] == "invalid"
     
-    def test_concurrent_operations(self, tenant_service, sample_integration_tenant):
+    def test_concurrent_operations(self, delivery_config_service, sample_integration_cloudwatch_config):
         """Test concurrent operations with real DynamoDB"""
         import threading
         import time
         
-        base_tenant = sample_integration_tenant.copy()
+        base_config = sample_integration_cloudwatch_config.copy()
         results = {}
         errors = {}
         
-        def create_tenant_worker(tenant_suffix: str):
+        def create_config_worker(config_suffix: str):
             try:
-                tenant_data = base_tenant.copy()
-                tenant_data["tenant_id"] = f"concurrent-tenant-{tenant_suffix}"
-                tenant_data["log_group_name"] = f"/aws/logs/concurrent-tenant-{tenant_suffix}"
+                config_data = base_config.copy()
+                config_data["tenant_id"] = f"concurrent-tenant-{config_suffix}"
+                config_data["log_group_name"] = f"/aws/logs/concurrent-tenant-{config_suffix}"
                 
-                result = tenant_service.create_tenant(tenant_data)
-                results[tenant_suffix] = result
+                result = delivery_config_service.create_tenant_config(config_data)
+                results[config_suffix] = result
             except Exception as e:
-                errors[tenant_suffix] = str(e)
+                errors[config_suffix] = str(e)
         
-        # Create multiple tenants concurrently
+        # Create multiple delivery configurations concurrently
         threads = []
         for i in range(5):
-            thread = threading.Thread(target=create_tenant_worker, args=(str(i),))
+            thread = threading.Thread(target=create_config_worker, args=(str(i),))
             threads.append(thread)
             thread.start()
         
@@ -152,49 +166,53 @@ class TestTenantServiceIntegration:
         assert len(errors) == 0, f"Concurrent operations failed: {errors}"
         assert len(results) == 5
         
-        # Verify all tenants were created successfully
+        # Verify all delivery configurations were created successfully
         for i in range(5):
             tenant_id = f"concurrent-tenant-{i}"
+            delivery_type = "cloudwatch"
             assert str(i) in results
             assert results[str(i)]["tenant_id"] == tenant_id
             
-            # Verify tenant exists in DynamoDB
-            retrieved = tenant_service.get_tenant(tenant_id)
+            # Verify delivery configuration exists in DynamoDB
+            retrieved = delivery_config_service.get_tenant_config(tenant_id, delivery_type)
             assert retrieved["tenant_id"] == tenant_id
+            assert retrieved["type"] == delivery_type
     
-    def test_error_handling_integration(self, tenant_service, sample_integration_tenant):
+    def test_error_handling_integration(self, delivery_config_service, sample_integration_cloudwatch_config):
         """Test error handling with real DynamoDB responses"""
         from src.services.dynamo import TenantNotFoundError, DynamoDBError
         
-        # Test tenant not found
+        # Test delivery configuration not found
         with pytest.raises(TenantNotFoundError) as exc_info:
-            tenant_service.get_tenant("nonexistent-integration-tenant")
+            delivery_config_service.get_tenant_config("nonexistent-integration-tenant", "cloudwatch")
         assert "not found" in str(exc_info.value).lower()
         
-        # Test duplicate tenant creation
-        tenant_service.create_tenant(sample_integration_tenant)
+        # Test duplicate delivery configuration creation
+        delivery_config_service.create_tenant_config(sample_integration_cloudwatch_config)
         
         with pytest.raises(DynamoDBError) as exc_info:
-            tenant_service.create_tenant(sample_integration_tenant)
+            delivery_config_service.create_tenant_config(sample_integration_cloudwatch_config)
         assert "already exists" in str(exc_info.value).lower()
         
-        # Test update non-existent tenant
+        # Test update non-existent delivery configuration
         with pytest.raises(TenantNotFoundError):
-            tenant_service.update_tenant("nonexistent-tenant", {"enabled": False})
+            delivery_config_service.update_tenant_config("nonexistent-tenant", "cloudwatch", {"enabled": False})
         
-        # Test delete non-existent tenant
+        # Test delete non-existent delivery configuration
         with pytest.raises(TenantNotFoundError):
-            tenant_service.delete_tenant("nonexistent-tenant")
+            delivery_config_service.delete_tenant_config("nonexistent-tenant", "cloudwatch")
     
-    def test_large_data_operations(self, tenant_service):
+    def test_large_data_operations(self, delivery_config_service):
         """Test operations with larger datasets"""
-        # Create many tenants
-        tenant_count = 25
-        created_tenants = []
+        # Create many delivery configurations (both cloudwatch and s3 for each tenant)
+        tenant_count = 12
+        created_configs = []
         
         for i in range(tenant_count):
-            tenant_data = {
+            # Create CloudWatch delivery configuration
+            cloudwatch_config = {
                 "tenant_id": f"bulk-tenant-{i:03d}",
+                "type": "cloudwatch",
                 "log_distribution_role_arn": f"arn:aws:iam::123456789012:role/BulkRole{i}",
                 "log_group_name": f"/aws/logs/bulk-tenant-{i:03d}",
                 "target_region": "us-east-1",
@@ -202,34 +220,50 @@ class TestTenantServiceIntegration:
                 "desired_logs": [f"app-{i}", f"service-{i}"]
             }
             
-            result = tenant_service.create_tenant(tenant_data)
-            created_tenants.append(result["tenant_id"])
+            # Create S3 delivery configuration
+            s3_config = {
+                "tenant_id": f"bulk-tenant-{i:03d}",
+                "type": "s3",
+                "bucket_name": f"bulk-tenant-{i:03d}-logs",
+                "bucket_prefix": "logs/",
+                "target_region": "us-east-1",
+                "enabled": i % 3 == 0,  # Different pattern for S3
+                "desired_logs": [f"app-{i}", f"service-{i}"]
+            }
+            
+            cw_result = delivery_config_service.create_tenant_config(cloudwatch_config)
+            s3_result = delivery_config_service.create_tenant_config(s3_config)
+            created_configs.append((cw_result["tenant_id"], cw_result["type"]))
+            created_configs.append((s3_result["tenant_id"], s3_result["type"]))
         
-        assert len(created_tenants) == tenant_count
+        assert len(created_configs) == tenant_count * 2  # 2 configs per tenant
         
         # Test paginated listing
-        all_tenants = []
+        all_configs = []
         last_key = None
         page_size = 10
         
         while True:
             if last_key:
-                result = tenant_service.list_tenants(limit=page_size, last_key=last_key)
+                # Parse last_key format "tenant_id#type"
+                tenant_id, config_type = last_key.split('#', 1)
+                parsed_last_key = {'tenant_id': tenant_id, 'type': config_type}
+                result = delivery_config_service.list_tenant_configs(limit=page_size, last_key=parsed_last_key)
             else:
-                result = tenant_service.list_tenants(limit=page_size)
+                result = delivery_config_service.list_tenant_configs(limit=page_size)
             
-            all_tenants.extend(result["tenants"])
+            all_configs.extend(result["configurations"])
             
             if "last_key" not in result:
                 break
             last_key = result["last_key"]
         
-        # Verify we got all created tenants (plus any from other tests)
-        bulk_tenant_ids = [t["tenant_id"] for t in all_tenants if t["tenant_id"].startswith("bulk-tenant-")]
-        assert len(bulk_tenant_ids) == tenant_count
+        # Verify we got all created configurations (plus any from other tests)
+        bulk_config_keys = [(c["tenant_id"], c["type"]) for c in all_configs if c["tenant_id"].startswith("bulk-tenant-")]
+        assert len(bulk_config_keys) == tenant_count * 2
         
         # Verify pagination worked correctly
-        assert len(all_tenants) >= tenant_count
+        assert len(all_configs) >= tenant_count * 2
 
 
 class TestDynamoDBLocalConnection:
