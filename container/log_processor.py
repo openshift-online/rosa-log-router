@@ -363,7 +363,13 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
 def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     """
     Extract tenant information from S3 object key path
-    Expected format: cluster_id/namespace/application/pod_name/timestamp-uuid.json.gz
+    Expected format (from Vector): cluster_id/namespace/application/pod_name/timestamp-uuid.json.gz
+    
+    Where:
+    - cluster_id: Management cluster ID (from CLUSTER_ID env var in Vector)  
+    - namespace: Kubernetes pod namespace (used as tenant_id for delivery configuration lookup)
+    - application: Application name from pod labels
+    - pod_name: Kubernetes pod name
     """
     path_parts = object_key.split('/')
     
@@ -371,18 +377,19 @@ def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
         raise InvalidS3NotificationError(f"Invalid object key format. Expected at least 5 path segments, got {len(path_parts)}: {object_key}")
     
     # Validate that required path segments are not empty (handles double slashes in paths)
-    required_segments = ['cluster_id', 'tenant_id', 'application', 'pod_name']
+    required_segments = ['cluster_id', 'namespace', 'application', 'pod_name']
     for i, segment_name in enumerate(required_segments):
         if not path_parts[i] or path_parts[i].strip() == '':
             raise InvalidS3NotificationError(f"Invalid object key format. {segment_name} (segment {i}) cannot be empty: {object_key}")
 
+    # Vector schema: cluster_id/namespace/application/pod_name/file.gz
+    # Use namespace as tenant_id for DynamoDB delivery configuration lookup
     tenant_info = {
-        'cluster_id': path_parts[0],
-        'tenant_id': path_parts[1], # Use customer_id as tenant_id for DynamoDB lookup
-        'customer_id': path_parts[1],
-        'namespace': path_parts[1],
-        'application': path_parts[2],
-        'pod_name': path_parts[3],
+        'cluster_id': path_parts[0],        # Management cluster ID from Vector CLUSTER_ID env var
+        'namespace': path_parts[1],         # Kubernetes pod namespace from Vector
+        'tenant_id': path_parts[1],         # Use namespace as tenant_id for DynamoDB lookup
+        'application': path_parts[2],       # Application name from pod labels
+        'pod_name': path_parts[3],          # Kubernetes pod name
         'environment': 'production'
     }
     
@@ -392,7 +399,13 @@ def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
         env_map = {'prod': 'production', 'stg': 'staging', 'dev': 'development'}
         tenant_info['environment'] = env_map.get(env_prefix, 'production')
     
-    logger.info(f"Extracted tenant info: {tenant_info}")
+    # Log extracted values to help debug any schema mismatches
+    logger.info(f"Extracted tenant info from S3 key '{object_key}':")
+    logger.info(f"  cluster_id: '{tenant_info['cluster_id']}' (management cluster from Vector CLUSTER_ID)")
+    logger.info(f"  namespace: '{tenant_info['namespace']}' (Kubernetes pod namespace from Vector)")
+    logger.info(f"  tenant_id: '{tenant_info['tenant_id']}' (using namespace as tenant_id for DynamoDB lookup)")
+    logger.info(f"  application: '{tenant_info['application']}', pod_name: '{tenant_info['pod_name']}'")
+    
     return tenant_info
 
 def validate_tenant_delivery_config(config: Dict[str, Any], tenant_id: str) -> None:
@@ -1012,11 +1025,12 @@ def deliver_logs_to_s3(
         bucket_prefix = normalize_bucket_prefix(bucket_prefix)
         
         # Create destination key maintaining directory structure
-        # Format: {prefix}{cluster_id}/{namespace}/{application}/{pod_name}/{filename}
+        # Format: {prefix}{cluster_id}/{tenant_id}/{application}/{pod_name}/{filename}
+        # This mirrors the source structure from Vector: cluster_id/namespace/application/pod_name/
         source_filename = source_key.split('/')[-1]  # Extract just the filename
         destination_key = (
             f"{bucket_prefix}{tenant_info['cluster_id']}/"
-            f"{tenant_info['namespace']}/"
+            f"{tenant_info['tenant_id']}/"
             f"{tenant_info['application']}/"
             f"{tenant_info['pod_name']}/{source_filename}"
         )

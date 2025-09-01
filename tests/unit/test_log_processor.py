@@ -87,14 +87,14 @@ class TestExtractTenantInfoFromKey:
         assert "cluster_id (segment 0) cannot be empty" in str(exc_info.value)
     
     def test_invalid_object_key_empty_tenant_id(self):
-        """Test parsing object key with empty tenant_id (double slash)."""
+        """Test parsing object key with empty namespace (double slash)."""
         # This is the exact scenario from the bug report
         object_key = "scuppett-oepz//hosted-cluster-config-operator/hosted-cluster-config-operator-c66f74b5f-dhp62/20250831-104654.json.gz"
         
         with pytest.raises(InvalidS3NotificationError) as exc_info:
             extract_tenant_info_from_key(object_key)
         
-        assert "tenant_id (segment 1) cannot be empty" in str(exc_info.value)
+        assert "namespace (segment 1) cannot be empty" in str(exc_info.value)
     
     def test_invalid_object_key_empty_application(self):
         """Test parsing object key with empty application."""
@@ -121,7 +121,7 @@ class TestExtractTenantInfoFromKey:
         with pytest.raises(InvalidS3NotificationError) as exc_info:
             extract_tenant_info_from_key(object_key)
         
-        assert "tenant_id (segment 1) cannot be empty" in str(exc_info.value)
+        assert "namespace (segment 1) cannot be empty" in str(exc_info.value)
 
 
 class TestTenantConfiguration:
