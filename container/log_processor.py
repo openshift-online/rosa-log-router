@@ -118,13 +118,19 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     batch_item_failures = []
     successful_records = 0
     failed_records = 0
+    total_successful_deliveries = 0
+    total_failed_deliveries = 0
     
     logger.info(f"Processing {len(event.get('Records', []))} SQS messages")
     
     for record in event.get('Records', []):
         try:
-            process_sqs_record(record)
+            delivery_stats = process_sqs_record(record)
             successful_records += 1
+            # Handle case where delivery_stats might be None (shouldn't happen but defensive coding)
+            if delivery_stats:
+                total_successful_deliveries += delivery_stats.get('successful_deliveries', 0)
+                total_failed_deliveries += delivery_stats.get('failed_deliveries', 0)
         except NonRecoverableError as e:
             # Non-recoverable errors should not be retried
             logger.warning(f"Non-recoverable error processing record {record.get('messageId', 'unknown')}: {str(e)}. Message will be removed from queue.")
@@ -141,7 +147,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                     'itemIdentifier': record['messageId']
                 })
             
-    logger.info(f"Processing complete. Success: {successful_records}, Failed: {failed_records}")
+    logger.info(f"Processing complete. Records: Success: {successful_records}, Failed: {failed_records}. Deliveries: Success: {total_successful_deliveries}, Failed: {total_failed_deliveries}")
     
     # Return partial batch failure response
     # This ensures failed messages remain in the queue for retry
@@ -188,8 +194,12 @@ def sqs_polling_mode():
                         'receiptHandle': message['ReceiptHandle']
                     }
                     
-                    process_sqs_record(lambda_record)
+                    delivery_stats = process_sqs_record(lambda_record)
                     should_delete_message = True  # Successfully processed
+                    if delivery_stats:
+                        logger.info(f"Message processed. Deliveries: Success: {delivery_stats.get('successful_deliveries', 0)}, Failed: {delivery_stats.get('failed_deliveries', 0)}")
+                    else:
+                        logger.info("Message processed successfully")
                     
                 except NonRecoverableError as e:
                     logger.warning(f"Non-recoverable error processing message {message.get('MessageId', 'unknown')}: {str(e)}. Message will be deleted to prevent infinite retries.")
@@ -239,17 +249,22 @@ def manual_input_mode():
             'receiptHandle': 'manual'
         }
         
-        process_sqs_record(lambda_record)
-        logger.info("Successfully processed manual input")
+        delivery_stats = process_sqs_record(lambda_record)
+        if delivery_stats:
+            logger.info(f"Successfully processed manual input. Deliveries: Success: {delivery_stats.get('successful_deliveries', 0)}, Failed: {delivery_stats.get('failed_deliveries', 0)}")
+        else:
+            logger.info("Successfully processed manual input")
         
     except Exception as e:
         logger.error(f"Error processing manual input: {str(e)}")
         sys.exit(1)
 
-def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
+def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
     """
     Process a single SQS record containing S3 event notification
+    Returns delivery success/failure counts for accurate metrics
     """
+    delivery_stats = {'successful_deliveries': 0, 'failed_deliveries': 0}
     try:
         # Parse the SQS message body (SNS message)
         try:
@@ -296,13 +311,17 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
                         # Deliver logs based on delivery type
                         if delivery_type == 'cloudwatch':
                             deliver_logs_to_cloudwatch(log_events, delivery_config, tenant_info, s3_timestamp)
+                            delivery_stats['successful_deliveries'] += 1
                         elif delivery_type == 's3':
                             deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
+                            delivery_stats['successful_deliveries'] += 1
                         else:
                             logger.warning(f"Unknown delivery type '{delivery_type}' for tenant '{tenant_info['tenant_id']}' - skipping")
+                            delivery_stats['failed_deliveries'] += 1
                             
                     except Exception as delivery_error:
                         logger.error(f"Failed to deliver logs via {delivery_type} for tenant '{tenant_info['tenant_id']}': {str(delivery_error)}")
+                        delivery_stats['failed_deliveries'] += 1
                         # Continue with other delivery types even if one fails
                 
             except TenantNotFoundError as e:
@@ -324,6 +343,8 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> None:
     except Exception as e:
         logger.error(f"Recoverable error processing SQS record: {str(e)}. Message will be retried.")
         raise  # Re-raise recoverable errors for retry
+    
+    return delivery_stats
 
 def extract_tenant_info_from_key(object_key: str) -> Dict[str, str]:
     """
@@ -906,7 +927,7 @@ def deliver_logs_to_s3(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
             RoleSessionName=f"S3LogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
         )
-        
+
         # Create S3 client with central role credentials
         central_credentials = central_role_response['Credentials']
         s3_client = boto3.client(
@@ -926,11 +947,12 @@ def deliver_logs_to_s3(
             bucket_prefix += '/'
         
         # Create destination key maintaining directory structure
-        # Format: {prefix}{tenant_id}/{cluster_id}/{application}/{pod_name}/{filename}
+        # Format: {prefix}{cluster_id}/{namespace}/{application}/{pod_name}/{filename}
         source_filename = source_key.split('/')[-1]  # Extract just the filename
         destination_key = (
-            f"{bucket_prefix}{tenant_info['tenant_id']}/"
-            f"{tenant_info['cluster_id']}/{tenant_info['application']}/"
+            f"{bucket_prefix}{tenant_info['cluster_id']}/"
+            f"{tenant_info['namespace']}/"
+            f"{tenant_info['application']}/"
             f"{tenant_info['pod_name']}/{source_filename}"
         )
         
@@ -968,10 +990,10 @@ def deliver_logs_to_s3(
             
             logger.info(f"Successfully copied log file to S3 for tenant {tenant_info['tenant_id']}")
             logger.info(f"Delivered to: s3://{destination_bucket}/{destination_key}")
-            
+
         except ClientError as copy_error:
             error_code = copy_error.response['Error']['Code']
-            
+
             if error_code == 'NoSuchBucket':
                 raise NonRecoverableError(f"Destination S3 bucket '{destination_bucket}' does not exist")
             elif error_code == 'AccessDenied':

@@ -661,7 +661,7 @@ class TestLambdaHandler:
         }
         
         with patch('log_processor.process_sqs_record') as mock_process:
-            mock_process.return_value = None
+            mock_process.return_value = {'successful_deliveries': 1, 'failed_deliveries': 0}
             
             result = log_processor.lambda_handler(event, None)
             
@@ -679,7 +679,7 @@ class TestLambdaHandler:
         
         with patch('log_processor.process_sqs_record') as mock_process:
             # First message succeeds, second fails
-            mock_process.side_effect = [None, Exception("Recoverable error")]
+            mock_process.side_effect = [{'successful_deliveries': 1, 'failed_deliveries': 0}, Exception("Recoverable error")]
             
             result = log_processor.lambda_handler(event, None)
             
