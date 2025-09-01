@@ -9,7 +9,7 @@ set -e  # Exit on any error
 DEPLOYMENT_TYPE=""
 ENVIRONMENT="development"
 PROJECT_NAME="multi-tenant-logging"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-}"
 STACK_NAME=""
 TEMPLATE_BUCKET=""
 PROFILE="${AWS_PROFILE:-}"
