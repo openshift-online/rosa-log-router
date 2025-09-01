@@ -7,12 +7,14 @@ metadata:
     app: log-processor
     testing.environment: github-actions
 data:
-  EXECUTION_MODE: "sqs"
+  EXECUTION_MODE: "scan"
   TENANT_CONFIG_TABLE: "integration-test-tenant-configs"
   CENTRAL_LOG_DISTRIBUTION_ROLE_ARN: "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
   AWS_REGION: "us-east-1"
   MAX_BATCH_SIZE: "100"
   RETRY_ATTEMPTS: "3"
+  SOURCE_BUCKET: "test-logs"
+  SCAN_INTERVAL: "10"
 
 ---
 apiVersion: apps/v1
@@ -280,6 +282,16 @@ spec:
             configMapKeyRef:
               name: processor-config
               key: RETRY_ATTEMPTS
+        - name: SOURCE_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: processor-config
+              key: SOURCE_BUCKET
+        - name: SCAN_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: processor-config
+              key: SCAN_INTERVAL
         volumeMounts:
         - name: app-volume
           mountPath: /app
