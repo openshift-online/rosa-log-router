@@ -1094,13 +1094,122 @@ def deliver_logs_to_s3(
 
 
 
+def scan_mode():
+    """
+    Scan mode for integration testing
+    Continuously scans S3 bucket for new files and processes them
+    """
+    logger.info("Starting log processor in scan mode")
+    
+    # Get configuration from environment variables
+    source_bucket = os.environ.get('SOURCE_BUCKET', 'test-logs')
+    scan_interval = int(os.environ.get('SCAN_INTERVAL', '10'))
+    aws_region = os.environ.get('AWS_REGION', 'us-east-1')
+    
+    # For integration testing, detect MinIO endpoint
+    s3_endpoint = os.environ.get('S3_ENDPOINT_URL')
+    if not s3_endpoint:
+        # Check if we're running in integration test environment
+        if os.environ.get('TENANT_CONFIG_TABLE') == 'integration-test-tenant-configs':
+            s3_endpoint = 'http://minio:9000'
+            logger.info("Integration test environment detected, using MinIO endpoint")
+    
+    # Create S3 client with appropriate configuration
+    s3_config = {
+        'region_name': aws_region
+    }
+    
+    if s3_endpoint:
+        s3_config['endpoint_url'] = s3_endpoint
+        # For MinIO integration testing, use hardcoded credentials
+        if 'minio' in s3_endpoint.lower():
+            s3_config['aws_access_key_id'] = 'minioadmin'
+            s3_config['aws_secret_access_key'] = 'minioadmin'
+    
+    s3_client = boto3.client('s3', **s3_config)
+    
+    logger.info(f"Scan mode configuration:")
+    logger.info(f"  Source bucket: {source_bucket}")
+    logger.info(f"  Scan interval: {scan_interval} seconds")
+    logger.info(f"  AWS region: {aws_region}")
+    logger.info(f"  S3 endpoint: {s3_endpoint or 'default (AWS S3)'}")
+    
+    # Track processed objects to avoid reprocessing
+    processed_objects = set()
+    
+    while True:
+        try:
+            logger.debug(f"Scanning bucket {source_bucket} for new files...")
+            
+            # List objects in source bucket
+            response = s3_client.list_objects_v2(Bucket=source_bucket)
+            objects = response.get('Contents', [])
+            
+            new_objects_found = 0
+            for obj in objects:
+                object_key = obj['Key']
+                
+                # Only process .json.gz files that haven't been processed yet
+                if (object_key not in processed_objects and 
+                    object_key.endswith('.json.gz')):
+                    
+                    logger.info(f"Processing new object: {object_key}")
+                    new_objects_found += 1
+                    
+                    try:
+                        # Create simulated SQS record for existing process_sqs_record function
+                        s3_event = {
+                            "Records": [{
+                                "s3": {
+                                    "bucket": {"name": source_bucket},
+                                    "object": {"key": object_key}
+                                }
+                            }]
+                        }
+                        
+                        # Create simulated SNS message
+                        sns_message = {"Message": json.dumps(s3_event)}
+                        
+                        # Create simulated SQS record
+                        sqs_record = {
+                            "body": json.dumps(sns_message),
+                            "messageId": f"scan-{object_key.replace('/', '-')}"
+                        }
+                        
+                        # Use existing process_sqs_record function
+                        delivery_stats = process_sqs_record(sqs_record)
+                        processed_objects.add(object_key)
+                        
+                        if delivery_stats:
+                            logger.info(f"Successfully processed {object_key}. Deliveries: Success: {delivery_stats.get('successful_deliveries', 0)}, Failed: {delivery_stats.get('failed_deliveries', 0)}")
+                        else:
+                            logger.info(f"Successfully processed {object_key}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to process {object_key}: {str(e)}")
+                        # Don't add to processed_objects so it will be retried
+            
+            if new_objects_found > 0:
+                logger.info(f"Processed {new_objects_found} new objects in this scan")
+            else:
+                logger.debug("No new objects found")
+            
+            logger.debug(f"Waiting {scan_interval} seconds before next scan...")
+            time.sleep(scan_interval)
+            
+        except Exception as e:
+            logger.error(f"Error in scan mode main loop: {str(e)}")
+            logger.info(f"Retrying in {scan_interval} seconds...")
+            time.sleep(scan_interval)
+
+
 def main():
     """
     Main entry point for standalone execution
     """
     parser = argparse.ArgumentParser(description='Multi-tenant log processor')
-    parser.add_argument('--mode', choices=['sqs', 'manual'], default='sqs',
-                        help='Execution mode: sqs (poll queue) or manual (stdin input)')
+    parser.add_argument('--mode', choices=['sqs', 'manual', 'scan'], default='sqs',
+                        help='Execution mode: sqs (poll queue), manual (stdin input), or scan (periodic bucket scan)')
     
     args = parser.parse_args()
     
@@ -1108,6 +1217,8 @@ def main():
         sqs_polling_mode()
     elif args.mode == 'manual':
         manual_input_mode()
+    elif args.mode == 'scan':
+        scan_mode()
 
 if __name__ == '__main__':
     main()

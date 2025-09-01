@@ -170,7 +170,8 @@ class TestEndToEndS3ProcessorIntegration:
         assert len(destination_objects) >= 1, "No objects found in destination bucket"
         
         copied_object = destination_objects[0]
-        expected_key_pattern = f"e2e-logs/test-cluster/{tenant_id}/fake-log-generator/fake-log-generator-pod-123/"
+        # Verify the basic prefix pattern (allow dynamic pod names from real Vector logs)
+        expected_key_pattern = f"e2e-logs/test-cluster/{tenant_id}/fake-log-generator/"
         assert copied_object['Key'].startswith(expected_key_pattern), f"Object key {copied_object['Key']} doesn't match expected pattern {expected_key_pattern}"
         
         # Step 6: Verify copied file content and metadata
@@ -252,7 +253,9 @@ class TestEndToEndS3ProcessorIntegration:
         
         assert len(destination_objects) >= 1
         copied_object = destination_objects[0]
-        assert f"multi-logs/test-cluster/{tenant_id}/fake-log-generator/multi-pod-456/" in copied_object['Key']
+        # Verify the basic prefix pattern (allow dynamic pod names from real Vector logs)
+        expected_pattern = f"multi-logs/test-cluster/{tenant_id}/fake-log-generator/"
+        assert expected_pattern in copied_object['Key'], f"Expected pattern {expected_pattern} not found in {copied_object['Key']}"
         
         print(f"✅ Multi-delivery configuration test completed")
         print(f"   S3 delivery successful: s3://multi-delivery-bucket/{copied_object['Key']}")
