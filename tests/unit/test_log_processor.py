@@ -44,7 +44,6 @@ class TestExtractTenantInfoFromKey:
         expected = {
             'cluster_id': 'prod-cluster',
             'tenant_id': 'acme-corp',
-            'customer_id': 'acme-corp',
             'namespace': 'acme-corp',
             'application': 'payment-service',
             'pod_name': 'payment-pod-123',
