@@ -65,6 +65,28 @@ class TestEndToEndS3ProcessorIntegration:
                 )
                 response.raise_for_status()
                 return response.json()
+            
+            def delete_tenant_config(self, tenant_id: str, config_type: str):
+                response = requests.delete(
+                    f"{self.base_url}/tenant/{tenant_id}/config/{config_type}",
+                    headers=self.headers
+                )
+                if response.status_code == 404:
+                    return None  # Configuration doesn't exist, which is fine
+                response.raise_for_status()
+                return response.json()
+            
+            def cleanup_tenant_configs(self, tenant_id: str):
+                """Clean up all configurations for a tenant"""
+                try:
+                    configs = self.list_tenant_configs(tenant_id)
+                    for config in configs:
+                        self.delete_tenant_config(tenant_id, config['type'])
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        pass  # No configs exist, which is fine
+                    else:
+                        raise
         
         return APIClient()
     
@@ -87,8 +109,11 @@ class TestEndToEndS3ProcessorIntegration:
     def test_basic_s3_delivery_end_to_end(self, minio_client, api_client):
         """Test complete S3 delivery pipeline with real infrastructure"""
         
-        # Step 1: Create S3 delivery configuration via API
+        # Step 0: Clean up any existing configurations
         tenant_id = "e2e-test-tenant"
+        api_client.cleanup_tenant_configs(tenant_id)
+        
+        # Step 1: Create S3 delivery configuration via API
         s3_config = {
             "tenant_id": tenant_id,
             "type": "s3",
@@ -168,6 +193,7 @@ class TestEndToEndS3ProcessorIntegration:
         """Test tenant with both CloudWatch and S3 delivery configurations"""
         
         tenant_id = "multi-delivery-tenant"
+        api_client.cleanup_tenant_configs(tenant_id)
         
         # Create CloudWatch configuration
         cloudwatch_config = {
@@ -235,6 +261,7 @@ class TestEndToEndS3ProcessorIntegration:
         """Test S3 delivery with desired_logs filtering"""
         
         tenant_id = "filtered-tenant"
+        api_client.cleanup_tenant_configs(tenant_id)
         
         # Create S3 configuration with specific desired_logs filter
         s3_config = {
@@ -315,6 +342,7 @@ class TestEndToEndS3ProcessorIntegration:
         """Test S3 delivery with disabled tenant configuration"""
         
         tenant_id = "disabled-tenant"
+        api_client.cleanup_tenant_configs(tenant_id)
         
         # Create disabled S3 configuration
         s3_config = {
@@ -372,6 +400,7 @@ class TestEndToEndS3ProcessorIntegration:
         """Test S3 delivery configuration with different target region"""
         
         tenant_id = "cross-region-tenant"
+        api_client.cleanup_tenant_configs(tenant_id)
         
         # Create S3 configuration targeting different region
         s3_config = {
