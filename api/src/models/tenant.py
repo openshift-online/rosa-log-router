@@ -7,6 +7,44 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+# Shared validation utilities
+def validate_iam_role_arn(arn: Optional[str]) -> Optional[str]:
+    """Shared validator for IAM role ARN format"""
+    if arn is not None and not arn.startswith('arn:aws:iam::'):
+        raise ValueError('Role ARN must be a valid IAM role ARN')
+    return arn
+
+
+def validate_aws_region(region: Optional[str]) -> Optional[str]:
+    """Shared validator for AWS region format"""
+    if region is not None and not region.replace('-', '').isalnum():
+        raise ValueError('Region must be a valid AWS region')
+    return region
+
+
+def validate_desired_logs_list(logs: Optional[List[str]]) -> Optional[List[str]]:
+    """Shared validator for desired_logs list"""
+    if logs is not None:
+        if not isinstance(logs, list):
+            raise ValueError('desired_logs must be a list')
+        for app in logs:
+            if not isinstance(app, str) or len(app.strip()) == 0:
+                raise ValueError('All items in desired_logs must be non-empty strings')
+    return logs
+
+
+def validate_delivery_type_fields(type_value: str, **fields) -> None:
+    """Shared validator for type-specific required fields"""
+    if type_value == "cloudwatch":
+        if not fields.get('log_distribution_role_arn'):
+            raise ValueError("log_distribution_role_arn is required for CloudWatch delivery")
+        if not fields.get('log_group_name'):
+            raise ValueError("log_group_name is required for CloudWatch delivery")
+    elif type_value == "s3":
+        if not fields.get('bucket_name'):
+            raise ValueError("bucket_name is required for S3 delivery")
+
+
 class TenantDeliveryConfigBase(BaseModel):
     """Base model for tenant delivery configuration"""
     tenant_id: str = Field(..., min_length=1, max_length=128, description="Unique tenant identifier")

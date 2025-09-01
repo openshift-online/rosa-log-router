@@ -22,7 +22,29 @@ class DynamoDBError(Exception):
 
 
 class TenantDeliveryConfigService:
-    """Service class for managing tenant delivery configurations in DynamoDB"""
+    """
+    Service class for managing tenant delivery configurations in DynamoDB.
+
+    The DynamoDB table uses a composite primary key:
+        - Partition key: tenant_id (string)
+        - Sort key: type (string)
+
+    Each item represents a delivery configuration for a tenant and a specific delivery type.
+
+    Supported delivery types include (but are not limited to):
+        - "cloudwatch"
+        - "s3"
+
+    Example item:
+        {
+            "tenant_id": "tenant-123",
+            "type": "cloudwatch",
+            "enabled": true,
+            "created_at": "2024-06-01T12:00:00Z",
+            "updated_at": "2024-06-01T12:00:00Z",
+            ...
+        }
+    """
     
     def __init__(self, table_name: str, region: str = "us-east-1"):
         """
