@@ -120,17 +120,19 @@ def dynamodb_local_resource(kubectl_port_forward: int, integration_aws_credentia
 
 @pytest.fixture
 def tenant_config_table(dynamodb_local_resource: boto3.resource) -> Generator[Any, None, None]:
-    """Create and manage the tenant configuration table for testing"""
+    """Create and manage the tenant delivery configuration table for testing"""
     table_name = 'integration-test-tenant-configs'
     
-    # Create table
+    # Create table with composite key (tenant_id + type)
     table = dynamodb_local_resource.create_table(
         TableName=table_name,
         KeySchema=[
-            {'AttributeName': 'tenant_id', 'KeyType': 'HASH'}
+            {'AttributeName': 'tenant_id', 'KeyType': 'HASH'},
+            {'AttributeName': 'type', 'KeyType': 'RANGE'}
         ],
         AttributeDefinitions=[
-            {'AttributeName': 'tenant_id', 'AttributeType': 'S'}
+            {'AttributeName': 'tenant_id', 'AttributeType': 'S'},
+            {'AttributeName': 'type', 'AttributeType': 'S'}
         ],
         BillingMode='PAY_PER_REQUEST'
     )
@@ -148,13 +150,13 @@ def tenant_config_table(dynamodb_local_resource: boto3.resource) -> Generator[An
 
 
 @pytest.fixture
-def tenant_service(tenant_config_table, kubectl_port_forward: int):
-    """Create a TenantService instance configured for DynamoDB Local"""
+def delivery_config_service(tenant_config_table, kubectl_port_forward: int):
+    """Create a TenantDeliveryConfigService instance configured for DynamoDB Local"""
     try:
-        from src.services.dynamo import TenantService
+        from src.services.dynamo import TenantDeliveryConfigService
         
         # Create service with custom DynamoDB resource
-        service = TenantService(
+        service = TenantDeliveryConfigService(
             table_name=tenant_config_table.table_name,
             region='us-east-1'
         )
@@ -175,10 +177,11 @@ def tenant_service(tenant_config_table, kubectl_port_forward: int):
 
 
 @pytest.fixture
-def sample_integration_tenant() -> Dict[str, Any]:
-    """Sample tenant data for integration testing"""
+def sample_integration_cloudwatch_config() -> Dict[str, Any]:
+    """Sample CloudWatch delivery configuration for integration testing"""
     return {
         "tenant_id": "integration-test-tenant",
+        "type": "cloudwatch",
         "log_distribution_role_arn": "arn:aws:iam::123456789012:role/IntegrationTestRole",
         "log_group_name": "/aws/logs/integration-test-tenant",
         "target_region": "us-east-1",
@@ -188,38 +191,67 @@ def sample_integration_tenant() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def multiple_integration_tenants() -> list[Dict[str, Any]]:
-    """Multiple tenant configurations for integration testing"""
+def sample_integration_s3_config() -> Dict[str, Any]:
+    """Sample S3 delivery configuration for integration testing"""
+    return {
+        "tenant_id": "integration-test-tenant",
+        "type": "s3",
+        "bucket_name": "integration-test-logs",
+        "bucket_prefix": "cluster-logs/",
+        "target_region": "us-east-1",
+        "enabled": True,
+        "desired_logs": ["test-app", "integration-service"]
+    }
+
+
+@pytest.fixture
+def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
+    """Multiple delivery configurations for integration testing"""
     return [
+        # Tenant 1 - CloudWatch configuration
         {
             "tenant_id": "integration-tenant-1",
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/Role1",
             "log_group_name": "/aws/logs/integration-tenant-1",
             "target_region": "us-east-1",
             "enabled": True
         },
+        # Tenant 1 - S3 configuration
+        {
+            "tenant_id": "integration-tenant-1",
+            "type": "s3",
+            "bucket_name": "integration-tenant-1-logs",
+            "bucket_prefix": "logs/",
+            "target_region": "us-east-1",
+            "enabled": True
+        },
+        # Tenant 2 - CloudWatch configuration
         {
             "tenant_id": "integration-tenant-2", 
+            "type": "cloudwatch",
             "log_distribution_role_arn": "arn:aws:iam::987654321098:role/Role2",
             "log_group_name": "/aws/logs/integration-tenant-2",
             "target_region": "us-west-2",
             "enabled": False,
             "desired_logs": ["payment-service"]
         },
+        # Tenant 2 - S3 configuration
         {
-            "tenant_id": "integration-tenant-3",
-            "log_distribution_role_arn": "arn:aws:iam::555666777888:role/Role3", 
-            "log_group_name": "/aws/logs/integration-tenant-3",
-            "target_region": "eu-west-1",
+            "tenant_id": "integration-tenant-2",
+            "type": "s3",
+            "bucket_name": "integration-tenant-2-logs",
+            "bucket_prefix": "logs/",
+            "target_region": "us-west-2",
             "enabled": True,
-            "desired_logs": ["user-service", "auth-service"]
+            "desired_logs": ["payment-service"]
         }
     ]
 
 
 @pytest.fixture
-def populated_integration_table(tenant_service, multiple_integration_tenants):
-    """A tenant service with pre-populated integration test data"""
-    for tenant in multiple_integration_tenants:
-        tenant_service.create_tenant(tenant)
-    return tenant_service
+def populated_integration_table(delivery_config_service, multiple_integration_delivery_configs):
+    """A delivery config service with pre-populated integration test data"""
+    for config in multiple_integration_delivery_configs:
+        delivery_config_service.create_tenant_config(config)
+    return delivery_config_service
