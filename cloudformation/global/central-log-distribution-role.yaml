@@ -45,10 +45,28 @@ Resources:
                 Condition:
                   StringEquals:
                     'sts:ExternalId': !Ref 'AWS::AccountId'
+              # Source bucket permissions (multi-tenant-logging-* buckets)
               - Effect: Allow
                 Action:
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: 
+                  - 'arn:aws:s3:::multi-tenant-logging-*'
+                  - 'arn:aws:s3:::multi-tenant-logging-*/*'
+              # Target bucket permissions (all buckets for cross-region delivery)
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: 
+                  - 'arn:aws:s3:::*'
+                  - 'arn:aws:s3:::*/*'
+              # KMS permissions for S3 object encryption/decryption
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
                 Resource: '*'
       Tags:
         - Key: Project
