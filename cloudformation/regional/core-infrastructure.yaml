@@ -189,8 +189,6 @@ Resources:
           AttributeType: S
         - AttributeName: type
           AttributeType: S
-        - AttributeName: ttl
-          AttributeType: N
       KeySchema:
         - AttributeName: tenant_id
           KeyType: HASH
