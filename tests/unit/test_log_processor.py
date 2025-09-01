@@ -6,6 +6,7 @@ import gzip
 import pytest
 from unittest.mock import patch, Mock, MagicMock, call, mock_open
 from datetime import datetime
+from typing import Dict, Any, List
 import boto3
 from moto import mock_aws
 from freezegun import freeze_time
@@ -124,7 +125,28 @@ class TestExtractTenantInfoFromKey:
 
 
 class TestTenantConfiguration:
-    """Test tenant configuration management."""
+    
+    def _create_test_delivery_config(self, tenant_id: str = 'test-tenant', delivery_type: str = 'cloudwatch', 
+                                   enabled: bool = True, desired_logs: list = None) -> Dict[str, Any]:
+        """Helper method to create test delivery configurations with standard structure."""
+        config = {
+            'tenant_id': tenant_id,
+            'type': delivery_type,
+            'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
+            'target_region': 'us-east-1',
+            'enabled': enabled
+        }
+        
+        if delivery_type == 'cloudwatch':
+            config['log_group_name'] = f'/aws/logs/{tenant_id}'
+        elif delivery_type == 's3':
+            config['bucket_name'] = f'{tenant_id}-logs'
+            config['bucket_prefix'] = 'logs/'
+        
+        if desired_logs is not None:
+            config['desired_logs'] = desired_logs
+            
+        return config
     
     @pytest.fixture
     def dynamodb_table(self, mock_aws_services):
@@ -217,7 +239,7 @@ class TestTenantConfiguration:
         assert "missing required field" in str(exc_info.value)
     
     def test_should_process_delivery_config_enabled(self, environment_variables, dynamodb_table):
-        """Test should_process_delivery_config with enabled tenant."""
+        """Test should_process_delivery_config with enabled delivery configuration."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             configs = get_tenant_delivery_configs('acme-corp')
         config = configs[0]
@@ -225,16 +247,20 @@ class TestTenantConfiguration:
     
     def test_should_process_delivery_config_disabled(self, environment_variables, dynamodb_table):
         """Test should_process_delivery_config with disabled delivery config."""
-        # Create a disabled config directly for testing the function
-        disabled_config = {
+        # Insert a disabled config into the table using the fixture for consistency
+        table = dynamodb_table
+        table.put_item(Item={
             'tenant_id': 'disabled-tenant',
             'type': 'cloudwatch',
             'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
             'log_group_name': '/aws/logs/disabled',
             'target_region': 'us-east-1',
             'enabled': False
-        }
-        assert should_process_delivery_config(disabled_config, 'disabled-tenant', 'cloudwatch') is False
+        })
+        with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
+            configs = get_tenant_delivery_configs('disabled-tenant')
+        config = configs[0]
+        assert should_process_delivery_config(config, 'disabled-tenant', 'cloudwatch') is False
     
     def test_should_process_application_with_desired_logs(self, environment_variables, dynamodb_table):
         """Test application filtering with desired_logs configuration."""
@@ -257,16 +283,13 @@ class TestTenantConfiguration:
     
     def test_should_process_application_no_filtering(self, environment_variables, dynamodb_table):
         """Test application processing when no desired_logs is specified."""
-        # Create a config without desired_logs for testing
-        config_without_filtering = {
-            'tenant_id': 'test-tenant',
-            'type': 'cloudwatch',
-            'log_distribution_role_arn': 'arn:aws:iam::987654321098:role/LogRole',
-            'log_group_name': '/aws/logs/test-tenant',
-            'target_region': 'us-east-1',
-            'enabled': True
-            # No desired_logs field - should allow all applications
-        }
+        # Create a config without desired_logs for testing - should allow all applications
+        config_without_filtering = self._create_test_delivery_config(
+            tenant_id='test-tenant',
+            delivery_type='cloudwatch',
+            enabled=True,
+            desired_logs=None  # No filtering - should allow all applications
+        )
         
         assert should_process_application(config_without_filtering, 'any-service') is True
     

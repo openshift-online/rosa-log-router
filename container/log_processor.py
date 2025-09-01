@@ -290,23 +290,34 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                 # Get all enabled delivery configurations for this tenant
                 delivery_configs = get_tenant_delivery_configs(tenant_info['tenant_id'])
                 
-                # Download and process the log file once for all delivery types
-                log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
-                
-                # Process each delivery configuration independently
+                # Check if there are any applicable delivery configurations before downloading S3 file
+                applicable_configs = []
                 for delivery_config in delivery_configs:
                     delivery_type = delivery_config['type']
                     
-                    try:
-                        # Check if this delivery configuration should be processed based on enabled status
-                        if not should_process_delivery_config(delivery_config, tenant_info['tenant_id'], delivery_type):
-                            logger.info(f"Skipping {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' because it is disabled")
-                            continue
-                        
+                    # Check if this delivery configuration should be processed
+                    if should_process_delivery_config(delivery_config, tenant_info['tenant_id'], delivery_type):
                         # Check if this application should be processed based on desired_logs filtering
-                        if not should_process_application(delivery_config, tenant_info['application']):
+                        if should_process_application(delivery_config, tenant_info['application']):
+                            applicable_configs.append(delivery_config)
+                        else:
                             logger.info(f"Skipping {delivery_type} delivery for application '{tenant_info['application']}' due to desired_logs filtering")
-                            continue
+                    else:
+                        logger.info(f"Skipping {delivery_type} delivery for tenant '{tenant_info['tenant_id']}' because it is disabled")
+                
+                # Skip S3 download if no delivery configurations will be processed
+                if not applicable_configs:
+                    logger.info(f"No applicable delivery configurations found for tenant '{tenant_info['tenant_id']}' application '{tenant_info['application']}' - skipping S3 download")
+                    continue
+                
+                # Download and process the log file once for all applicable delivery types
+                log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
+                
+                # Process each applicable delivery configuration independently
+                for delivery_config in applicable_configs:
+                    delivery_type = delivery_config['type']
+                    
+                    try:
                         
                         # Deliver logs based on delivery type
                         if delivery_type == 'cloudwatch':
@@ -414,7 +425,10 @@ def validate_tenant_delivery_config(config: Dict[str, Any], tenant_id: str) -> N
 
 def get_tenant_delivery_configs(tenant_id: str) -> List[Dict[str, Any]]:
     """
-    Retrieve all enabled tenant delivery configurations from DynamoDB
+    Retrieve all tenant delivery configurations from DynamoDB and filter for enabled ones.
+    
+    This function queries all delivery configurations for a tenant and then filters
+    them to return only the enabled ones internally.
     """
     try:
         dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
@@ -917,7 +931,56 @@ def deliver_logs_to_s3(
     tenant_info: Dict[str, str]
 ) -> None:
     """
-    Deliver log file to customer's S3 bucket using direct S3-to-S3 copy
+    Delivers a log file from the central S3 bucket to a customer's S3 bucket using a direct S3-to-S3 copy.
+
+    This function assumes a central log distribution role, creates an S3 client with the assumed credentials,
+    and copies the specified object to the target bucket, supporting cross-region operations if required.
+
+    Parameters:
+        source_bucket (str): The name of the S3 bucket containing the source log file.
+        source_key (str): The S3 object key (path) of the source log file.
+        delivery_config (Dict[str, Any]): Configuration for delivery, must include:
+            - 'bucket_name' (str): Target S3 bucket name.
+            - 'target_region' (str, optional): AWS region of the target bucket. Defaults to AWS_REGION if not provided.
+            - 'target_key' (str): S3 object key (path) for the delivered log file.
+        tenant_info (Dict[str, str]): Information about the tenant, must include:
+            - 'tenant_id' (str): Unique identifier for the tenant.
+
+    Returns:
+        None
+
+    Raises:
+        botocore.exceptions.ClientError: If there is an error with AWS STS or S3 operations.
+        KeyError: If required keys are missing from delivery_config or tenant_info.
+        NonRecoverableError: For known non-recoverable delivery errors (custom exception).
+        Exception: For any other unexpected errors.
+
+    Example:
+        try:
+            deliver_logs_to_s3(
+                source_bucket="central-logs",
+                source_key="logs/2024/06/01/logfile.gz",
+                delivery_config={
+                    "bucket_name": "customer-logs",
+                    "target_region": "us-west-2",
+                    "target_key": "delivered/2024/06/01/logfile.gz"
+                },
+                tenant_info={"tenant_id": "tenant-123"}
+            )
+        except ClientError as e:
+            # Handle AWS errors
+            print(f"AWS error: {e}")
+        except NonRecoverableError as e:
+            # Handle non-recoverable delivery errors
+            print(f"Delivery failed: {e}")
+        except Exception as e:
+            # Handle unexpected errors
+            print(f"Unexpected error: {e}")
+
+    Notes:
+        - This function supports cross-region S3 copy by specifying 'target_region' in delivery_config.
+        - The function assumes the central log distribution role for secure access.
+        - All errors are logged; non-recoverable errors are re-raised for upstream handling.
     """
     try:
         sts_client = boto3.client('sts', region_name=AWS_REGION)

@@ -21,7 +21,13 @@ class TestS3ProcessorIntegration:
     """Integration tests for S3 processor functionality with MinIO"""
     
     def test_s3_delivery_end_to_end(self, delivery_config_service, kubectl_port_forward: int, integration_aws_credentials: Dict[str, str]):
-        """Test complete S3 delivery pipeline with MinIO source and destination"""
+        """
+        Test complete S3 delivery pipeline with MinIO source and destination.
+
+        The `integration_aws_credentials` parameter is included as a fixture to ensure
+        that AWS credentials are properly set up for the test environment, even though
+        it is not directly referenced in the test body.
+        """
         # Create S3 delivery configuration in DynamoDB Local
         s3_config = {
             "tenant_id": "s3-integration-tenant",
