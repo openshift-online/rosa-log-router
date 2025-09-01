@@ -1,0 +1,372 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: default
+  labels:
+    app: tenant-config-api
+    testing.environment: github-actions
+data:
+  DYNAMODB_ENDPOINT: "http://dynamodb-local:8000"
+  DYNAMODB_REGION: "us-east-1"
+  TENANT_CONFIG_TABLE: "integration-test-tenant-configs"
+  API_KEY: "integration-test-key"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-config-api
+  namespace: default
+  labels:
+    app: tenant-config-api
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tenant-config-api
+  template:
+    metadata:
+      labels:
+        app: tenant-config-api
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-api
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          # Copy the API server script
+          cat > /app/api_server.py << 'EOF'
+          # Simple API server for integration testing
+          import json
+          import os
+          import logging
+          from typing import Dict, Any, List
+          from datetime import datetime
+          import boto3
+          from botocore.exceptions import ClientError
+          import uvicorn
+          from fastapi import FastAPI, HTTPException, Depends, status
+          from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+          from pydantic import BaseModel
+          
+          # Configure logging
+          logging.basicConfig(level=logging.INFO)
+          logger = logging.getLogger(__name__)
+          
+          # Environment variables
+          DYNAMODB_ENDPOINT = os.environ.get('DYNAMODB_ENDPOINT', 'http://dynamodb-local:8000')
+          DYNAMODB_REGION = os.environ.get('DYNAMODB_REGION', 'us-east-1')
+          TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'integration-test-tenant-configs')
+          API_KEY = os.environ.get('API_KEY', 'integration-test-key')
+          
+          app = FastAPI(title="Tenant Configuration API", version="1.0.0")
+          security = HTTPBearer()
+          
+          # Pydantic models
+          class DeliveryConfig(BaseModel):
+              tenant_id: str
+              type: str
+              enabled: bool = True
+              bucket_name: str = None
+              bucket_prefix: str = None
+              target_region: str = "us-east-1"
+              log_distribution_role_arn: str = None
+              log_group_name: str = None
+              desired_logs: List[str] = None
+          
+          class ConfigResponse(BaseModel):
+              tenant_id: str
+              type: str
+              enabled: bool
+              created_at: str
+              updated_at: str
+          
+          # Authentication
+          def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+              if credentials.credentials != API_KEY:
+                  raise HTTPException(
+                      status_code=status.HTTP_401_UNAUTHORIZED,
+                      detail="Invalid authentication token"
+                  )
+              return credentials.credentials
+          
+          # DynamoDB connection
+          def get_dynamodb_table():
+              dynamodb = boto3.resource(
+                  'dynamodb',
+                  endpoint_url=DYNAMODB_ENDPOINT,
+                  region_name=DYNAMODB_REGION,
+                  aws_access_key_id='test',
+                  aws_secret_access_key='test'
+              )
+              return dynamodb.Table(TENANT_CONFIG_TABLE)
+          
+          # Initialize table
+          def init_table():
+              try:
+                  dynamodb = boto3.resource(
+                      'dynamodb',
+                      endpoint_url=DYNAMODB_ENDPOINT,
+                      region_name=DYNAMODB_REGION,
+                      aws_access_key_id='test',
+                      aws_secret_access_key='test'
+                  )
+                  
+                  # Create table if it doesn't exist
+                  try:
+                      table = dynamodb.create_table(
+                          TableName=TENANT_CONFIG_TABLE,
+                          KeySchema=[
+                              {'AttributeName': 'tenant_id', 'KeyType': 'HASH'},
+                              {'AttributeName': 'type', 'KeyType': 'RANGE'}
+                          ],
+                          AttributeDefinitions=[
+                              {'AttributeName': 'tenant_id', 'AttributeType': 'S'},
+                              {'AttributeName': 'type', 'AttributeType': 'S'}
+                          ],
+                          BillingMode='PAY_PER_REQUEST'
+                      )
+                      table.wait_until_exists()
+                      logger.info(f"Created table: {TENANT_CONFIG_TABLE}")
+                  except ClientError as e:
+                      if e.response['Error']['Code'] == 'ResourceInUseException':
+                          logger.info(f"Table {TENANT_CONFIG_TABLE} already exists")
+                      else:
+                          raise
+                          
+              except Exception as e:
+                  logger.error(f"Failed to initialize table: {e}")
+                  raise
+          
+          @app.on_event("startup")
+          async def startup_event():
+              init_table()
+          
+          @app.get("/health")
+          async def health_check():
+              return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+          
+          @app.post("/tenant/{tenant_id}/config", response_model=ConfigResponse)
+          async def create_config(
+              tenant_id: str,
+              config: DeliveryConfig,
+              token: str = Depends(verify_token)
+          ):
+              try:
+                  table = get_dynamodb_table()
+                  
+                  # Ensure tenant_id matches path parameter
+                  config.tenant_id = tenant_id
+                  
+                  current_time = datetime.now().isoformat()
+                  item = config.dict()
+                  item['created_at'] = current_time
+                  item['updated_at'] = current_time
+                  
+                  # Check if config already exists
+                  try:
+                      existing = table.get_item(
+                          Key={'tenant_id': tenant_id, 'type': config.type}
+                      )
+                      if 'Item' in existing:
+                          raise HTTPException(
+                              status_code=status.HTTP_409_CONFLICT,
+                              detail=f"Configuration already exists for tenant {tenant_id} type {config.type}"
+                          )
+                  except ClientError:
+                      pass
+                  
+                  table.put_item(Item=item)
+                  
+                  return ConfigResponse(
+                      tenant_id=tenant_id,
+                      type=config.type,
+                      enabled=config.enabled,
+                      created_at=current_time,
+                      updated_at=current_time
+                  )
+                  
+              except HTTPException:
+                  raise
+              except Exception as e:
+                  logger.error(f"Failed to create config: {e}")
+                  raise HTTPException(
+                      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                      detail=str(e)
+                  )
+          
+          @app.get("/tenant/{tenant_id}/config/{config_type}")
+          async def get_config(
+              tenant_id: str,
+              config_type: str,
+              token: str = Depends(verify_token)
+          ):
+              try:
+                  table = get_dynamodb_table()
+                  
+                  response = table.get_item(
+                      Key={'tenant_id': tenant_id, 'type': config_type}
+                  )
+                  
+                  if 'Item' not in response:
+                      raise HTTPException(
+                          status_code=status.HTTP_404_NOT_FOUND,
+                          detail=f"Configuration not found for tenant {tenant_id} type {config_type}"
+                      )
+                  
+                  return response['Item']
+                  
+              except HTTPException:
+                  raise
+              except Exception as e:
+                  logger.error(f"Failed to get config: {e}")
+                  raise HTTPException(
+                      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                      detail=str(e)
+                  )
+          
+          @app.get("/tenant/{tenant_id}/configs")
+          async def list_configs(
+              tenant_id: str,
+              token: str = Depends(verify_token)
+          ):
+              try:
+                  table = get_dynamodb_table()
+                  
+                  response = table.query(
+                      KeyConditionExpression='tenant_id = :tenant_id',
+                      ExpressionAttributeValues={':tenant_id': tenant_id}
+                  )
+                  
+                  return response['Items']
+                  
+              except Exception as e:
+                  logger.error(f"Failed to list configs: {e}")
+                  raise HTTPException(
+                      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                      detail=str(e)
+                  )
+          
+          @app.delete("/tenant/{tenant_id}/config/{config_type}")
+          async def delete_config(
+              tenant_id: str,
+              config_type: str,
+              token: str = Depends(verify_token)
+          ):
+              try:
+                  table = get_dynamodb_table()
+                  
+                  # Check if config exists
+                  response = table.get_item(
+                      Key={'tenant_id': tenant_id, 'type': config_type}
+                  )
+                  
+                  if 'Item' not in response:
+                      raise HTTPException(
+                          status_code=status.HTTP_404_NOT_FOUND,
+                          detail=f"Configuration not found for tenant {tenant_id} type {config_type}"
+                      )
+                  
+                  table.delete_item(
+                      Key={'tenant_id': tenant_id, 'type': config_type}
+                  )
+                  
+                  return {"message": f"Configuration deleted for tenant {tenant_id} type {config_type}"}
+                  
+              except HTTPException:
+                  raise
+              except Exception as e:
+                  logger.error(f"Failed to delete config: {e}")
+                  raise HTTPException(
+                      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                      detail=str(e)
+                  )
+          
+          if __name__ == "__main__":
+              uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+          EOF
+          
+          chmod +x /app/api_server.py
+        volumeMounts:
+        - name: app-volume
+          mountPath: /app
+      containers:
+      - name: tenant-config-api
+        image: python:3.13-slim
+        command: 
+        - /bin/bash
+        - -c
+        - |
+          pip install fastapi uvicorn boto3 botocore pydantic
+          python3 /app/api_server.py
+        env:
+        - name: DYNAMODB_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: api-config
+              key: DYNAMODB_ENDPOINT
+        - name: DYNAMODB_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: api-config
+              key: DYNAMODB_REGION
+        - name: TENANT_CONFIG_TABLE
+          valueFrom:
+            configMapKeyRef:
+              name: api-config
+              key: TENANT_CONFIG_TABLE
+        - name: API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: api-config
+              key: API_KEY
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: app-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 45
+          periodSeconds: 15
+      volumes:
+      - name: app-volume
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-config-api
+  namespace: default
+  labels:
+    app: tenant-config-api
+spec:
+  selector:
+    app: tenant-config-api
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

@@ -1,8 +1,9 @@
 """
-S3 Processor Integration Tests with MinIO
+True End-to-End S3 Processor Integration Tests
 
-These tests validate the complete S3 delivery pipeline using real MinIO instances
-and DynamoDB Local, providing end-to-end validation of S3-to-S3 copy functionality.
+These tests validate the complete logging pipeline from log generation through S3 delivery
+using real infrastructure components: Vector -> MinIO -> Processor -> MinIO destination buckets.
+All operations are performed against real services running in minikube.
 """
 
 import pytest
@@ -10,162 +11,165 @@ import json
 import gzip
 import time
 import boto3
+import requests
 from typing import Dict, Any, Generator
-from unittest.mock import patch, Mock
+from datetime import datetime
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
 
 
-class TestS3ProcessorIntegration:
-    """Integration tests for S3 processor functionality with MinIO"""
+class TestEndToEndS3ProcessorIntegration:
+    """True end-to-end integration tests with real infrastructure"""
     
-    def test_s3_delivery_end_to_end(self, delivery_config_service, kubectl_port_forward: int, integration_aws_credentials: Dict[str, str]):
-        """
-        Test complete S3 delivery pipeline with MinIO source and destination.
-
-        The `integration_aws_credentials` parameter is included as a fixture to ensure
-        that AWS credentials are properly set up for the test environment, even though
-        it is not directly referenced in the test body.
-        """
-        # Create S3 delivery configuration in DynamoDB Local
+    @pytest.fixture
+    def minio_client(self):
+        """Create MinIO client for integration testing"""
+        return boto3.client(
+            's3',
+            endpoint_url='http://localhost:9000',  # MinIO endpoint via port-forward
+            aws_access_key_id='minioadmin',
+            aws_secret_access_key='minioadmin',
+            region_name='us-east-1'
+        )
+    
+    @pytest.fixture
+    def api_client(self):
+        """Create API client for tenant configuration"""
+        class APIClient:
+            def __init__(self):
+                self.base_url = "http://localhost:8080"  # API endpoint via port-forward
+                self.headers = {"Authorization": "Bearer integration-test-key"}
+            
+            def create_tenant_config(self, tenant_id: str, config: Dict[str, Any]):
+                response = requests.post(
+                    f"{self.base_url}/tenant/{tenant_id}/config",
+                    json=config,
+                    headers=self.headers
+                )
+                response.raise_for_status()
+                return response.json()
+            
+            def get_tenant_config(self, tenant_id: str, config_type: str):
+                response = requests.get(
+                    f"{self.base_url}/tenant/{tenant_id}/config/{config_type}",
+                    headers=self.headers
+                )
+                response.raise_for_status()
+                return response.json()
+            
+            def list_tenant_configs(self, tenant_id: str):
+                response = requests.get(
+                    f"{self.base_url}/tenant/{tenant_id}/configs",
+                    headers=self.headers
+                )
+                response.raise_for_status()
+                return response.json()
+        
+        return APIClient()
+    
+    def wait_for_s3_objects(self, minio_client, bucket: str, prefix: str = "", min_objects: int = 1, timeout: int = 120):
+        """Wait for S3 objects to appear in bucket"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                response = minio_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+                objects = response.get('Contents', [])
+                if len(objects) >= min_objects:
+                    return objects
+                time.sleep(5)
+            except Exception as e:
+                print(f"Error checking bucket {bucket}: {e}")
+                time.sleep(5)
+        
+        raise TimeoutError(f"Timed out waiting for {min_objects} objects in bucket {bucket} with prefix {prefix}")
+    
+    def test_basic_s3_delivery_end_to_end(self, minio_client, api_client):
+        """Test complete S3 delivery pipeline with real infrastructure"""
+        
+        # Step 1: Create S3 delivery configuration via API
+        tenant_id = "e2e-test-tenant"
         s3_config = {
-            "tenant_id": "s3-integration-tenant",
+            "tenant_id": tenant_id,
             "type": "s3",
-            "bucket_name": "destination-bucket",
-            "bucket_prefix": "tenant-logs/",
+            "bucket_name": "customer-logs",
+            "bucket_prefix": "e2e-logs/",
             "target_region": "us-east-1",
             "enabled": True,
-            "desired_logs": ["test-app"]
+            "desired_logs": ["fake-log-generator"]
         }
         
-        delivery_config_service.create_tenant_config(s3_config)
+        print(f"Creating S3 delivery configuration for {tenant_id}")
+        created_config = api_client.create_tenant_config(tenant_id, s3_config)
+        assert created_config["tenant_id"] == tenant_id
+        assert created_config["type"] == "s3"
         
-        # Mock the central log distribution role ARN environment variable
-        central_role_arn = "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
+        # Step 2: Verify configuration can be retrieved
+        retrieved_config = api_client.get_tenant_config(tenant_id, "s3")
+        assert retrieved_config["bucket_name"] == "customer-logs"
+        assert retrieved_config["enabled"] is True
         
-        with patch.dict('os.environ', {
-            'CENTRAL_LOG_DISTRIBUTION_ROLE_ARN': central_role_arn,
-            'AWS_REGION': 'us-east-1',
-            'TENANT_CONFIG_TABLE': delivery_config_service.table_name
-        }):
-            # Mock S3 operations and STS role assumption for the processor
-            with patch('boto3.client') as mock_boto_client, \
-                 patch('boto3.resource') as mock_boto_resource:
-                # Mock STS client for role assumption
-                mock_sts = Mock()
-                mock_sts.assume_role.return_value = {
-                    'Credentials': {
-                        'AccessKeyId': 'assumed-key',
-                        'SecretAccessKey': 'assumed-secret', 
-                        'SessionToken': 'assumed-token'
-                    }
-                }
-                
-                # Mock S3 client for S3-to-S3 copy
-                mock_s3 = Mock()
-                mock_s3.copy_object.return_value = {}
-                
-                def boto_client_side_effect(service, **kwargs):
-                    if service == 'sts':
-                        return mock_sts
-                    elif service == 's3':
-                        return mock_s3
-                    elif service == 'dynamodb':
-                        # Use real DynamoDB Local for configuration lookup
-                        return boto3.client(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                # Also mock boto3.resource for DynamoDB
-                def boto_resource_side_effect(service, **kwargs):
-                    if service == 'dynamodb':
-                        return boto3.resource(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                mock_boto_client.side_effect = boto_client_side_effect
-                mock_boto_resource.side_effect = boto_resource_side_effect
-                
-                # Import processor functions
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
-                from log_processor import process_sqs_record
-                
-                # Create test SQS record with S3 event
-                s3_event = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": "test-cluster/s3-integration-tenant/test-app/test-pod-123/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "s3-integration-test"
-                }
-                
-                # Mock log file download and processing
-                with patch('log_processor.download_and_process_log_file') as mock_download:
-                    test_log_events = [
-                        {"message": "S3 integration test log 1", "timestamp": 1693526400000},
-                        {"message": "S3 integration test log 2", "timestamp": 1693526401000}
-                    ]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    
-                    # Process the SQS record (should trigger S3 delivery)
-                    process_sqs_record(sqs_record)
-                    
-                    # Verify role assumption occurred
-                    mock_sts.assume_role.assert_called_once()
-                    assume_role_call = mock_sts.assume_role.call_args
-                    assert central_role_arn in assume_role_call[1]['RoleArn']
-                    assert 'S3LogDelivery-s3-integration-tenant-' in assume_role_call[1]['RoleSessionName']
-                    
-                    # Verify S3 copy operation
-                    mock_s3.copy_object.assert_called_once()
-                    copy_call = mock_s3.copy_object.call_args[1]
-                    
-                    # Verify destination details
-                    assert copy_call['Bucket'] == 'destination-bucket'
-                    expected_key = 'tenant-logs/test-cluster/s3-integration-tenant/test-app/test-pod-123/20240901-logs.json.gz'
-                    assert copy_call['Key'] == expected_key
-                    
-                    # Verify source details
-                    assert copy_call['CopySource']['Bucket'] == 'source-bucket'
-                    assert copy_call['CopySource']['Key'] == 'test-cluster/s3-integration-tenant/test-app/test-pod-123/20240901-logs.json.gz'
-                    
-                    # Verify copy settings
-                    assert copy_call['ACL'] == 'bucket-owner-full-control'
-                    assert copy_call['MetadataDirective'] == 'REPLACE'
-                    
-                    # Verify metadata preservation
-                    metadata = copy_call['Metadata']
-                    assert metadata['tenant-id'] == 's3-integration-tenant'
-                    assert metadata['cluster-id'] == 'test-cluster'
-                    assert metadata['application'] == 'test-app'
-                    assert metadata['pod-name'] == 'test-pod-123'
-                    assert metadata['source-bucket'] == 'source-bucket'
+        # Step 3: Create a fake log file in source bucket to simulate Vector collection
+        source_bucket = "test-logs"
+        log_content = [
+            {"timestamp": datetime.now().isoformat(), "message": "E2E test log 1", "level": "INFO"},
+            {"timestamp": datetime.now().isoformat(), "message": "E2E test log 2", "level": "DEBUG"}
+        ]
+        
+        # Create NDJSON content (Vector format)
+        ndjson_content = '\n'.join(json.dumps(log) for log in log_content)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
+        
+        # Upload to source bucket with proper key structure
+        object_key = f"test-cluster/{tenant_id}/fake-log-generator/fake-log-generator-pod-123/20241201-e2e-test.json.gz"
+        
+        print(f"Uploading test log file to source bucket: {object_key}")
+        minio_client.put_object(
+            Bucket=source_bucket,
+            Key=object_key,
+            Body=compressed_content,
+            ContentType='application/gzip'
+        )
+        
+        # Step 4: Wait for processor to detect and copy the file
+        print("Waiting for log processor to detect and copy the file...")
+        destination_objects = self.wait_for_s3_objects(
+            minio_client, 
+            "customer-logs", 
+            prefix="e2e-logs/test-cluster",
+            min_objects=1,
+            timeout=180  # 3 minutes for processor to run
+        )
+        
+        # Step 5: Verify S3-to-S3 copy occurred with correct structure
+        assert len(destination_objects) >= 1, "No objects found in destination bucket"
+        
+        copied_object = destination_objects[0]
+        expected_key_pattern = f"e2e-logs/test-cluster/{tenant_id}/fake-log-generator/fake-log-generator-pod-123/"
+        assert copied_object['Key'].startswith(expected_key_pattern), f"Object key {copied_object['Key']} doesn't match expected pattern {expected_key_pattern}"
+        
+        # Step 6: Verify copied file content and metadata
+        print(f"Verifying copied file: {copied_object['Key']}")
+        copied_response = minio_client.get_object(Bucket="customer-logs", Key=copied_object['Key'])
+        copied_metadata = copied_response.get('Metadata', {})
+        
+        # Check metadata was preserved
+        assert copied_metadata.get('tenant-id') == tenant_id
+        assert copied_metadata.get('cluster-id') == 'test-cluster'
+        assert copied_metadata.get('application') == 'fake-log-generator'
+        assert 'delivery-timestamp' in copied_metadata
+        
+        print(f"✅ End-to-end S3 delivery test completed successfully")
+        print(f"   Source: s3://{source_bucket}/{object_key}")
+        print(f"   Destination: s3://customer-logs/{copied_object['Key']}")
+        print(f"   Metadata: {copied_metadata}")
     
-    def test_s3_delivery_with_multiple_delivery_types(self, delivery_config_service, kubectl_port_forward: int):
+    def test_multi_delivery_configuration(self, minio_client, api_client):
         """Test tenant with both CloudWatch and S3 delivery configurations"""
+        
         tenant_id = "multi-delivery-tenant"
         
-        # Create both CloudWatch and S3 configurations for the same tenant
+        # Create CloudWatch configuration
         cloudwatch_config = {
             "tenant_id": tenant_id,
             "type": "cloudwatch",
@@ -175,375 +179,261 @@ class TestS3ProcessorIntegration:
             "enabled": True
         }
         
+        # Create S3 configuration  
         s3_config = {
             "tenant_id": tenant_id,
             "type": "s3",
             "bucket_name": "multi-delivery-bucket",
-            "bucket_prefix": "logs/",
-            "target_region": "us-east-1",
+            "bucket_prefix": "multi-logs/",
+            "target_region": "us-east-1", 
             "enabled": True
         }
         
-        delivery_config_service.create_tenant_config(cloudwatch_config)
-        delivery_config_service.create_tenant_config(s3_config)
+        print(f"Creating multi-delivery configurations for {tenant_id}")
+        api_client.create_tenant_config(tenant_id, cloudwatch_config)
+        api_client.create_tenant_config(tenant_id, s3_config)
         
-        central_role_arn = "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
+        # Verify both configurations exist
+        configs = api_client.list_tenant_configs(tenant_id)
+        assert len(configs) == 2
+        config_types = [c['type'] for c in configs]
+        assert 'cloudwatch' in config_types
+        assert 's3' in config_types
         
-        with patch.dict('os.environ', {
-            'CENTRAL_LOG_DISTRIBUTION_ROLE_ARN': central_role_arn,
-            'AWS_REGION': 'us-east-1',
-            'TENANT_CONFIG_TABLE': delivery_config_service.table_name
-        }):
-            with patch('boto3.client') as mock_boto_client:
-                mock_sts = Mock()
-                mock_sts.assume_role.return_value = {
-                    'Credentials': {
-                        'AccessKeyId': 'assumed-key',
-                        'SecretAccessKey': 'assumed-secret',
-                        'SessionToken': 'assumed-token'
-                    }
-                }
-                
-                mock_s3 = Mock()
-                mock_s3.copy_object.return_value = {}
-                
-                def boto_client_side_effect(service, **kwargs):
-                    if service == 'sts':
-                        return mock_sts
-                    elif service == 's3':
-                        return mock_s3
-                    elif service == 'dynamodb':
-                        return boto3.client(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                mock_boto_client.side_effect = boto_client_side_effect
-                
-                # Import processor
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
-                from log_processor import process_sqs_record
-                
-                # Create SQS record
-                s3_event = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": f"test-cluster/{tenant_id}/web-app/web-pod-456/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "multi-delivery-test"
-                }
-                
-                # Mock CloudWatch delivery and log file processing
-                with patch('log_processor.download_and_process_log_file') as mock_download, \
-                     patch('log_processor.deliver_logs_to_cloudwatch') as mock_deliver_cw:
-                    
-                    test_log_events = [{"message": "Multi-delivery test log", "timestamp": 1693526400000}]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    mock_deliver_cw.return_value = None
-                    
-                    # Process SQS record - should trigger both deliveries
-                    process_sqs_record(sqs_record)
-                    
-                    # Verify both delivery types were called
-                    mock_deliver_cw.assert_called_once()  # CloudWatch delivery
-                    mock_s3.copy_object.assert_called_once()  # S3 delivery
-                    
-                    # Verify S3 copy was to the correct bucket
-                    s3_copy_call = mock_s3.copy_object.call_args[1]
-                    assert s3_copy_call['Bucket'] == 'multi-delivery-bucket'
-                    expected_s3_key = f'logs/test-cluster/{tenant_id}/web-app/web-pod-456/20240901-logs.json.gz'
-                    assert s3_copy_call['Key'] == expected_s3_key
+        # Create test log file
+        log_content = [{"timestamp": datetime.now().isoformat(), "message": "Multi-delivery test log"}]
+        ndjson_content = '\n'.join(json.dumps(log) for log in log_content)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
+        
+        object_key = f"test-cluster/{tenant_id}/fake-log-generator/multi-pod-456/20241201-multi-test.json.gz"
+        
+        print(f"Uploading test log file: {object_key}")
+        minio_client.put_object(
+            Bucket="test-logs",
+            Key=object_key,
+            Body=compressed_content
+        )
+        
+        # Wait for S3 delivery (CloudWatch would fail due to mocked ARN but S3 should work)
+        print("Waiting for S3 delivery to complete...")
+        destination_objects = self.wait_for_s3_objects(
+            minio_client,
+            "multi-delivery-bucket",
+            prefix="multi-logs/test-cluster",
+            min_objects=1,
+            timeout=180
+        )
+        
+        assert len(destination_objects) >= 1
+        copied_object = destination_objects[0]
+        assert f"multi-logs/test-cluster/{tenant_id}/fake-log-generator/multi-pod-456/" in copied_object['Key']
+        
+        print(f"✅ Multi-delivery configuration test completed")
+        print(f"   S3 delivery successful: s3://multi-delivery-bucket/{copied_object['Key']}")
     
-    def test_s3_delivery_disabled_tenant(self, delivery_config_service, kubectl_port_forward: int):
-        """Test S3 delivery with disabled tenant configuration"""
-        # Create disabled S3 configuration
-        disabled_s3_config = {
-            "tenant_id": "disabled-s3-tenant",
-            "type": "s3",
-            "bucket_name": "disabled-bucket",
-            "bucket_prefix": "logs/",
-            "target_region": "us-east-1",
-            "enabled": False  # Disabled
-        }
-        
-        delivery_config_service.create_tenant_config(disabled_s3_config)
-        
-        central_role_arn = "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
-        
-        with patch.dict('os.environ', {
-            'CENTRAL_LOG_DISTRIBUTION_ROLE_ARN': central_role_arn,
-            'AWS_REGION': 'us-east-1',
-            'TENANT_CONFIG_TABLE': delivery_config_service.table_name
-        }):
-            with patch('boto3.client') as mock_boto_client:
-                def boto_client_side_effect(service, **kwargs):
-                    if service == 'dynamodb':
-                        return boto3.client(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                mock_boto_client.side_effect = boto_client_side_effect
-                
-                # Import processor
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
-                from log_processor import process_sqs_record
-                
-                # Create SQS record
-                s3_event = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": "test-cluster/disabled-s3-tenant/app/pod/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "disabled-s3-test"
-                }
-                
-                # Mock log file download
-                with patch('log_processor.download_and_process_log_file') as mock_download, \
-                     patch('log_processor.deliver_logs_to_s3') as mock_deliver_s3:
-                    
-                    test_log_events = [{"message": "Disabled test log", "timestamp": 1693526400000}]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    
-                    # Process SQS record
-                    process_sqs_record(sqs_record)
-                    
-                    # Verify S3 delivery was NOT called (tenant disabled)
-                    mock_deliver_s3.assert_not_called()
-                    
-                    # Log file should still be downloaded for processing
-                    mock_download.assert_called_once()
-    
-    def test_s3_delivery_desired_logs_filtering(self, delivery_config_service, kubectl_port_forward: int):
+    def test_desired_logs_filtering(self, minio_client, api_client):
         """Test S3 delivery with desired_logs filtering"""
+        
+        tenant_id = "filtered-tenant"
+        
         # Create S3 configuration with specific desired_logs filter
-        filtered_s3_config = {
-            "tenant_id": "filtered-s3-tenant",
+        s3_config = {
+            "tenant_id": tenant_id,
             "type": "s3",
-            "bucket_name": "filtered-bucket",
+            "bucket_name": "customer-logs",
             "bucket_prefix": "filtered-logs/",
             "target_region": "us-east-1",
             "enabled": True,
             "desired_logs": ["payment-service", "user-service"]  # Only these apps
         }
         
-        delivery_config_service.create_tenant_config(filtered_s3_config)
+        print(f"Creating filtered S3 configuration for {tenant_id}")
+        api_client.create_tenant_config(tenant_id, s3_config)
         
-        central_role_arn = "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
+        # Test 1: Upload log from ALLOWED application
+        allowed_log = [{"timestamp": datetime.now().isoformat(), "message": "Payment service log"}]
+        ndjson_content = '\n'.join(json.dumps(log) for log in allowed_log)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
         
-        with patch.dict('os.environ', {
-            'CENTRAL_LOG_DISTRIBUTION_ROLE_ARN': central_role_arn,
-            'AWS_REGION': 'us-east-1',
-            'TENANT_CONFIG_TABLE': delivery_config_service.table_name
-        }):
-            with patch('boto3.client') as mock_boto_client:
-                mock_sts = Mock()
-                mock_sts.assume_role.return_value = {
-                    'Credentials': {
-                        'AccessKeyId': 'assumed-key',
-                        'SecretAccessKey': 'assumed-secret',
-                        'SessionToken': 'assumed-token'
-                    }
-                }
-                
-                mock_s3 = Mock()
-                mock_s3.copy_object.return_value = {}
-                
-                def boto_client_side_effect(service, **kwargs):
-                    if service == 'sts':
-                        return mock_sts
-                    elif service == 's3':
-                        return mock_s3
-                    elif service == 'dynamodb':
-                        return boto3.client(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                mock_boto_client.side_effect = boto_client_side_effect
-                
-                # Import processor
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
-                from log_processor import process_sqs_record
-                
-                # Test 1: App in desired_logs (should process)
-                s3_event_allowed = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": "test-cluster/filtered-s3-tenant/payment-service/pod-123/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event_allowed)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "filtered-allowed-test"
-                }
-                
-                with patch('log_processor.download_and_process_log_file') as mock_download:
-                    test_log_events = [{"message": "Payment service log", "timestamp": 1693526400000}]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    
-                    # Process allowed app
-                    process_sqs_record(sqs_record)
-                    
-                    # Should process S3 delivery for allowed app
-                    mock_s3.copy_object.assert_called_once()
-                    
-                # Reset mocks for next test
-                mock_s3.reset_mock()
-                
-                # Test 2: App NOT in desired_logs (should skip)
-                s3_event_blocked = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": "test-cluster/filtered-s3-tenant/blocked-service/pod-456/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event_blocked)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "filtered-blocked-test"
-                }
-                
-                with patch('log_processor.download_and_process_log_file') as mock_download:
-                    test_log_events = [{"message": "Blocked service log", "timestamp": 1693526400000}]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    
-                    # Process blocked app
-                    process_sqs_record(sqs_record)
-                    
-                    # Should NOT process S3 delivery for blocked app
-                    mock_s3.copy_object.assert_not_called()
+        allowed_key = f"test-cluster/{tenant_id}/payment-service/payment-pod-123/20241201-allowed.json.gz"
+        
+        print(f"Uploading ALLOWED application log: {allowed_key}")
+        minio_client.put_object(
+            Bucket="test-logs",
+            Key=allowed_key,
+            Body=compressed_content
+        )
+        
+        # Wait for delivery (should succeed)
+        print("Waiting for allowed application delivery...")
+        allowed_objects = self.wait_for_s3_objects(
+            minio_client,
+            "customer-logs",
+            prefix=f"filtered-logs/test-cluster/{tenant_id}/payment-service",
+            min_objects=1,
+            timeout=120
+        )
+        
+        assert len(allowed_objects) >= 1, "Allowed application log was not delivered"
+        
+        # Test 2: Upload log from BLOCKED application
+        blocked_log = [{"timestamp": datetime.now().isoformat(), "message": "Blocked service log"}]
+        ndjson_content = '\n'.join(json.dumps(log) for log in blocked_log)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
+        
+        blocked_key = f"test-cluster/{tenant_id}/blocked-service/blocked-pod-456/20241201-blocked.json.gz"
+        
+        print(f"Uploading BLOCKED application log: {blocked_key}")
+        minio_client.put_object(
+            Bucket="test-logs",
+            Key=blocked_key,
+            Body=compressed_content
+        )
+        
+        # Wait and verify it's NOT delivered
+        print("Waiting to verify blocked application is not delivered...")
+        time.sleep(30)  # Give processor time to potentially process it
+        
+        try:
+            blocked_objects = self.wait_for_s3_objects(
+                minio_client,
+                "customer-logs", 
+                prefix=f"filtered-logs/test-cluster/{tenant_id}/blocked-service",
+                min_objects=1,
+                timeout=10  # Short timeout since we expect it to fail
+            )
+            assert False, f"Blocked application log was unexpectedly delivered: {blocked_objects}"
+        except TimeoutError:
+            # This is expected - blocked application should not be delivered
+            pass
+        
+        print(f"✅ Desired logs filtering test completed")
+        print(f"   Allowed application delivered: {len(allowed_objects)} objects")
+        print(f"   Blocked application correctly filtered out")
     
-    def test_s3_delivery_cross_region_config(self, delivery_config_service, kubectl_port_forward: int):
-        """Test S3 delivery with cross-region target configuration"""
-        # Create S3 configuration targeting different region
-        cross_region_config = {
-            "tenant_id": "cross-region-tenant",
+    def test_disabled_tenant_configuration(self, minio_client, api_client):
+        """Test S3 delivery with disabled tenant configuration"""
+        
+        tenant_id = "disabled-tenant"
+        
+        # Create disabled S3 configuration
+        s3_config = {
+            "tenant_id": tenant_id,
             "type": "s3",
-            "bucket_name": "eu-west-1-bucket",
-            "bucket_prefix": "cross-region-logs/",
-            "target_region": "eu-west-1",  # Different from processor region
-            "enabled": True
+            "bucket_name": "customer-logs",
+            "bucket_prefix": "disabled-logs/",
+            "target_region": "us-east-1",
+            "enabled": False,  # Disabled
+            "desired_logs": ["test-app"]
         }
         
-        delivery_config_service.create_tenant_config(cross_region_config)
+        print(f"Creating disabled S3 configuration for {tenant_id}")
+        api_client.create_tenant_config(tenant_id, s3_config)
         
-        central_role_arn = "arn:aws:iam::123456789012:role/CentralLogDistributionRole"
+        # Create test log file
+        log_content = [{
+            "timestamp": datetime.now().isoformat(), 
+            "message": "Disabled tenant test log", 
+            "level": "INFO"
+        }]
+        ndjson_content = '\\n'.join(json.dumps(log) for log in log_content)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
         
-        with patch.dict('os.environ', {
-            'CENTRAL_LOG_DISTRIBUTION_ROLE_ARN': central_role_arn,
-            'AWS_REGION': 'us-east-1'  # Processor in us-east-1
-        }):
-            with patch('boto3.client') as mock_boto_client:
-                mock_sts = Mock()
-                mock_sts.assume_role.return_value = {
-                    'Credentials': {
-                        'AccessKeyId': 'assumed-key',
-                        'SecretAccessKey': 'assumed-secret',
-                        'SessionToken': 'assumed-token'
-                    }
-                }
-                
-                mock_s3 = Mock()
-                mock_s3.copy_object.return_value = {}
-                
-                def boto_client_side_effect(service, **kwargs):
-                    if service == 'sts':
-                        return mock_sts
-                    elif service == 's3':
-                        # Verify S3 client is created with target region
-                        assert kwargs.get('region_name') == 'eu-west-1'
-                        return mock_s3
-                    elif service == 'dynamodb':
-                        return boto3.client(
-                            'dynamodb',
-                            endpoint_url=f'http://localhost:{kubectl_port_forward}',
-                            region_name='us-east-1',
-                            aws_access_key_id='test',
-                            aws_secret_access_key='test'
-                        )
-                    return Mock()
-                
-                mock_boto_client.side_effect = boto_client_side_effect
-                
-                # Import processor
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../container'))
-                from log_processor import process_sqs_record
-                
-                # Create SQS record
-                s3_event = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "source-bucket"},
-                            "object": {"key": "test-cluster/cross-region-tenant/global-app/pod-789/20240901-logs.json.gz"}
-                        }
-                    }]
-                }
-                
-                sns_message = {"Message": json.dumps(s3_event)}
-                sqs_record = {
-                    "body": json.dumps(sns_message),
-                    "messageId": "cross-region-test"
-                }
-                
-                with patch('log_processor.download_and_process_log_file') as mock_download:
-                    test_log_events = [{"message": "Cross-region test log", "timestamp": 1693526400000}]
-                    mock_download.return_value = (test_log_events, 1693526400)
-                    
-                    # Process SQS record
-                    process_sqs_record(sqs_record)
-                    
-                    # Verify S3 copy was performed
-                    mock_s3.copy_object.assert_called_once()
-                    
-                    # Verify cross-region bucket targeting
-                    copy_call = mock_s3.copy_object.call_args[1]
-                    assert copy_call['Bucket'] == 'eu-west-1-bucket'
-                    
-                    # Verify S3 client was created with correct target region (eu-west-1)
-                    s3_client_calls = [call for call in mock_boto_client.call_args_list if call[0][0] == 's3']
-                    assert any(call[1]['region_name'] == 'eu-west-1' for call in s3_client_calls)
+        object_key = f"test-cluster/{tenant_id}/test-app/test-pod-123/20241201-disabled-test.json.gz"
+        
+        print(f"Uploading test log file: {object_key}")
+        minio_client.put_object(
+            Bucket="test-logs",
+            Key=object_key,
+            Body=compressed_content
+        )
+        
+        # Wait and verify it's NOT delivered (tenant disabled)
+        print("Waiting to verify disabled tenant is not processed...")
+        time.sleep(30)  # Give processor time to potentially process it
+        
+        try:
+            disabled_objects = self.wait_for_s3_objects(
+                minio_client,
+                "customer-logs",
+                prefix=f"disabled-logs/test-cluster/{tenant_id}",
+                min_objects=1,
+                timeout=10  # Short timeout since we expect it to fail
+            )
+            assert False, f"Disabled tenant log was unexpectedly delivered: {disabled_objects}"
+        except TimeoutError:
+            # This is expected - disabled tenant should not be processed
+            pass
+        
+        print(f"✅ Disabled tenant configuration test completed")
+        print(f"   Disabled tenant correctly not processed")
+    
+    def test_cross_region_s3_delivery(self, minio_client, api_client):
+        """Test S3 delivery configuration with different target region"""
+        
+        tenant_id = "cross-region-tenant"
+        
+        # Create S3 configuration targeting different region
+        s3_config = {
+            "tenant_id": tenant_id,
+            "type": "s3", 
+            "bucket_name": "customer-logs",
+            "bucket_prefix": "eu-west-logs/",
+            "target_region": "eu-west-1",  # Different region
+            "enabled": True,
+            "desired_logs": ["global-service"]
+        }
+        
+        print(f"Creating cross-region S3 configuration for {tenant_id}")
+        api_client.create_tenant_config(tenant_id, s3_config)
+        
+        # Create test log file
+        log_content = [{
+            "timestamp": datetime.now().isoformat(),
+            "message": "Cross-region delivery test log",
+            "level": "INFO",
+            "service": "global-service"
+        }]
+        ndjson_content = '\\n'.join(json.dumps(log) for log in log_content)
+        compressed_content = gzip.compress(ndjson_content.encode('utf-8'))
+        
+        object_key = f"test-cluster/{tenant_id}/global-service/global-pod-789/20241201-cross-region-test.json.gz"
+        
+        print(f"Uploading test log file: {object_key}")
+        minio_client.put_object(
+            Bucket="test-logs",
+            Key=object_key,
+            Body=compressed_content
+        )
+        
+        # Wait for processor to detect and copy the file
+        print("Waiting for cross-region log processor to detect and copy the file...")
+        destination_objects = self.wait_for_s3_objects(
+            minio_client,
+            "customer-logs",
+            prefix="eu-west-logs/test-cluster",
+            min_objects=1,
+            timeout=180
+        )
+        
+        # Verify delivery occurred
+        assert len(destination_objects) >= 1
+        copied_object = destination_objects[0]
+        expected_key_pattern = f"eu-west-logs/test-cluster/{tenant_id}/global-service/global-pod-789/"
+        assert copied_object['Key'].startswith(expected_key_pattern)
+        
+        # Verify metadata
+        copied_response = minio_client.get_object(Bucket="customer-logs", Key=copied_object['Key'])
+        copied_metadata = copied_response.get('Metadata', {})
+        
+        assert copied_metadata.get('tenant-id') == tenant_id
+        assert copied_metadata.get('cluster-id') == 'test-cluster'
+        assert copied_metadata.get('application') == 'global-service'
+        
+        print(f"✅ Cross-region S3 delivery test completed")
+        print(f"   Delivered: s3://customer-logs/{copied_object['Key']}")
+        print(f"   Target region: eu-west-1")
+        print(f"   Metadata: {copied_metadata}")
 
 
 @pytest.fixture

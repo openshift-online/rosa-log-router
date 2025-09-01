@@ -122,13 +122,27 @@ spec:
             sleep 5
           done
           
-          # Create test bucket
+          # Create source bucket (where Vector writes logs)
           mc mb minio/test-logs --ignore-existing
+          echo "Created source bucket: test-logs"
           
-          # Set bucket policy to allow read/write access
+          # Create destination buckets (where processor copies logs)
+          mc mb minio/customer-logs --ignore-existing
+          echo "Created destination bucket: customer-logs"
+          
+          mc mb minio/acme-corp-logs --ignore-existing
+          echo "Created destination bucket: acme-corp-logs"
+          
+          mc mb minio/multi-delivery-bucket --ignore-existing
+          echo "Created destination bucket: multi-delivery-bucket"
+          
+          # Set bucket policies to allow read/write access
           mc anonymous set download minio/test-logs
+          mc anonymous set download minio/customer-logs
+          mc anonymous set download minio/acme-corp-logs
+          mc anonymous set download minio/multi-delivery-bucket
           
-          echo "MinIO setup complete"
+          echo "MinIO setup complete with source and destination buckets"
         env:
         - name: MC_HOST_minio
           value: "http://minioadmin:minioadmin@minio:9000"

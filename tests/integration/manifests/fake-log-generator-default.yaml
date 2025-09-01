@@ -1,0 +1,117 @@
+# Fake log generator for default namespace (basic Vector verification)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-default
+  namespace: default
+  labels:
+    app: fake-log-generator
+    tenant-id: default
+    testing.environment: github-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      tenant-id: default
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        tenant-id: default
+        testing.environment: github-actions
+    spec:
+      initContainers:
+      - name: copy-script
+        image: python:3.13-slim
+        command:
+        - sh
+        - -c
+        - |
+          cat > /app/fake_log_generator.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import time
+          import random
+          import os
+          from datetime import datetime, timezone
+          
+          POD_NAME = os.environ.get('POD_NAME', 'unknown')
+          NAMESPACE = os.environ.get('NAMESPACE', 'default')
+          TENANT_ID = os.environ.get('TENANT_ID', 'unknown')
+          APP_NAME = os.environ.get('APP_NAME', 'fake-log-generator')
+          
+          def generate_plain_text_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              modules = ["generic.service", "test.module", "default.handler"]
+              level = random.choice(levels)
+              module = random.choice(modules)
+              message = f"Test log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}"
+              timestamp = datetime.now(timezone.utc).isoformat()
+              return f"{timestamp} {level} {module}: {message}"
+          
+          def generate_json_log():
+              levels = ["INFO", "DEBUG", "WARN", "ERROR"]
+              modules = ["generic.service", "test.module", "default.handler"]
+              actions = ["generic_action", "test_operation", "default_task"]
+              
+              return json.dumps({
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "level": random.choice(levels),
+                  "module": random.choice(modules),
+                  "action": random.choice(actions),
+                  "message": f"JSON log from {TENANT_ID}/{APP_NAME} pod {POD_NAME}: {random.randint(1000, 9999)}",
+                  "request_id": f"req-{random.randint(10000, 99999)}",
+                  "tenant_id": TENANT_ID,
+                  "namespace": NAMESPACE,
+                  "pod_name": POD_NAME,
+                  "app_name": APP_NAME
+              })
+          
+          print(f"Starting fake log generator for {TENANT_ID}/{APP_NAME} in pod {POD_NAME}")
+          
+          while True:
+              batch_size = random.randint(10, 25)
+              for _ in range(batch_size):
+                  if random.random() < 0.6:
+                      print(generate_plain_text_log())
+                  else:
+                      print(generate_json_log())
+              time.sleep(random.uniform(2.0, 5.0))
+          EOF
+          chmod +x /app/fake_log_generator.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      containers:
+      - name: fake-log-generator
+        image: python:3.13-slim
+        command:
+        - python3
+        - /app/fake_log_generator.py
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TENANT_ID
+          value: "default"
+        - name: APP_NAME
+          value: "fake-log-generator"
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: script-volume
+        emptyDir: {}
