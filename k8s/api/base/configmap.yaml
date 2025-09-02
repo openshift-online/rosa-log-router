@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-config-api-config
+  namespace: logging
+data:
+  TENANT_CONFIG_TABLE: "tenant-configurations"
+  AWS_REGION: "us-east-1"

@@ -1,0 +1,10 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-multi
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions

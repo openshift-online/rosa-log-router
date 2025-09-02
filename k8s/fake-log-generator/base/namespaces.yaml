@@ -1,0 +1,25 @@
+# Namespace for e2e-test-tenant
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-test-tenant
+  labels:
+    tenant-id: e2e-test-tenant
+
+---
+# Namespace for multi-delivery-tenant  
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multi-delivery-tenant
+  labels:
+    tenant-id: multi-delivery-tenant
+
+---
+# Namespace for filtered-tenant
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: filtered-tenant
+  labels:
+    tenant-id: filtered-tenant

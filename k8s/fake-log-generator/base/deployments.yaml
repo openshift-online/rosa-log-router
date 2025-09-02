@@ -1,0 +1,262 @@
+# Fake log generator for e2e-test-tenant
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-e2e
+  namespace: e2e-test-tenant
+  labels:
+    tenant-id: e2e-test-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      tenant-id: e2e-test-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        tenant-id: e2e-test-tenant
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/fake-log-generator:main
+        args:
+        - --customer-id=e2e-test-tenant
+        - --cluster-id=test-cluster
+        - --application=fake-log-generator
+        - --total-batches=0
+        - --min-batch-size=5
+        - --max-batch-size=15
+        - --min-sleep=3.0
+        - --max-sleep=8.0
+        - --timestamp-format=mixed
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Fake log generator for multi-delivery-tenant
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-multi
+  namespace: multi-delivery-tenant
+  labels:
+    tenant-id: multi-delivery-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      tenant-id: multi-delivery-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        tenant-id: multi-delivery-tenant
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/fake-log-generator:main
+        args:
+        - --customer-id=multi-delivery-tenant
+        - --cluster-id=test-cluster
+        - --application=fake-log-generator
+        - --total-batches=0
+        - --min-batch-size=5
+        - --max-batch-size=15
+        - --min-sleep=3.0
+        - --max-sleep=8.0
+        - --timestamp-format=mixed
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Filtered tenant - Payment Service (ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: filtered-tenant
+  labels:
+    service: payment-service
+    tenant-id: filtered-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: payment-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: payment-service
+        tenant-id: filtered-tenant
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/fake-log-generator:main
+        args:
+        - --customer-id=filtered-tenant
+        - --cluster-id=test-cluster
+        - --application=payment-service
+        - --total-batches=0
+        - --min-batch-size=3
+        - --max-batch-size=10
+        - --min-sleep=4.0
+        - --max-sleep=10.0
+        - --timestamp-format=mixed
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Filtered tenant - User Service (ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: filtered-tenant
+  labels:
+    service: user-service
+    tenant-id: filtered-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: user-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: user-service
+        tenant-id: filtered-tenant
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/fake-log-generator:main
+        args:
+        - --customer-id=filtered-tenant
+        - --cluster-id=test-cluster
+        - --application=user-service
+        - --total-batches=0
+        - --min-batch-size=3
+        - --max-batch-size=10
+        - --min-sleep=4.0
+        - --max-sleep=10.0
+        - --timestamp-format=mixed
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Filtered tenant - Blocked Service (NOT ALLOWED)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blocked-service
+  namespace: filtered-tenant
+  labels:
+    service: blocked-service
+    tenant-id: filtered-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-log-generator
+      service: blocked-service
+      tenant-id: filtered-tenant
+  template:
+    metadata:
+      labels:
+        app: fake-log-generator
+        service: blocked-service
+        tenant-id: filtered-tenant
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/fake-log-generator:main
+        args:
+        - --customer-id=filtered-tenant
+        - --cluster-id=test-cluster
+        - --application=blocked-service
+        - --total-batches=0
+        - --min-batch-size=3
+        - --max-batch-size=10
+        - --min-sleep=4.0
+        - --max-sleep=10.0
+        - --timestamp-format=mixed
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"

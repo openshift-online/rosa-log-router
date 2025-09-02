@@ -8,6 +8,7 @@ spec:
     spec:
       containers:
       - name: vector
+        image: vector-collector:github-actions
         env:
         # Set environment variables for testing
         - name: CLUSTER_ID

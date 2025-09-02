@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-config-api-config
+  namespace: default
+data:
+  TENANT_CONFIG_TABLE: "integration-test-tenant-configs"
+  AWS_REGION: "us-east-1"
