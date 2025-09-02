@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: processor
+        image: log-processor:github-actions
+        env:
+        # Integration test specific environment variables
+        - name: AWS_ENDPOINT_URL_S3
+          value: "http://minio:9000"
+        - name: AWS_ENDPOINT_URL_DYNAMODB
+          value: "http://dynamodb-local:8000"
+        - name: AWS_ACCESS_KEY_ID
+          value: "minioadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "minioadmin"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"

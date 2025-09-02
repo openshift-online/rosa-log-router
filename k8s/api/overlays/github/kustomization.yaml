@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: api-github-overlay
+
+resources:
+- ../../base
+
+namespace: default
+
+patches:
+- path: deployment-patch.yaml
+  target:
+    kind: Deployment
+    name: tenant-config-api
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: tenant-config-api-config
+
+labels:
+- includeSelectors: true
+  pairs:
+    testing.environment: github-actions

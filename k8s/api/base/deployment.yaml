@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-config-api
+  namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tenant-config-api
+  template:
+    metadata:
+      labels:
+        app: tenant-config-api
+    spec:
+      containers:
+      - name: api
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/api:main
+        imagePullPolicy: Always
+        command:
+        - python3
+        - -m
+        - uvicorn
+        - src.app:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8080"
+        env:
+        - name: TENANT_CONFIG_TABLE
+          valueFrom:
+            configMapKeyRef:
+              name: tenant-config-api-config
+              key: TENANT_CONFIG_TABLE
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: tenant-config-api-config
+              key: AWS_REGION
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
