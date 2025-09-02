@@ -53,14 +53,6 @@ jobs:
         
         echo "Tenant configuration API is ready"
 
-    - name: Deploy log processor
-      run: |
-        kubectl apply -f tests/integration/manifests/log-processor.yaml
-        
-        # Wait for log processor to be ready
-        kubectl wait --for=condition=ready pod -l app=log-processor --timeout=300s
-        
-        echo "Log processor is ready"
 
     - name: Deploy fake log generators
       run: |
@@ -214,7 +206,6 @@ jobs:
         echo "✅ MinIO deployment (source & destination buckets): OK"
         echo "✅ DynamoDB Local deployment: OK"
         echo "✅ Tenant Configuration API deployment: OK"
-        echo "✅ Log Processor deployment: OK"
         echo "✅ Multi-tenant fake log generators deployment: OK" 
         echo "✅ Vector collector deployment: OK"
         echo "✅ Log collection and processing: OK"
@@ -242,8 +233,6 @@ jobs:
         echo "Fake log generator logs (all namespaces):"
         kubectl logs -l app=fake-log-generator --tail=20 --all-namespaces || echo "No generator logs"
         echo ""
-        echo "Log processor logs:"
-        kubectl logs -l app=log-processor --tail=20 || echo "No processor logs"
         echo ""
         echo "Tenant config API logs:"
         kubectl logs -l app=tenant-config-api --tail=20 || echo "No API logs"
