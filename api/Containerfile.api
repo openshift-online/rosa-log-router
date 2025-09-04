@@ -1,7 +1,7 @@
 # API Service Container for Tenant Management
 # This container provides REST API endpoints for managing tenant configurations
 
-FROM quay.io/redhat/ubi9:latest
+FROM registry.access.redhat.com/ubi9
 
 # Install Python and basic tools
 RUN dnf install -y python3 python3-pip && \

@@ -1,4 +1,4 @@
-FROM quay.io/redhat/ubi9:latest
+FROM registry.access.redhat.com/ubi9
 
 # Install Python and basic tools
 RUN dnf update -y && \
