@@ -1,11 +1,10 @@
-ARG COLLECTOR_IMAGE=localhost/log-collector:latest
-FROM ${COLLECTOR_IMAGE}
-
-USER 0
+FROM registry.fedoraproject.org/fedora:42
 
 # Install Python and basic tools
-RUN dnf install -y python3 python3-pip python3-boto3 python3-simplejson && \
-    dnf clean all
+RUN dnf update -y && \
+    dnf install -y python3 python3-pip python3-boto3 python3-simplejson && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
 
 # Create app directory
 WORKDIR /app
@@ -17,7 +16,6 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY log_processor.py .
 COPY entrypoint.sh .
-COPY vector_config_template.yaml .
 
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
