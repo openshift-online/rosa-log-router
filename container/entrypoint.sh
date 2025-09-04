@@ -18,9 +18,13 @@ case "$MODE" in
         # Manual input mode for development/testing
         exec python3 log_processor.py --mode manual
         ;;
+    "scan")
+        # Scan mode for integration testing
+        exec python3 log_processor.py --mode scan
+        ;;
     *)
         echo "Unknown execution mode: $MODE"
-        echo "Supported modes: lambda, sqs, manual"
+        echo "Supported modes: lambda, sqs, manual, scan"
         exit 1
         ;;
 esac

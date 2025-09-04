@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Use base Kubernetes configuration
+resources:
+  - ../../base
+
+namespace: logging
+
+# Patches for local integration testing
+patches:
+  - target:
+      kind: Deployment
+      name: tenant-config-api
+    path: deployment-patch.yaml
+  - target:
+      kind: ConfigMap
+      name: tenant-config-api-config
+    path: configmap-patch.yaml
+
+# Override some labels for testing
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/name: tenant-config-api
+    app.kubernetes.io/part-of: multi-tenant-logging
+    testing.environment: local-test

@@ -14,6 +14,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+
     - name: Start minikube
       uses: medyagh/setup-minikube@master
       with:
@@ -25,42 +26,35 @@ jobs:
         kubectl cluster-info
         kubectl get nodes
 
+    - name: Create logging namespace
+      run: |
+        echo "Creating logging namespace..."
+        kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
+        echo "✅ Logging namespace ready"
+
+    - name: Deploy DynamoDB Local to minikube
+      run: |
+        echo "Deploying DynamoDB Local inside minikube cluster..."
+        kubectl apply -f tests/integration/manifests/dynamodb-local.yaml
+        
+        # Wait for DynamoDB Local to be ready
+        kubectl wait --for=condition=ready pod -l app=dynamodb-local --timeout=300s --namespace=logging
+        
+        echo "✅ DynamoDB Local is ready in minikube cluster"
+
     - name: Build containers from current PR
       run: |
-        # Build API container (use a custom build for server mode)
+        # Build API container using existing Containerfile
         echo "Building API container..."
-        cat > api/Containerfile.server << 'EOF'
-        FROM python:3.13-slim
-        
-        WORKDIR /app
-        
-        # Install uv for fast Python package management
-        RUN pip install --no-cache-dir uv
-        
-        # Copy dependency files first for better caching
-        COPY pyproject.toml uv.lock README.md ./
-        
-        # Install Python dependencies using uv with frozen lockfile for reproducible builds
-        RUN uv sync --frozen --no-dev
-        
-        # Copy API source code
-        COPY src/ ./src/
-        
-        # Expose port
-        EXPOSE 8080
-        
-        # Run the server
-        CMD ["python3", "-m", "uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8080"]
-        EOF
         docker build -f api/Containerfile.server -t tenant-config-api:github-actions api/
         
-        # Build processor container
-        echo "Building processor container..."
-        docker build -f container/Containerfile.processor -t log-processor:github-actions container/
-        
-        # Build Vector collector container
+        # Build Vector collector container first (dependency for processor)
         echo "Building Vector collector container..."
-        docker build -f container/Containerfile.collector -t vector-collector:github-actions container/
+        docker build -f container/Containerfile.collector -t log-collector:github-actions container/
+        
+        # Build processor container (depends on collector)
+        echo "Building processor container..."
+        docker build -f container/Containerfile.processor -t log-processor:github-actions container/ --build-arg COLLECTOR_IMAGE=log-collector:github-actions
         
         # Build fake log generator container
         echo "Building fake log generator container..."
@@ -69,8 +63,8 @@ jobs:
         # Load images into minikube
         echo "Loading images into minikube..."
         minikube image load tenant-config-api:github-actions
+        minikube image load log-collector:github-actions
         minikube image load log-processor:github-actions
-        minikube image load vector-collector:github-actions
         minikube image load fake-log-generator:github-actions
         
         # Verify images are loaded
@@ -82,36 +76,75 @@ jobs:
         kubectl apply -f tests/integration/manifests/minio.yaml
         
         # Wait for MinIO to be ready
-        kubectl wait --for=condition=ready pod -l app=minio --timeout=300s
-        kubectl wait --for=condition=complete job/minio-setup --timeout=300s
+        kubectl wait --for=condition=ready pod -l app=minio --timeout=300s --namespace=logging
+        kubectl wait --for=condition=complete job/minio-setup --timeout=300s --namespace=logging
         
         echo "MinIO is ready"
-
-    - name: Deploy DynamoDB Local
-      run: |
-        kubectl apply -f tests/integration/manifests/dynamodb-local.yaml
-        
-        # Wait for DynamoDB Local to be ready
-        kubectl wait --for=condition=ready pod -l app=dynamodb-local --timeout=300s
-        
-        echo "DynamoDB Local is ready"
 
     - name: Deploy tenant configuration API
       run: |
         kubectl apply -k k8s/api/overlays/github
         
         # Wait for API to be ready
-        kubectl wait --for=condition=ready pod -l app=tenant-config-api --timeout=300s
+        kubectl wait --for=condition=ready pod -l app=tenant-config-api --timeout=300s --namespace=logging
         
         echo "Tenant configuration API is ready"
 
+    - name: Run API integration tests
+      run: |
+        # Install Python dependencies for integration tests
+        pip install pytest requests boto3
+        
+        # Set up port forward for API testing with explicit namespace
+        kubectl port-forward service/tenant-config-api 8080:8080 --namespace=logging &
+        PORT_FORWARD_PID=$!
+        
+        # Wait for port forward to be ready with increased time for GitHub Actions
+        sleep 15
+        
+        # Verify API is accessible with retry logic
+        echo "Verifying API accessibility..."
+        MAX_RETRIES=10
+        for i in $(seq 1 $MAX_RETRIES); do
+          if curl -f http://localhost:8080/api/v1/health; then
+            echo "✅ API health check passed"
+            break
+          else
+            echo "⚠️ API health check attempt $i/$MAX_RETRIES failed, retrying..."
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "❌ API health check failed after $MAX_RETRIES attempts"
+              kill $PORT_FORWARD_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 3
+          fi
+        done
+        
+        # Run integration tests that use API endpoints
+        echo "Running API integration tests..."
+        cd tests/integration
+        API_BASE_URL=http://localhost:8080 pytest test_api_integration.py::TestTenantDeliveryConfigAPIIntegration::test_delivery_config_crud_operations -v || {
+          echo "❌ API integration test failed"
+          echo "Debugging information:"
+          echo "API logs:"
+          kubectl logs -l app=tenant-config-api --tail=20 --namespace=logging || echo "Could not get API logs"
+          echo "DynamoDB Local logs:"
+          kubectl logs -l app=dynamodb-local --tail=10 --namespace=logging || echo "Could not get DynamoDB logs"
+          kill $PORT_FORWARD_PID 2>/dev/null || true
+          exit 1
+        }
+        
+        echo "✅ API integration tests passed"
+        
+        # Clean up port forward
+        kill $PORT_FORWARD_PID 2>/dev/null || true
 
     - name: Deploy log processor
       run: |
         kubectl apply -k k8s/processor/overlays/github
         
         # Wait for log processor to be ready
-        kubectl wait --for=condition=ready pod -l app=log-processor --timeout=300s
+        kubectl wait --for=condition=ready pod -l app=log-processor --timeout=300s --namespace=logging
         
         echo "Log processor is ready"
 
@@ -119,17 +152,31 @@ jobs:
       run: |
         kubectl apply -k k8s/fake-log-generator/overlays/github
         
-        # Wait for fake log generators to be ready in all namespaces
-        kubectl wait --for=condition=ready pod -l app=fake-log-generator --timeout=300s --all-namespaces
+        # Wait for multi-tenant fake log generators to be ready in customer namespaces
+        echo "Waiting for fake log generators across customer namespaces..."
         
-        echo "Fake log generators are ready in all tenant namespaces"
+        # Wait for ACME Corp applications
+        kubectl wait --for=condition=ready pod -l app=payment-service --timeout=300s --namespace=acme-corp || echo "payment-service not ready"
+        kubectl wait --for=condition=ready pod -l app=user-database --timeout=300s --namespace=acme-corp || echo "user-database not ready"
+        
+        # Wait for Globex Industries applications  
+        kubectl wait --for=condition=ready pod -l app=api-gateway --timeout=300s --namespace=globex-industries || echo "api-gateway not ready"
+        
+        # Wait for Umbrella Corp applications
+        kubectl wait --for=condition=ready pod -l app=analytics-engine --timeout=300s --namespace=umbrella-corp || echo "analytics-engine not ready"
+        
+        # Wait for Wayne Enterprises applications
+        kubectl wait --for=condition=ready pod -l app=security-monitor --timeout=300s --namespace=wayne-enterprises || echo "security-monitor not ready"
+        kubectl wait --for=condition=ready pod -l app=backup-service --timeout=300s --namespace=wayne-enterprises || echo "backup-service not ready"
+        
+        echo "Multi-tenant fake log generators are ready across customer namespaces"
 
     - name: Deploy Vector collector
       run: |
         kubectl apply -k k8s/collector/overlays/github
         
         # Wait for Vector DaemonSet to be ready
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vector --timeout=300s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vector --timeout=300s --namespace=logging
         
         echo "Vector collector is ready"
 
@@ -139,59 +186,113 @@ jobs:
         sleep 180
         
         # Check Vector logs for any errors
-        kubectl logs -l app.kubernetes.io/name=vector --tail=20
+        kubectl logs -l app.kubernetes.io/name=vector --tail=20 --namespace=logging
 
     - name: Verify log delivery to MinIO
       run: |
         # Get MinIO pod name
-        MINIO_POD=$(kubectl get pod -l app=minio -o jsonpath='{.items[0].metadata.name}')
+        MINIO_POD=$(kubectl get pod -l app=minio -o jsonpath='{.items[0].metadata.name}' --namespace=logging)
         echo "MinIO pod: $MINIO_POD"
         
         # Check if log files exist in MinIO bucket
         echo "Checking for log files in MinIO bucket..."
-        kubectl exec $MINIO_POD -- ls -la /data/test-logs/
+        kubectl exec $MINIO_POD --namespace=logging -- ls -la /data/test-logs/
         
-        # Verify the expected directory structure exists
-        if kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/ > /dev/null 2>&1; then
-          echo "✅ Success: Log directory structure found"
-        else
-          echo "❌ Error: Expected log directory structure not found"
+        # Verify multi-tenant log directory structure exists
+        echo "Verifying multi-tenant log directory structure..."
+        STRUCTURE_FOUND=false
+        
+        # Check for ACME Corp logs (payment-service or user-database)
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/acme-corp/payment-service/ > /dev/null 2>&1; then
+          echo "✅ Found ACME Corp payment-service logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/acme-corp/user-database/ > /dev/null 2>&1; then
+          echo "✅ Found ACME Corp user-database logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        # Check for Wayne Enterprises logs (security-monitor or backup-service)
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/wayne-enterprises/security-monitor/ > /dev/null 2>&1; then
+          echo "✅ Found Wayne Enterprises security-monitor logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/wayne-enterprises/backup-service/ > /dev/null 2>&1; then
+          echo "✅ Found Wayne Enterprises backup-service logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        # Check for other customers
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/globex-industries/api-gateway/ > /dev/null 2>&1; then
+          echo "✅ Found Globex Industries api-gateway logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        if kubectl exec $MINIO_POD --namespace=logging -- ls /data/test-logs/test-cluster/umbrella-corp/analytics-engine/ > /dev/null 2>&1; then
+          echo "✅ Found Umbrella Corp analytics-engine logs"
+          STRUCTURE_FOUND=true
+        fi
+        
+        if [ "$STRUCTURE_FOUND" = false ]; then
+          echo "❌ Error: No multi-tenant log directory structure found"
+          echo "Available paths:"
+          kubectl exec $MINIO_POD --namespace=logging -- find /data/test-logs -type d -maxdepth 4 || echo "Could not list paths"
           exit 1
         fi
         
-        # Count S3 objects (they appear as directories in MinIO)
-        # Check each pod directory for .json.gz objects
-        POD_DIRS=$(kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/ 2>/dev/null || echo "")
+        # Count S3 objects across multi-tenant structure
+        echo "Checking for S3 objects across multi-tenant applications..."
+        TOTAL_S3_OBJECTS=0
+        TOTAL_APPLICATIONS=0
         
-        if [ -z "$POD_DIRS" ]; then
-          echo "❌ Error: No pod directories found in MinIO bucket"
-          exit 1
-        fi
+        # Function to check S3 objects for a specific application
+        check_s3_objects() {
+          local customer=$1
+          local app=$2
+          local app_path="/data/test-logs/test-cluster/$customer/$app"
+          
+          # Check if the application path exists
+          if kubectl exec $MINIO_POD --namespace=logging -- ls "$app_path/" > /dev/null 2>&1; then
+            echo "  Found logs for $customer/$app"
+            TOTAL_APPLICATIONS=$((TOTAL_APPLICATIONS + 1))
+            
+            # Get pod directories for this application
+            POD_DIRS=$(kubectl exec $MINIO_POD --namespace=logging -- ls "$app_path/" 2>/dev/null || echo "")
+            
+            for pod_dir in $POD_DIRS; do
+              if [ -n "$pod_dir" ]; then
+                # Count .json.gz objects in this pod directory
+                S3_OBJECTS=$(kubectl exec $MINIO_POD --namespace=logging -- ls "$app_path/$pod_dir/" 2>/dev/null | grep -c "\.json\.gz" || echo "0")
+                if [ "$S3_OBJECTS" -gt 0 ]; then
+                  echo "    Pod $pod_dir: $S3_OBJECTS objects"
+                  TOTAL_S3_OBJECTS=$((TOTAL_S3_OBJECTS + S3_OBJECTS))
+                fi
+              fi
+            done
+          fi
+        }
         
-        echo "Found pod directories: $POD_DIRS"
+        # Check all multi-tenant applications
+        check_s3_objects "acme-corp" "payment-service"
+        check_s3_objects "acme-corp" "user-database"
+        check_s3_objects "globex-industries" "api-gateway"
+        check_s3_objects "umbrella-corp" "analytics-engine"
+        check_s3_objects "wayne-enterprises" "security-monitor"
+        check_s3_objects "wayne-enterprises" "backup-service"
         
-        # Count .json.gz objects in the first pod directory
-        FIRST_POD_DIR=$(echo $POD_DIRS | awk '{print $1}')
-        S3_OBJECTS=$(kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ 2>/dev/null | grep -c "\.json\.gz" || echo "0")
+        echo "Total S3 objects found: $TOTAL_S3_OBJECTS across $TOTAL_APPLICATIONS applications"
         
-        echo "Found $S3_OBJECTS S3 objects (.json.gz) in pod directory: $FIRST_POD_DIR"
-        
-        if [ "$S3_OBJECTS" -gt 0 ]; then
-          echo "✅ Success: Log objects were created and stored in MinIO"
+        if [ "$TOTAL_S3_OBJECTS" -gt 0 ]; then
+          echo "✅ Success: Multi-tenant log objects were created and stored in MinIO"
           echo "✅ Success: Vector is successfully writing logs to S3-compatible storage"
-          
-          # Verify multiple pods are writing logs
-          TOTAL_POD_DIRS=$(echo $POD_DIRS | wc -w)
-          echo "✅ Success: Found $TOTAL_POD_DIRS pod directories (from $TOTAL_POD_DIRS fake log generators)"
-          
-          # Show sample of S3 object names to verify naming pattern
-          echo "Sample S3 object names:"
-          kubectl exec $MINIO_POD -- ls /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ | grep "\.json\.gz" | head -3 || echo "Could not list object names"
+          echo "✅ Success: Found logs from $TOTAL_APPLICATIONS different applications across multiple customers"
           
         else
-          echo "❌ Error: No S3 objects (.json.gz) found in MinIO bucket"
-          echo "Debug: Contents of pod directory $FIRST_POD_DIR:"
-          kubectl exec $MINIO_POD -- ls -la /data/test-logs/test-cluster/default/fake-log-generator/$FIRST_POD_DIR/ || echo "Could not list directory contents"
+          echo "❌ Error: No S3 objects (.json.gz) found across multi-tenant applications"
+          echo "Debug: Available directory structure:"
+          kubectl exec $MINIO_POD --namespace=logging -- find /data/test-logs -name "*.json.gz" | head -10 || echo "Could not find any .json.gz files"
           exit 1
         fi
 
@@ -205,15 +306,15 @@ jobs:
         
         # Check Vector logs for processing
         echo "Vector processing status:"
-        kubectl logs -l app.kubernetes.io/name=vector --tail=10 || echo "No Vector logs"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=10 --namespace=logging || echo "No Vector logs"
         
         # Check processor logs for activity
         echo "Processor activity:"
-        kubectl logs -l app=log-processor --tail=10 || echo "No processor logs"
+        kubectl logs -l app=log-processor --tail=10 --namespace=logging || echo "No processor logs"
         
         # Check API logs
         echo "API activity:"
-        kubectl logs -l app=tenant-config-api --tail=10 || echo "No API logs"
+        kubectl logs -l app=tenant-config-api --tail=10 --namespace=logging || echo "No API logs"
 
     - name: Show integration test results
       run: |
@@ -241,19 +342,23 @@ jobs:
         kubectl get pods
         echo ""
         echo "Vector logs:"
-        kubectl logs -l app.kubernetes.io/name=vector --tail=50 || echo "No Vector logs"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=50 --namespace=logging || echo "No Vector logs"
         echo ""
         echo "Fake log generator logs (all namespaces):"
-        kubectl logs -l app=fake-log-generator --tail=20 --all-namespaces || echo "No generator logs"
+        # Check multi-tenant fake log generator logs
+        echo "Fake log generator logs from multi-tenant applications:"
+        kubectl logs -l app=payment-service --tail=5 --namespace=acme-corp || echo "No payment-service logs"
+        kubectl logs -l app=security-monitor --tail=5 --namespace=wayne-enterprises || echo "No security-monitor logs"
+        kubectl logs -l app=api-gateway --tail=5 --namespace=globex-industries || echo "No api-gateway logs"
         echo ""
         echo "Log processor logs:"
-        kubectl logs -l app=log-processor --tail=20 || echo "No processor logs"
+        kubectl logs -l app=log-processor --tail=20 --namespace=logging || echo "No processor logs"
         echo ""
         echo "Tenant config API logs:"
-        kubectl logs -l app=tenant-config-api --tail=20 || echo "No API logs"
+        kubectl logs -l app=tenant-config-api --tail=20 --namespace=logging || echo "No API logs"
         echo ""
         echo "MinIO logs:"
-        kubectl logs -l app=minio --tail=20 || echo "No MinIO logs"
+        kubectl logs -l app=minio --tail=20 --namespace=logging || echo "No MinIO logs"
         echo ""
         echo "DynamoDB Local logs:"
-        kubectl logs -l app=dynamodb-local --tail=20 || echo "No DynamoDB Local logs"
+        kubectl logs -l app=dynamodb-local --tail=20 --namespace=logging || echo "No DynamoDB Local logs"

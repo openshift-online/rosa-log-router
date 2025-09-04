@@ -9,6 +9,7 @@ import sys
 import time
 import subprocess
 import socket
+import requests
 from contextlib import closing
 from typing import Generator, Dict, Any
 
@@ -35,30 +36,49 @@ def dynamodb_local_port() -> int:
 @pytest.fixture(scope="session")
 def kubectl_port_forward(dynamodb_local_port: int) -> Generator[int, None, None]:
     """Start kubectl port-forward for DynamoDB Local service"""
-    # Start port forwarding
+    # Start port forwarding with explicit namespace
     process = subprocess.Popen([
         'kubectl', 'port-forward', 
         'service/dynamodb-local', 
-        f'{dynamodb_local_port}:8000'
+        f'{dynamodb_local_port}:8000',
+        '--namespace=logging'
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
-    # Wait for port forward to be ready
-    time.sleep(5)
+    # Wait for port forward to be ready with increased time for GitHub Actions
+    time.sleep(10)
     
-    # Verify port forward is working
-    max_retries = 30
-    for _ in range(max_retries):
+    # Verify port forward is working with improved retry logic
+    max_retries = 60  # Increased from 30 to 60 for GitHub Actions
+    retry_delay = 1
+    for attempt in range(max_retries):
         try:
             with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-                s.settimeout(1)
+                s.settimeout(2)  # Increased socket timeout
                 if s.connect_ex(('localhost', dynamodb_local_port)) == 0:
+                    print(f"✅ DynamoDB Local port forward established on port {dynamodb_local_port}")
                     break
-            time.sleep(1)
-        except:
-            time.sleep(1)
+            # Exponential backoff for GitHub Actions compatibility
+            time.sleep(min(retry_delay, 5))
+            if attempt % 10 == 9:  # Every 10 attempts, increase delay
+                retry_delay = min(retry_delay * 1.5, 3)
+        except Exception as e:
+            print(f"⚠️ Port forward attempt {attempt + 1}/{max_retries} failed: {e}")
+            time.sleep(retry_delay)
     else:
+        # Enhanced error reporting
+        stdout, stderr = process.communicate(timeout=5) if process.poll() is None else (b'', b'')
         process.terminate()
-        raise RuntimeError(f"Failed to establish port forward to DynamoDB Local on port {dynamodb_local_port}")
+        error_msg = f"""Failed to establish port forward to DynamoDB Local on port {dynamodb_local_port}
+        Kubectl stdout: {stdout.decode() if stdout else 'None'}
+        Kubectl stderr: {stderr.decode() if stderr else 'None'}
+        Process return code: {process.returncode}
+        
+        Troubleshooting:
+        1. Verify DynamoDB Local service is running: kubectl get svc -n logging
+        2. Check DynamoDB Local pod status: kubectl get pods -n logging -l app=dynamodb-local
+        3. Verify namespace exists: kubectl get ns logging
+        """
+        raise RuntimeError(error_msg)
     
     try:
         yield dynamodb_local_port
@@ -150,8 +170,93 @@ def tenant_config_table(dynamodb_local_resource: boto3.resource) -> Generator[An
 
 
 @pytest.fixture
+def api_client():
+    """Create an HTTP client for making requests to the tenant configuration API"""
+    class APIClient:
+        def __init__(self, base_url: str = None):
+            if base_url is None:
+                base_url = os.getenv("API_BASE_URL", "http://tenant-config-api:8080")
+            self.base_url = base_url.rstrip('/')
+            self.session = requests.Session()
+            # Set default timeout for all requests
+            self.session.timeout = 30
+        
+        def create_delivery_config(self, tenant_id: str, config_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Create a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs"
+            response = self.session.post(url, json=config_data)
+            response.raise_for_status()
+            return response.json()
+        
+        def get_delivery_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
+            """Get a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        
+        def update_delivery_config(self, tenant_id: str, delivery_type: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Update a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
+            response = self.session.put(url, json=update_data)
+            response.raise_for_status()
+            return response.json()
+        
+        def patch_delivery_config(self, tenant_id: str, delivery_type: str, patch_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Patch a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
+            response = self.session.patch(url, json=patch_data)
+            response.raise_for_status()
+            return response.json()
+        
+        def delete_delivery_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
+            """Delete a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
+            response = self.session.delete(url)
+            response.raise_for_status()
+            return response.json()
+        
+        def list_tenant_delivery_configs(self, tenant_id: str) -> Dict[str, Any]:
+            """List all delivery configurations for a tenant via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs"
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        
+        def list_all_delivery_configs(self, limit: int = 50, last_key: str = None) -> Dict[str, Any]:
+            """List all delivery configurations via API"""
+            url = f"{self.base_url}/api/v1/delivery-configs"
+            params = {"limit": limit}
+            if last_key:
+                params["last_key"] = last_key
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        
+        def validate_delivery_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
+            """Validate a delivery configuration via API"""
+            url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}/validate"
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        
+        def health_check(self) -> Dict[str, Any]:
+            """Check API health"""
+            url = f"{self.base_url}/api/v1/health"
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+    
+    return APIClient()
+
+
+@pytest.fixture
 def delivery_config_service(tenant_config_table, kubectl_port_forward: int):
-    """Create a TenantDeliveryConfigService instance configured for DynamoDB Local"""
+    """Create a TenantDeliveryConfigService instance configured for DynamoDB Local
+    
+    Note: This fixture is kept for table setup/teardown only.
+    Tests should use api_client for data operations.
+    """
     try:
         from src.services.dynamo import TenantDeliveryConfigService
         
@@ -250,8 +355,9 @@ def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
 
 
 @pytest.fixture
-def populated_integration_table(delivery_config_service, multiple_integration_delivery_configs):
-    """A delivery config service with pre-populated integration test data"""
+def populated_integration_table(api_client, tenant_config_table, multiple_integration_delivery_configs):
+    """A delivery config table with pre-populated integration test data via API calls"""
     for config in multiple_integration_delivery_configs:
-        delivery_config_service.create_tenant_config(config)
-    return delivery_config_service
+        # Use API to create delivery configurations instead of direct service calls
+        api_client.create_delivery_config(config["tenant_id"], config)
+    return api_client

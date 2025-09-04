@@ -8,18 +8,15 @@ spec:
     spec:
       containers:
       - name: processor
-        image: log-processor:github-actions
+        image: localhost/log-processor:local-test
         imagePullPolicy: Never
         env:
-        # Integration test specific environment variables
-        - name: AWS_ENDPOINT_URL_S3
-          value: "http://minio:9000"
         - name: AWS_ENDPOINT_URL_DYNAMODB
           value: "http://dynamodb-local:8000"
         - name: AWS_ACCESS_KEY_ID
-          value: "minioadmin"
+          value: "test"
         - name: AWS_SECRET_ACCESS_KEY
-          value: "minioadmin"
+          value: "test"
         - name: SQS_QUEUE_URL
           value: "dummy-sqs-url"
         - name: TENANT_CONFIG_TABLE
@@ -28,10 +25,9 @@ spec:
           value: "arn:aws:iam::123456789012:role/test-role"
         - name: S3_BUCKET_NAME
           value: "test-logs"
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
-            memory: "128Mi"
-            cpu: "100m"
+        - name: AWS_ENDPOINT_URL_S3
+          value: "http://minio:9000"
+        - name: SOURCE_BUCKET
+          value: "test-logs"
+        - name: SCAN_INTERVAL
+          value: "10"

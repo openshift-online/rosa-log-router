@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: tenant-config-api:github-actions
+        image: localhost/tenant-config-api:local-test
         imagePullPolicy: Never
         command:
         - uv

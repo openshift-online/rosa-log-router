@@ -1,0 +1,359 @@
+# Multi-tenant fake log generator setup for realistic testing
+# Creates multiple customer namespaces with different applications
+# to simulate production multi-tenant environment
+
+---
+# Customer 1: acme-corp namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-corp
+  labels:
+    hypershift.openshift.io/hosted-control-plane: "true"
+    customer: "acme-corp"
+    environment: "production"
+
+---
+# Customer 2: globex-industries namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: globex-industries
+  labels:
+    hypershift.openshift.io/hosted-control-plane: "true"
+    customer: "globex-industries"
+    environment: "staging"
+
+---
+# Customer 3: umbrella-corp namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: umbrella-corp
+  labels:
+    hypershift.openshift.io/hosted-control-plane: "true"
+    customer: "umbrella-corp"
+    environment: "development"
+
+---
+# Customer 4: wayne-enterprises namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wayne-enterprises
+  labels:
+    hypershift.openshift.io/hosted-control-plane: "true"
+    customer: "wayne-enterprises"
+    environment: "production"
+
+---
+# ACME Corp - Web Frontend (Payment Service)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: acme-corp
+  labels:
+    app: payment-service
+    tier: frontend
+    customer: acme-corp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+        tier: frontend
+        customer: acme-corp
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - acme-corp
+        - --cluster-id
+        - test-cluster
+        - --application
+        - payment-service
+        - --min-batch-size
+        - "5"
+        - --max-batch-size
+        - "15"
+        - --min-sleep
+        - "2"
+        - --max-sleep
+        - "8"
+        - --total-batches
+        - "50"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# ACME Corp - Database Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-database
+  namespace: acme-corp
+  labels:
+    app: user-database
+    tier: backend
+    customer: acme-corp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-database
+  template:
+    metadata:
+      labels:
+        app: user-database
+        tier: backend
+        customer: acme-corp
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - acme-corp
+        - --cluster-id
+        - test-cluster
+        - --application
+        - user-database
+        - --min-batch-size
+        - "10"
+        - --max-batch-size
+        - "20"
+        - --min-sleep
+        - "5"
+        - --max-sleep
+        - "15"
+        - --total-batches
+        - "30"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Globex Industries - API Gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: globex-industries
+  labels:
+    app: api-gateway
+    tier: middleware
+    customer: globex-industries
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        tier: middleware
+        customer: globex-industries
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - globex-industries
+        - --cluster-id
+        - test-cluster
+        - --application
+        - api-gateway
+        - --min-batch-size
+        - "8"
+        - --max-batch-size
+        - "25"
+        - --min-sleep
+        - "1"
+        - --max-sleep
+        - "5"
+        - --total-batches
+        - "40"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Umbrella Corp - Analytics Engine
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-engine
+  namespace: umbrella-corp
+  labels:
+    app: analytics-engine
+    tier: data
+    customer: umbrella-corp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-engine
+  template:
+    metadata:
+      labels:
+        app: analytics-engine
+        tier: data
+        customer: umbrella-corp
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - umbrella-corp
+        - --cluster-id
+        - test-cluster
+        - --application
+        - analytics-engine
+        - --min-batch-size
+        - "15"
+        - --max-batch-size
+        - "30"
+        - --min-sleep
+        - "3"
+        - --max-sleep
+        - "10"
+        - --total-batches
+        - "25"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Wayne Enterprises - Security Monitor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-monitor
+  namespace: wayne-enterprises
+  labels:
+    app: security-monitor
+    tier: security
+    customer: wayne-enterprises
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: security-monitor
+  template:
+    metadata:
+      labels:
+        app: security-monitor
+        tier: security
+        customer: wayne-enterprises
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - wayne-enterprises
+        - --cluster-id
+        - test-cluster
+        - --application
+        - security-monitor
+        - --min-batch-size
+        - "20"
+        - --max-batch-size
+        - "40"
+        - --min-sleep
+        - "1"
+        - --max-sleep
+        - "3"
+        - --total-batches
+        - "60"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+---
+# Wayne Enterprises - Backup Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-service
+  namespace: wayne-enterprises
+  labels:
+    app: backup-service
+    tier: infrastructure
+    customer: wayne-enterprises
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-service
+  template:
+    metadata:
+      labels:
+        app: backup-service
+        tier: infrastructure
+        customer: wayne-enterprises
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: fake-log-generator:github-actions
+        imagePullPolicy: Never
+        args:
+        - --customer-id
+        - wayne-enterprises
+        - --cluster-id
+        - test-cluster
+        - --application
+        - backup-service
+        - --min-batch-size
+        - "5"
+        - --max-batch-size
+        - "12"
+        - --min-sleep
+        - "10"
+        - --max-sleep
+        - "30"
+        - --total-batches
+        - "20"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"

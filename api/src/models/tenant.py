@@ -9,10 +9,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../shared'))
 from typing import List, Optional, Union, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
-from validation_utils import normalize_bucket_prefix
+# from validation_utils import normalize_bucket_prefix
 
 
 # Shared validation utilities
+def normalize_bucket_prefix(prefix: str) -> str:
+    """Normalize S3 bucket prefix by ensuring it ends with a slash"""
+    if not prefix:
+        return ""
+    return prefix if prefix.endswith('/') else prefix + '/'
+
 def validate_iam_role_arn(arn: Optional[str]) -> Optional[str]:
     """Shared validator for IAM role ARN format"""
     if arn is not None and not arn.startswith('arn:aws:iam::'):

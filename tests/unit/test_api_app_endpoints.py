@@ -30,8 +30,14 @@ def mock_delivery_config_service():
 class TestHealthEndpoint:
     """Test cases for health check endpoint"""
     
-    def test_health_check_success(self, client):
-        """Test successful health check"""
+    @patch('src.services.dynamo.TenantDeliveryConfigService')
+    def test_health_check_success(self, mock_service_class, client):
+        """Test successful health check with DynamoDB connectivity"""
+        # Mock the service class and its dynamodb client
+        mock_service = Mock()
+        mock_service.dynamodb.describe_table.return_value = {"Table": {"TableName": "test-table"}}
+        mock_service_class.return_value = mock_service
+        
         response = client.get("/api/v1/health")
         
         assert response.status_code == 200
@@ -40,6 +46,54 @@ class TestHealthEndpoint:
         assert data["service"] == "tenant-management-api"
         assert "timestamp" in data
         assert "version" in data
+        assert "checks" in data
+        assert data["checks"]["dynamodb"]["status"] == "healthy"
+    
+    @patch('src.services.dynamo.TenantDeliveryConfigService')
+    def test_health_check_dynamodb_table_not_found(self, mock_service_class, client):
+        """Test health check when DynamoDB table doesn't exist"""
+        # Mock the service class to raise ResourceNotFoundException
+        mock_service = Mock()
+        mock_service.dynamodb.meta.client.describe_table.side_effect = Exception("ResourceNotFoundException")
+        mock_service_class.return_value = mock_service
+        
+        response = client.get("/api/v1/health")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"  # Should still be healthy for table not found
+        assert data["checks"]["dynamodb"]["status"] == "healthy"
+        assert data["checks"]["dynamodb"]["note"] == "table_not_exists_but_connection_ok"
+    
+    @patch('src.services.dynamo.TenantDeliveryConfigService')
+    def test_health_check_dynamodb_connection_error(self, mock_service_class, client):
+        """Test health check when DynamoDB connection fails"""
+        # Mock the service class to raise a connection error
+        mock_service = Mock()
+        mock_service.dynamodb.meta.client.describe_table.side_effect = Exception("Connection timeout")
+        mock_service_class.return_value = mock_service
+        
+        response = client.get("/api/v1/health")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"  # Should be degraded for connection issues
+        assert data["checks"]["dynamodb"]["status"] == "unhealthy"
+        assert "Connection timeout" in data["checks"]["dynamodb"]["error"]
+    
+    @patch('src.services.dynamo.TenantDeliveryConfigService')
+    def test_health_check_service_initialization_error(self, mock_service_class, client):
+        """Test health check when DynamoDB service fails to initialize"""
+        # Mock the service class initialization to fail
+        mock_service_class.side_effect = Exception("Failed to initialize service")
+        
+        response = client.get("/api/v1/health")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unhealthy"  # Should be unhealthy for initialization failure
+        assert data["checks"]["dynamodb"]["status"] == "unhealthy"
+        assert "Failed to initialize DynamoDB service" in data["checks"]["dynamodb"]["error"]
 
 
 class TestDeliveryConfigEndpoints:
