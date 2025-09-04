@@ -195,7 +195,7 @@ build_containers() {
     
     # Build processor container (depends on collector)
     log_info "Building processor container..."
-    podman build -f container/Containerfile.processor -t log-processor:local-test container/ --build-arg COLLECTOR_IMAGE=log-collector:local-test
+    podman build -f container/Containerfile.processor -t log-processor:local-test container/
     log_success "Processor container built"
     
     # Build fake log generator container

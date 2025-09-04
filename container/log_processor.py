@@ -10,9 +10,7 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.parse
 import uuid
@@ -71,53 +69,6 @@ CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = os.environ.get('CENTRAL_LOG_DISTRIBUTION_ROL
 SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Compiled regex for Vector log level parsing (performance optimization)
-# Vector format: 2025-08-31T10:53:48.817588Z [LEVEL] component::path: Message
-# Simplified to just match the log level keywords in the first 50 characters
-_VECTOR_LOG_PATTERN = re.compile(r'\b(INFO|WARN|ERROR|DEBUG|TRACE)\b')
-
-# Map Vector levels to Python logging levels (constant for performance)
-_VECTOR_LEVEL_MAP = {
-    'ERROR': logging.ERROR,
-    'WARN': logging.WARNING,
-    'INFO': logging.INFO,
-    'DEBUG': logging.DEBUG,
-    'TRACE': logging.DEBUG
-}
-
-def parse_vector_log_level(log_line: str) -> int:
-    """
-    Parse Vector log line and extract the log level, returning Python logging level.
-    
-    Vector log format: 2025-08-31T10:53:48.817588Z [LEVEL] component::path: Message
-    
-    Args:
-        log_line: Vector log line
-        
-    Returns:
-        Python logging level constant (logging.INFO, logging.WARNING, etc.)
-    """
-    # Only search the first 50 characters where timestamp and level appear
-    # This avoids scanning the entire potentially long log message
-    log_prefix = log_line[:50] if len(log_line) > 50 else log_line
-    
-    match = _VECTOR_LOG_PATTERN.search(log_prefix)
-    if match:
-        vector_level = match.group(1)
-        return _VECTOR_LEVEL_MAP.get(vector_level, logging.WARNING)
-    
-    # Fallback to WARNING for unparseable lines
-    return logging.WARNING
-
-def log_vector_line(log_line: str) -> None:
-    """
-    Log a Vector output line with the appropriate Python log level.
-    
-    Args:
-        log_line: Vector log line to be logged
-    """
-    python_level = parse_vector_log_level(log_line)
-    logger.log(python_level, f"  VECTOR: {log_line}")
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
@@ -323,8 +274,22 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                         if delivery_type == 'cloudwatch':
                             # CloudWatch requires downloading and processing log events
                             log_events, s3_timestamp = download_and_process_log_file(bucket_name, object_key)
-                            deliver_logs_to_cloudwatch(log_events, delivery_config, tenant_info, s3_timestamp)
-                            delivery_stats['successful_deliveries'] += 1
+                            
+                            # Check for processing offset and skip already processed events
+                            processing_metadata = extract_processing_metadata(sqs_record)
+                            offset = processing_metadata.get('offset', 0)
+                            
+                            if offset > 0:
+                                logger.info(f"Found processing offset {offset}, skipping already processed events")
+                                log_events = should_skip_processed_events(log_events, offset)
+                            
+                            if log_events:  # Only process if there are events remaining
+                                deliver_logs_to_cloudwatch(log_events, delivery_config, tenant_info, s3_timestamp)
+                                delivery_stats['successful_deliveries'] += 1
+                            else:
+                                logger.info("All events already processed, skipping delivery")
+                                delivery_stats['successful_deliveries'] += 1
+                                
                         elif delivery_type == 's3':
                             # S3 delivery uses direct S3-to-S3 copy, no download needed
                             deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
@@ -336,6 +301,26 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                     except Exception as delivery_error:
                         logger.error(f"Failed to deliver logs via {delivery_type} for tenant '{tenant_info['tenant_id']}': {str(delivery_error)}")
                         delivery_stats['failed_deliveries'] += 1
+                        
+                        # For CloudWatch failures, try to re-queue with offset if possible
+                        if delivery_type == 'cloudwatch' and 'receiptHandle' in sqs_record:
+                            try:
+                                # Calculate how many events were successfully processed
+                                processing_metadata = extract_processing_metadata(sqs_record)
+                                current_offset = processing_metadata.get('offset', 0)
+                                
+                                # For now, assume partial success isn't trackable, so retry from current offset
+                                # In a more sophisticated implementation, we could track exactly which events failed
+                                requeue_sqs_message_with_offset(
+                                    message_body=sqs_record['body'],
+                                    original_receipt_handle=sqs_record.get('receiptHandle', ''),
+                                    processing_offset=current_offset,
+                                    max_retries=3
+                                )
+                                logger.info(f"Re-queued message for retry with offset {current_offset}")
+                            except Exception as requeue_error:
+                                logger.error(f"Failed to re-queue message: {str(requeue_error)}")
+                        
                         # Continue with other delivery types even if one fails
                 
             except TenantNotFoundError as e:
@@ -741,8 +726,8 @@ def deliver_logs_to_cloudwatch(
         log_stream_name = tenant_info['pod_name']
         target_region = delivery_config.get('target_region', AWS_REGION)
         
-        # Use Vector to deliver logs with native assume_role for second hop
-        deliver_logs_with_vector(
+        # Use native Python CloudWatch Logs delivery (replaces Vector)
+        deliver_logs_to_cloudwatch_native(
             log_events=log_events,
             central_credentials=central_credentials,
             customer_role_arn=delivery_config['log_distribution_role_arn'],
@@ -754,13 +739,13 @@ def deliver_logs_to_cloudwatch(
             s3_timestamp=s3_timestamp
         )
         
-        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} CloudWatch Logs using Vector")
+        logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} CloudWatch Logs using native Python implementation")
         
     except Exception as e:
         logger.error(f"Failed to deliver logs to customer {tenant_info['tenant_id']}: {str(e)}")
         raise
 
-def deliver_logs_with_vector(
+def deliver_logs_to_cloudwatch_native(
     log_events: List[Dict[str, Any]],
     central_credentials: Dict[str, Any],
     customer_role_arn: str,
@@ -770,174 +755,401 @@ def deliver_logs_with_vector(
     log_stream: str,
     session_id: str,
     s3_timestamp: int
-) -> None:
+) -> dict[str, int]:
     """
-    Use Vector subprocess to deliver logs to CloudWatch
+    Pure Python implementation to deliver logs to CloudWatch Logs
+    Replicates all Vector functionality without subprocess dependency
     """
-    temp_config_path = None
-    vector_process = None
-    
-    logger.info(f"Starting Vector delivery for {len(log_events)} log events")
+    logger.info(f"Starting native CloudWatch delivery for {len(log_events)} log events")
     logger.info(f"Target: {log_group}/{log_stream} in {region}")
     
     try:
-        # Load Vector config template
-        template_path = os.path.join(os.path.dirname(__file__), 'vector_config_template.yaml')
-        with open(template_path, 'r') as f:
-            config_template = f.read()
+        # Step 1: Create STS client with central credentials to assume customer role
+        sts_client = boto3.client(
+            'sts',
+            region_name=region,
+            aws_access_key_id=central_credentials['AccessKeyId'],
+            aws_secret_access_key=central_credentials['SecretAccessKey'],
+            aws_session_token=central_credentials['SessionToken']
+        )
         
-        # Substitute parameters and role information
-        config = config_template.format(
-            session_id=session_id,
-            region=region,
+        # Step 2: Assume customer role (second hop)
+        logger.info(f"Assuming customer role: {customer_role_arn}")
+        customer_role_response = sts_client.assume_role(
+            RoleArn=customer_role_arn,
+            RoleSessionName=f"CloudWatchLogDelivery-{session_id}",
+            ExternalId=external_id
+        )
+        
+        customer_credentials = customer_role_response['Credentials']
+        logger.info(f"Successfully assumed customer role")
+        
+        # Step 3: Create CloudWatch Logs client with customer credentials
+        logs_client = boto3.client(
+            'logs',
+            region_name=region,
+            aws_access_key_id=customer_credentials['AccessKeyId'],
+            aws_secret_access_key=customer_credentials['SecretAccessKey'],
+            aws_session_token=customer_credentials['SessionToken']
+        )
+        
+        # Step 4: Process events with Vector-equivalent timestamp handling
+        processed_events = []
+        for event in log_events:
+            message = event.get('message', '')
+            timestamp = event.get('timestamp', s3_timestamp)
+            
+            # Replicate Vector's timestamp processing logic exactly
+            processed_timestamp = process_timestamp_like_vector(timestamp)
+            
+            processed_events.append({
+                'timestamp': processed_timestamp,
+                'message': str(message)
+            })
+        
+        # Step 5: Sort events chronologically (CloudWatch requirement)
+        processed_events.sort(key=lambda x: x['timestamp'])
+        
+        # Step 6: Ensure log group and stream exist
+        ensure_log_group_and_stream_exist(logs_client, log_group, log_stream)
+        
+        # Step 7: Batch and deliver events with Vector-equivalent settings
+        delivery_stats = deliver_events_in_batches(
+            logs_client=logs_client,
             log_group=log_group,
             log_stream=log_stream,
-            customer_role_arn=customer_role_arn,
-            external_id=external_id
+            events=processed_events,
+            max_events_per_batch=1000,  # Match Vector's max_events
+            max_bytes_per_batch=1048576,  # AWS CloudWatch limit
+            timeout_secs=5  # Match Vector's timeout_secs
         )
         
-        # Write config to temporary file
-        temp_config_fd, temp_config_path = tempfile.mkstemp(suffix='.yaml', prefix='vector-config-')
-        with os.fdopen(temp_config_fd, 'w') as f:
-            f.write(config)
-        # File descriptor is automatically closed by fdopen
+        logger.info(f"CloudWatch delivery complete: {delivery_stats['successful_events']} successful, {delivery_stats['failed_events']} failed")
         
-        # Create data directory for Vector
-        data_dir = f"/tmp/vector-{session_id}"
-        os.makedirs(data_dir, exist_ok=True)
+        # If there were failures, we should raise an exception to trigger re-queuing
+        if delivery_stats['failed_events'] > 0:
+            raise Exception(f"Failed to deliver {delivery_stats['failed_events']} out of {delivery_stats['total_processed']} events to CloudWatch")
         
-        # Set up Vector environment variables with central role credentials
-        vector_env = os.environ.copy()
-        vector_env.update({
-            'VECTOR_DATA_DIR': data_dir,
-            'AWS_ACCESS_KEY_ID': central_credentials['AccessKeyId'],
-            'AWS_SECRET_ACCESS_KEY': central_credentials['SecretAccessKey'],
-            'AWS_SESSION_TOKEN': central_credentials['SessionToken'],
-            'AWS_REGION': region,
-            'LOG_GROUP': log_group,
-            'LOG_STREAM': log_stream
-        })
-        
-        # Log critical environment variables (mask sensitive data)
-        logger.info(f"Vector environment variables:")
-        logger.info(f"  VECTOR_DATA_DIR: {data_dir}")
-        logger.info(f"  AWS_ACCESS_KEY_ID: {central_credentials['AccessKeyId'][:10]}...")
-        logger.info(f"  AWS_REGION: {region}")
-        logger.info(f"  LOG_GROUP: {log_group}")
-        logger.info(f"  LOG_STREAM: {log_stream}")
-        logger.info(f"  CUSTOMER_ROLE_ARN: {customer_role_arn}")
-        logger.info(f"  EXTERNAL_ID: {external_id}")
-        
-        # Start Vector subprocess
-        vector_cmd = ['vector', '--config', temp_config_path]
-        logger.info(f"Starting Vector with command: {' '.join(vector_cmd)}")
-        
-        vector_process = subprocess.Popen(
-            vector_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=vector_env
-        )
-        
-        # Give Vector a moment to start
-        import time
-        time.sleep(0.5)
-        
-        # Check if Vector started successfully
-        if vector_process.poll() is not None:
-            stdout, stderr = vector_process.communicate()
-            raise Exception(f"Vector failed to start. Exit code: {vector_process.returncode}, Stdout: {stdout}, Stderr: {stderr}")
-        
-        # Send log events to Vector via stdin
-        logger.info(f"Sending {len(log_events)} log events to Vector")
-        
-        # Send all events as one write to avoid BrokenPipe issues
-
-        # Send JSON objects to Vector, each on a separate line (NDJSON format)
-        all_events = ""
-        timestamp = s3_timestamp
-        for event in log_events:
-            # Extract just the message content and create a simple JSON object
-            message = event.get('message', '')
-            timestamp = event.get('timestamp', timestamp)
-            
-            # Create simple JSON object for Vector
-            # Convert timestamp from milliseconds to seconds for Vector (Vector expects Unix seconds)
-            json_event = {
-                'message': message,
-                'timestamp': timestamp / 1000 if timestamp > 1e12 else timestamp
-            }
-            all_events += json.dumps(json_event) + '\n'
-        
-        # Use communicate to send input and wait for completion
-        logger.info("Waiting for Vector to complete log delivery")
-        try:
-            stdout, stderr = vector_process.communicate(input=all_events, timeout=300)
-            return_code = vector_process.returncode
-            
-            # Log Vector output
-            logger.info(f"Vector process completed with return code: {return_code}")
-            
-            if stdout:
-                logger.info("Vector stdout:")
-                for line in stdout.splitlines():
-                    logger.info(f"  VECTOR: {line}")
-            else:
-                logger.info("Vector stdout: (empty)")
-                
-            if stderr:
-                logger.info("Vector stderr:")
-                for line in stderr.splitlines():
-                    log_vector_line(line)
-            else:
-                logger.info("Vector stderr: (empty)")
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Vector process timed out after 300 seconds")
-            vector_process.kill()
-            stdout, stderr = vector_process.communicate()
-            logger.error(f"Vector stdout after timeout: {stdout}")
-            logger.error(f"Vector stderr after timeout: {stderr}")
-            raise Exception(f"Vector timed out after 300 seconds")
-        except Exception as e:
-            logger.error(f"Failed to communicate with Vector: {str(e)}")
-            raise
-        
-        if return_code != 0:
-            raise Exception(f"Vector exited with non-zero code {return_code}")
-        
-        logger.info(f"Vector successfully delivered {len(log_events)} logs to CloudWatch")
-        
-    except subprocess.TimeoutExpired:
-        logger.error("Vector process timed out")
-        if vector_process:
-            vector_process.kill()
-        raise Exception("Vector process timed out after 5 minutes")
+        return delivery_stats
         
     except Exception as e:
-        logger.error(f"Error in Vector log delivery: {str(e)}")
-        # Log the vector config for debugging
-        if temp_config_path and os.path.exists(temp_config_path):
-            with open(temp_config_path, 'r') as f:
-                logger.error(f"Vector config was: {f.read()}")
+        logger.error(f"Failed to deliver logs to CloudWatch: {str(e)}")
         raise
+
+
+def process_timestamp_like_vector(timestamp: Any) -> int:
+    """
+    Process timestamp exactly like Vector's extract_timestamp transform
+    Handles ISO strings, numeric values, and millisecond/second detection
+    Returns timestamp in milliseconds for CloudWatch API
+    """
+    try:
+        if isinstance(timestamp, str):
+            # Handle ISO timestamp string (Vector uses "%+" format)
+            try:
+                # Remove 'Z' and handle timezone properly
+                if timestamp.endswith('Z'):
+                    timestamp = timestamp[:-1] + '+00:00'
+                dt = datetime.fromisoformat(timestamp)
+                return int(dt.timestamp() * 1000)
+            except ValueError:
+                logger.warning(f"Failed to parse timestamp string: {timestamp}")
+                return int(datetime.now().timestamp() * 1000)
         
-    finally:
-        # Cleanup
-        if temp_config_path and os.path.exists(temp_config_path):
-            os.unlink(temp_config_path)
+        elif isinstance(timestamp, (int, float)):
+            ts_value = float(timestamp)
+            # Vector's logic: if value > 1000000000000.0, it's milliseconds
+            if ts_value > 1000000000000.0:
+                # Already in milliseconds
+                return int(ts_value)
+            else:
+                # In seconds, convert to milliseconds
+                return int(ts_value * 1000)
         
-        # Cleanup data directory
-        data_dir = f"/tmp/vector-{session_id}"
-        if os.path.exists(data_dir):
-            import shutil
-            shutil.rmtree(data_dir, ignore_errors=True)
+        else:
+            logger.warning(f"Unknown timestamp type: {type(timestamp)}, value: {timestamp}")
+            return int(datetime.now().timestamp() * 1000)
+            
+    except Exception as e:
+        logger.warning(f"Error processing timestamp {timestamp}: {str(e)}")
+        return int(datetime.now().timestamp() * 1000)
+
+
+def ensure_log_group_and_stream_exist(logs_client, log_group: str, log_stream: str) -> None:
+    """
+    Ensure log group and log stream exist, creating them if necessary
+    """
+    try:
+        # Check if log group exists, create if not
+        try:
+            logs_client.describe_log_groups(logGroupNamePrefix=log_group, limit=1)
+        except logs_client.exceptions.ResourceNotFoundException:
+            logger.info(f"Creating log group: {log_group}")
+            logs_client.create_log_group(logGroupName=log_group)
         
-        # Ensure process is terminated
-        if vector_process and vector_process.poll() is None:
-            vector_process.kill()
+        # Check if log stream exists, create if not
+        try:
+            logs_client.describe_log_streams(
+                logGroupName=log_group,
+                logStreamNamePrefix=log_stream,
+                limit=1
+            )
+        except logs_client.exceptions.ResourceNotFoundException:
+            logger.info(f"Creating log stream: {log_stream} in group: {log_group}")
+            logs_client.create_log_stream(
+                logGroupName=log_group,
+                logStreamName=log_stream
+            )
+            
+    except Exception as e:
+        logger.error(f"Error ensuring log group/stream exist: {str(e)}")
+        raise
+
+
+def deliver_events_in_batches(
+    logs_client,
+    log_group: str,
+    log_stream: str,
+    events: List[Dict[str, Any]],
+    max_events_per_batch: int = 1000,
+    max_bytes_per_batch: int = 1048576,
+    timeout_secs: int = 5
+) -> Dict[str, int]:
+    """
+    Deliver events in batches with Vector-equivalent retry logic
+    
+    Returns:
+        Dictionary with 'successful_events' and 'failed_events' counts
+    """
+    import time
+    
+    batch_start_time = time.time()
+    current_batch = []
+    current_batch_size = 0
+    events_processed = 0
+    successful_events = 0
+    failed_events = 0
+    
+    def send_batch():
+        nonlocal successful_events, failed_events, current_batch, current_batch_size
+        if not current_batch:
+            return
+            
+        logger.info(f"Sending batch of {len(current_batch)} events to CloudWatch")
+        
+        # Retry logic matching Vector: 3 attempts, 30 second max duration
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            try:
+                response = logs_client.put_log_events(
+                    logGroupName=log_group,
+                    logStreamName=log_stream,
+                    logEvents=list(current_batch)  # Make a copy to avoid reference issues
+                )
+                
+                # Check for rejected events
+                rejected_count = 0
+                if response.get('rejectedLogEventsInfo'):
+                    rejected_info = response['rejectedLogEventsInfo']
+                    if rejected_info.get('tooNewLogEventStartIndex') is not None:
+                        logger.warning(f"Some events were too new: {rejected_info}")
+                        rejected_count += len(current_batch) - rejected_info['tooNewLogEventStartIndex']
+                    if rejected_info.get('tooOldLogEventEndIndex') is not None:
+                        logger.warning(f"Some events were too old: {rejected_info}")
+                        rejected_count += rejected_info['tooOldLogEventEndIndex'] + 1
+                    if rejected_info.get('expiredLogEventEndIndex') is not None:
+                        logger.warning(f"Some events were expired: {rejected_info}")
+                        rejected_count += rejected_info['expiredLogEventEndIndex'] + 1
+                
+                batch_successful = len(current_batch) - rejected_count
+                successful_events += max(0, batch_successful)
+                failed_events += max(0, rejected_count)
+                
+                logger.info(f"Successfully sent batch: {batch_successful} successful, {rejected_count} rejected")
+                
+                # Clear batch after successful sending
+                current_batch.clear()
+                current_batch_size = 0
+                return
+                
+            except ClientError as e:
+                error_code = e.response['Error']['Code']
+                
+                if error_code in ['Throttling', 'ServiceUnavailable']:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Throttled/unavailable, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, 30)  # Exponential backoff, max 30s
+                        continue
+                    else:
+                        logger.error(f"Failed after {max_retries} attempts due to throttling")
+                        failed_events += len(current_batch)
+                        raise
+                        
+                elif error_code == 'InvalidSequenceTokenException':
+                    # Sequence tokens are now ignored by AWS, but just in case
+                    logger.warning("Invalid sequence token, retrying without token")
+                    continue
+                    
+                else:
+                    # Other errors, don't retry
+                    logger.error(f"CloudWatch API error: {error_code}: {e}")
+                    failed_events += len(current_batch)
+                    raise
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Unexpected error, retrying in {retry_delay}s: {str(e)}")
+                    time.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 30)
+                    continue
+                else:
+                    logger.error(f"Failed after {max_retries} attempts: {str(e)}")
+                    failed_events += len(current_batch)
+                    raise
+    
+    for event in events:
+        # Calculate event size (approximate)
+        event_size = len(event['message'].encode('utf-8')) + 26  # 26 bytes overhead per event
+        
+        # Add event to current batch first
+        current_batch.append(event)
+        current_batch_size += event_size
+        events_processed += 1
+        
+        # Check if we need to send current batch after adding this event
+        should_send = (
+            len(current_batch) >= max_events_per_batch or
+            current_batch_size > max_bytes_per_batch or
+            (time.time() - batch_start_time) >= timeout_secs
+        )
+        
+        if should_send:
+            send_batch()
+            batch_start_time = time.time()
+    
+    # Send final batch
+    if current_batch:
+        send_batch()
+    
+    return {
+        'successful_events': successful_events,
+        'failed_events': failed_events,
+        'total_processed': events_processed
+    }
+
+
+def requeue_sqs_message_with_offset(
+    message_body: str,
+    original_receipt_handle: str,
+    processing_offset: int = 0,
+    max_retries: int = 3
+) -> None:
+    """
+    Re-queue an SQS message with processing offset information for resilient processing
+    
+    Args:
+        message_body: Original SQS message body
+        original_receipt_handle: Receipt handle of the original message (for tracking)
+        processing_offset: Offset indicating which log events have been processed successfully
+        max_retries: Maximum number of times to retry re-queuing
+    """
+    if not SQS_QUEUE_URL:
+        logger.warning("SQS_QUEUE_URL not configured, cannot re-queue message")
+        return
+    
+    try:
+        # Parse original message to add offset information
+        try:
+            message_data = json.loads(message_body)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse message body for re-queuing")
+            return
+        
+        # Add processing metadata
+        if 'processing_metadata' not in message_data:
+            message_data['processing_metadata'] = {}
+        
+        # Get current retry count before incrementing
+        current_retry_count = message_data.get('processing_metadata', {}).get('retry_count', 0)
+        new_retry_count = current_retry_count + 1
+        
+        message_data['processing_metadata']['offset'] = processing_offset
+        message_data['processing_metadata']['retry_count'] = new_retry_count
+        message_data['processing_metadata']['original_receipt_handle'] = original_receipt_handle
+        message_data['processing_metadata']['requeued_at'] = datetime.now().isoformat()
+        
+        # Check if we've exceeded retry limits
+        if new_retry_count > max_retries:
+            logger.error(f"Message has exceeded maximum retry count ({max_retries}), discarding")
+            return
+        
+        sqs_client = boto3.client('sqs', region_name=AWS_REGION)
+        
+        # Calculate delay based on original retry count (exponential backoff)
+        delay_seconds = min(2 ** (current_retry_count + 1), 900)  # Max 15 minutes delay
+        
+        logger.info(f"Re-queuing message with offset {processing_offset}, retry {new_retry_count}, delay {delay_seconds}s")
+        
+        # Send message back to queue with delay
+        response = sqs_client.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps(message_data),
+            DelaySeconds=delay_seconds,
+            MessageAttributes={
+                'ProcessingOffset': {
+                    'StringValue': str(processing_offset),
+                    'DataType': 'Number'
+                },
+                'RetryCount': {
+                    'StringValue': str(new_retry_count),
+                    'DataType': 'Number'
+                }
+            }
+        )
+        
+        logger.info(f"Successfully re-queued message with ID: {response.get('MessageId')}")
+        
+    except Exception as e:
+        logger.error(f"Failed to re-queue SQS message: {str(e)}")
+
+
+def extract_processing_metadata(sqs_record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract processing metadata from SQS record (offset, retry count, etc.)
+    
+    Returns:
+        Dictionary with processing metadata or empty dict if none found
+    """
+    try:
+        message_body = json.loads(sqs_record['body'])
+        return message_body.get('processing_metadata', {})
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def should_skip_processed_events(events: List[Dict[str, Any]], offset: int) -> List[Dict[str, Any]]:
+    """
+    Skip events that have already been processed based on offset
+    
+    Args:
+        events: List of log events
+        offset: Number of events to skip (already processed)
+        
+    Returns:
+        List of events starting from the offset
+    """
+    if offset <= 0:
+        return events
+    
+    if offset >= len(events):
+        logger.warning(f"Offset {offset} is >= event count {len(events)}, no events to process")
+        return []
+    
+    logger.info(f"Skipping first {offset} events (already processed), processing remaining {len(events) - offset}")
+    return events[offset:]
 
 
 def deliver_logs_to_s3(
