@@ -14,13 +14,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Log in to Red Hat Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: registry.redhat.io
-        username: ${{ secrets.REDHAT_REGISTRY_USERNAME }}
-        password: ${{ secrets.REDHAT_REGISTRY_PASSWORD }}
-
     - name: Start minikube
       uses: medyagh/setup-minikube@master
       with:
@@ -37,16 +30,6 @@ jobs:
         echo "Creating logging namespace..."
         kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
         echo "✅ Logging namespace ready"
-
-    - name: Create Red Hat registry pull secret
-      run: |
-        echo "Creating Red Hat Container Registry pull secret for minikube..."
-        kubectl create secret docker-registry redhat-registry-secret \
-          --docker-server=registry.redhat.io \
-          --docker-username="${{ secrets.REDHAT_REGISTRY_USERNAME }}" \
-          --docker-password="${{ secrets.REDHAT_REGISTRY_PASSWORD }}" \
-          --namespace=logging
-        echo "✅ Red Hat registry pull secret created"
 
     - name: Deploy DynamoDB Local to minikube
       run: |

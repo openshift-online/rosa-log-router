@@ -1,4 +1,4 @@
-FROM registry.redhat.io/ubi9/ubi:latest
+FROM quay.io/redhat/ubi9:latest
 
 WORKDIR /app
 

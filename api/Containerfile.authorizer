@@ -1,7 +1,7 @@
 # Lambda Authorizer Container for API Gateway
 # This container provides HMAC-SHA256 signature validation using PSK from SSM
 
-FROM registry.redhat.io/ubi9/ubi:latest
+FROM quay.io/redhat/ubi9:latest
 
 # Install Python and basic tools
 RUN dnf install -y python3 python3-pip && \
