@@ -1,7 +1,4 @@
-ARG COLLECTOR_IMAGE=localhost/log-collector:latest
-FROM ${COLLECTOR_IMAGE}
-
-USER 0
+FROM registry.access.redhat.com/ubi9
 
 # Install Python and basic tools
 RUN dnf install -y python3 python3-pip && \
