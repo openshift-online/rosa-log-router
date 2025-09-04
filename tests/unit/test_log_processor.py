@@ -1199,8 +1199,17 @@ class TestCloudWatchBatchOptimization:
         
         # Mock time.time to simulate timeout
         with patch('time.time') as mock_time:
-            # Start at time 0, then jump to 6 seconds (past timeout)
-            mock_time.side_effect = [0, 0, 6, 6, 6]  # Multiple calls during processing
+            # Use a side effect that simulates timeout after the first few calls
+            call_count = 0
+            def time_side_effect():
+                nonlocal call_count
+                call_count += 1
+                if call_count <= 2:
+                    return 0  # Initial calls return 0
+                else:
+                    return 6  # All subsequent calls return 6 (past timeout)
+            
+            mock_time.side_effect = time_side_effect
             
             deliver_events_in_batches(
                 logs_client=mock_logs_client,
