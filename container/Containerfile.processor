@@ -1,4 +1,5 @@
-FROM localhost/log-collector:latest
+ARG COLLECTOR_IMAGE=localhost/log-collector:latest
+FROM ${COLLECTOR_IMAGE}
 
 USER 0
 

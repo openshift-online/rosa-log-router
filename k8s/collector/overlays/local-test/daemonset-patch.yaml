@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-logs
+  namespace: logging
+spec:
+  template:
+    spec:
+      containers:
+      - name: vector
+        image: localhost/log-collector:local-test
+        imagePullPolicy: Never
+        env:
+        - name: S3_BUCKET_NAME
+          value: "test-logs"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: CLUSTER_ID
+          value: "test-cluster"
+        - name: AWS_ACCESS_KEY_ID
+          value: "minioadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "minioadmin"
+        - name: AWS_ENDPOINT_URL_S3
+          value: "http://minio:9000"
+        - name: S3_WRITER_ROLE_ARN
+          value: "arn:aws:iam::123456789012:role/test-s3-writer"

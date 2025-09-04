@@ -8,3 +8,4 @@ spec:
       containers:
       - name: fake-log-generator
         image: fake-log-generator:github-actions
+        imagePullPolicy: Never

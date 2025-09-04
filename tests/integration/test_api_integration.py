@@ -7,43 +7,50 @@ running in Minikube, providing end-to-end validation of the tenant delivery conf
 
 import pytest
 import json
+import requests
 from typing import Dict, Any
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
 
 
-class TestTenantDeliveryConfigServiceIntegration:
-    """Integration tests for TenantDeliveryConfigService with real DynamoDB Local"""
+class TestTenantDeliveryConfigAPIIntegration:
+    """Integration tests for Tenant Delivery Configuration API with real deployed API service"""
     
-    def test_delivery_config_crud_operations(self, delivery_config_service, sample_integration_cloudwatch_config):
-        """Test complete CRUD operations with real DynamoDB"""
+    def test_delivery_config_crud_operations(self, api_client, tenant_config_table, sample_integration_cloudwatch_config):
+        """Test complete CRUD operations via API endpoints"""
         config_data = sample_integration_cloudwatch_config
         tenant_id = config_data["tenant_id"]
         delivery_type = config_data["type"]
         
-        # CREATE: Create delivery configuration
-        created = delivery_config_service.create_tenant_config(config_data)
+        # CREATE: Create delivery configuration via API
+        response = api_client.create_delivery_config(tenant_id, config_data)
+        created = response["data"]
+        assert response["status"] == "success"
         assert created["tenant_id"] == tenant_id
         assert created["type"] == delivery_type
         assert created["enabled"] is True
         assert created["log_distribution_role_arn"] == config_data["log_distribution_role_arn"]
         
-        # READ: Get delivery configuration
-        retrieved = delivery_config_service.get_tenant_config(tenant_id, delivery_type)
+        # READ: Get delivery configuration via API
+        response = api_client.get_delivery_config(tenant_id, delivery_type)
+        retrieved = response["data"]
+        assert response["status"] == "success"
         assert retrieved["tenant_id"] == tenant_id
         assert retrieved["type"] == delivery_type
         assert retrieved["log_group_name"] == config_data["log_group_name"]
         assert retrieved["target_region"] == config_data["target_region"]
         assert retrieved["desired_logs"] == config_data["desired_logs"]
         
-        # UPDATE: Modify delivery configuration
+        # UPDATE: Modify delivery configuration via API
         update_data = {
             "log_group_name": "/aws/logs/updated-integration-tenant",
             "enabled": False,
             "desired_logs": ["updated-app"]
         }
-        updated = delivery_config_service.update_tenant_config(tenant_id, delivery_type, update_data)
+        response = api_client.update_delivery_config(tenant_id, delivery_type, update_data)
+        updated = response["data"]
+        assert response["status"] == "success"
         assert updated["log_group_name"] == "/aws/logs/updated-integration-tenant"
         assert updated["enabled"] is False
         assert updated["desired_logs"] == ["updated-app"]
@@ -51,24 +58,25 @@ class TestTenantDeliveryConfigServiceIntegration:
         assert updated["log_distribution_role_arn"] == config_data["log_distribution_role_arn"]
         assert updated["target_region"] == config_data["target_region"]
         
-        # DELETE: Remove delivery configuration
-        deleted = delivery_config_service.delete_tenant_config(tenant_id, delivery_type)
-        assert deleted is True
+        # DELETE: Remove delivery configuration via API
+        response = api_client.delete_delivery_config(tenant_id, delivery_type)
+        assert response["status"] == "success"
         
-        # Verify deletion
-        from src.services.dynamo import TenantNotFoundError
-        with pytest.raises(TenantNotFoundError):
-            delivery_config_service.get_tenant_config(tenant_id, delivery_type)
+        # Verify deletion via API
+        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+            api_client.get_delivery_config(tenant_id, delivery_type)
+        assert exc_info.value.response.status_code == 404
     
     def test_delivery_config_list_operations(self, populated_integration_table):
-        """Test delivery configuration listing operations with real DynamoDB"""
-        delivery_config_service = populated_integration_table
+        """Test delivery configuration listing operations via API"""
+        api_client = populated_integration_table
         
-        # List all delivery configurations
-        result = delivery_config_service.list_tenant_configs()
+        # List all delivery configurations via API
+        response = api_client.list_all_delivery_configs()
+        result = response["data"]
+        assert response["status"] == "success"
         assert result["count"] == 4  # 2 tenants x 2 delivery types each
         assert len(result["configurations"]) == 4
-        assert result["limit"] == 50
         
         # Verify all test configurations are present
         config_keys = [(c["tenant_id"], c["type"]) for c in result["configurations"]]
@@ -78,22 +86,24 @@ class TestTenantDeliveryConfigServiceIntegration:
         assert ("integration-tenant-2", "s3") in config_keys
         
         # Test limited listing
-        limited_result = delivery_config_service.list_tenant_configs(limit=2)
+        limited_response = api_client.list_all_delivery_configs(limit=2)
+        limited_result = limited_response["data"]
+        assert limited_response["status"] == "success"
         assert limited_result["count"] == 2
         assert len(limited_result["configurations"]) == 2
-        assert limited_result["limit"] == 2
-        assert "last_key" in limited_result
         
         # Test tenant-specific listing
-        tenant_configs = delivery_config_service.get_tenant_configs("integration-tenant-1")
-        assert len(tenant_configs) == 2
-        tenant_types = [c["type"] for c in tenant_configs]
+        tenant_response = api_client.list_tenant_delivery_configs("integration-tenant-1")
+        tenant_result = tenant_response["data"]
+        assert tenant_response["status"] == "success"
+        assert len(tenant_result["configurations"]) == 2
+        tenant_types = [c["type"] for c in tenant_result["configurations"]]
         assert "cloudwatch" in tenant_types
         assert "s3" in tenant_types
     
-    def test_delivery_config_validation_integration(self, delivery_config_service):
-        """Test delivery configuration validation with real DynamoDB"""
-        # Create delivery configuration with invalid configuration
+    def test_delivery_config_validation_integration(self, api_client, tenant_config_table):
+        """Test delivery configuration validation via API"""
+        # Create delivery configuration with invalid configuration via API
         invalid_config = {
             "tenant_id": "invalid-integration-tenant",
             "type": "cloudwatch",
@@ -101,12 +111,13 @@ class TestTenantDeliveryConfigServiceIntegration:
             "log_group_name": "",  # Empty required field
             "target_region": "invalid-region!"
         }
-        delivery_config_service.create_tenant_config(invalid_config)
+        api_client.create_delivery_config("invalid-integration-tenant", invalid_config)
         
-        # Validate configuration
-        validation_result = delivery_config_service.validate_tenant_config(
-            "invalid-integration-tenant", "cloudwatch")
+        # Validate configuration via API
+        response = api_client.validate_delivery_config("invalid-integration-tenant", "cloudwatch")
+        validation_result = response["data"]
         
+        assert response["status"] == "success"
         assert validation_result["tenant_id"] == "invalid-integration-tenant"
         assert validation_result["type"] == "cloudwatch"
         assert validation_result["valid"] is False
@@ -131,8 +142,8 @@ class TestTenantDeliveryConfigServiceIntegration:
         region_check = check_results["target_region"]
         assert region_check["status"] == "invalid"
     
-    def test_concurrent_operations(self, delivery_config_service, sample_integration_cloudwatch_config):
-        """Test concurrent operations with real DynamoDB"""
+    def test_concurrent_operations(self, api_client, tenant_config_table, sample_integration_cloudwatch_config):
+        """Test concurrent operations via API"""
         import threading
         import time
         
@@ -146,12 +157,12 @@ class TestTenantDeliveryConfigServiceIntegration:
                 config_data["tenant_id"] = f"concurrent-tenant-{config_suffix}"
                 config_data["log_group_name"] = f"/aws/logs/concurrent-tenant-{config_suffix}"
                 
-                result = delivery_config_service.create_tenant_config(config_data)
-                results[config_suffix] = result
+                response = api_client.create_delivery_config(f"concurrent-tenant-{config_suffix}", config_data)
+                results[config_suffix] = response["data"]
             except Exception as e:
                 errors[config_suffix] = str(e)
         
-        # Create multiple delivery configurations concurrently
+        # Create multiple delivery configurations concurrently via API
         threads = []
         for i in range(5):
             thread = threading.Thread(target=create_config_worker, args=(str(i),))
@@ -166,44 +177,45 @@ class TestTenantDeliveryConfigServiceIntegration:
         assert len(errors) == 0, f"Concurrent operations failed: {errors}"
         assert len(results) == 5
         
-        # Verify all delivery configurations were created successfully
+        # Verify all delivery configurations were created successfully via API
         for i in range(5):
             tenant_id = f"concurrent-tenant-{i}"
             delivery_type = "cloudwatch"
             assert str(i) in results
             assert results[str(i)]["tenant_id"] == tenant_id
             
-            # Verify delivery configuration exists in DynamoDB
-            retrieved = delivery_config_service.get_tenant_config(tenant_id, delivery_type)
+            # Verify delivery configuration exists via API
+            response = api_client.get_delivery_config(tenant_id, delivery_type)
+            retrieved = response["data"]
             assert retrieved["tenant_id"] == tenant_id
             assert retrieved["type"] == delivery_type
     
-    def test_error_handling_integration(self, delivery_config_service, sample_integration_cloudwatch_config):
-        """Test error handling with real DynamoDB responses"""
-        from src.services.dynamo import TenantNotFoundError, DynamoDBError
-        
+    def test_error_handling_integration(self, api_client, tenant_config_table, sample_integration_cloudwatch_config):
+        """Test error handling with real API responses"""
         # Test delivery configuration not found
-        with pytest.raises(TenantNotFoundError) as exc_info:
-            delivery_config_service.get_tenant_config("nonexistent-integration-tenant", "cloudwatch")
-        assert "not found" in str(exc_info.value).lower()
+        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+            api_client.get_delivery_config("nonexistent-integration-tenant", "cloudwatch")
+        assert exc_info.value.response.status_code == 404
         
         # Test duplicate delivery configuration creation
-        delivery_config_service.create_tenant_config(sample_integration_cloudwatch_config)
+        api_client.create_delivery_config(sample_integration_cloudwatch_config["tenant_id"], sample_integration_cloudwatch_config)
         
-        with pytest.raises(DynamoDBError) as exc_info:
-            delivery_config_service.create_tenant_config(sample_integration_cloudwatch_config)
-        assert "already exists" in str(exc_info.value).lower()
+        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+            api_client.create_delivery_config(sample_integration_cloudwatch_config["tenant_id"], sample_integration_cloudwatch_config)
+        assert exc_info.value.response.status_code == 409  # Conflict
         
         # Test update non-existent delivery configuration
-        with pytest.raises(TenantNotFoundError):
-            delivery_config_service.update_tenant_config("nonexistent-tenant", "cloudwatch", {"enabled": False})
+        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+            api_client.update_delivery_config("nonexistent-tenant", "cloudwatch", {"enabled": False})
+        assert exc_info.value.response.status_code == 404
         
         # Test delete non-existent delivery configuration
-        with pytest.raises(TenantNotFoundError):
-            delivery_config_service.delete_tenant_config("nonexistent-tenant", "cloudwatch")
+        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+            api_client.delete_delivery_config("nonexistent-tenant", "cloudwatch")
+        assert exc_info.value.response.status_code == 404
     
-    def test_large_data_operations(self, delivery_config_service):
-        """Test operations with larger datasets"""
+    def test_large_data_operations(self, api_client):
+        """Test operations with larger datasets via API"""
         # Create many delivery configurations (both cloudwatch and s3 for each tenant)
         tenant_count = 12
         created_configs = []
@@ -231,32 +243,27 @@ class TestTenantDeliveryConfigServiceIntegration:
                 "desired_logs": [f"app-{i}", f"service-{i}"]
             }
             
-            cw_result = delivery_config_service.create_tenant_config(cloudwatch_config)
-            s3_result = delivery_config_service.create_tenant_config(s3_config)
-            created_configs.append((cw_result["tenant_id"], cw_result["type"]))
-            created_configs.append((s3_result["tenant_id"], s3_result["type"]))
+            cw_response = api_client.create_delivery_config(f"bulk-tenant-{i:03d}", cloudwatch_config)
+            s3_response = api_client.create_delivery_config(f"bulk-tenant-{i:03d}", s3_config)
+            created_configs.append((cw_response["data"]["tenant_id"], cw_response["data"]["type"]))
+            created_configs.append((s3_response["data"]["tenant_id"], s3_response["data"]["type"]))
         
         assert len(created_configs) == tenant_count * 2  # 2 configs per tenant
         
-        # Test paginated listing
+        # Test paginated listing via API
         all_configs = []
         last_key = None
         page_size = 10
         
         while True:
-            if last_key:
-                # Parse last_key format "tenant_id#type"
-                tenant_id, config_type = last_key.split('#', 1)
-                parsed_last_key = {'tenant_id': tenant_id, 'type': config_type}
-                result = delivery_config_service.list_tenant_configs(limit=page_size, last_key=parsed_last_key)
-            else:
-                result = delivery_config_service.list_tenant_configs(limit=page_size)
+            result = api_client.list_all_delivery_configs(limit=page_size, last_key=last_key)
+            result_data = result["data"]
             
-            all_configs.extend(result["configurations"])
+            all_configs.extend(result_data["configurations"])
             
-            if "last_key" not in result:
+            if "last_key" not in result_data:
                 break
-            last_key = result["last_key"]
+            last_key = result_data["last_key"]
         
         # Verify we got all created configurations (plus any from other tests)
         bulk_config_keys = [(c["tenant_id"], c["type"]) for c in all_configs if c["tenant_id"].startswith("bulk-tenant-")]

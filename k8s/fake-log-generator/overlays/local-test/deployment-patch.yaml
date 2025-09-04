@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-e2e
+  namespace: e2e-test-tenant
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: localhost/fake-log-generator:local-test
+        imagePullPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-log-generator-multi
+  namespace: multi-delivery-tenant
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: localhost/fake-log-generator:local-test
+        imagePullPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: filtered-tenant
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: localhost/fake-log-generator:local-test
+        imagePullPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: filtered-tenant
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: localhost/fake-log-generator:local-test
+        imagePullPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blocked-service
+  namespace: filtered-tenant
+spec:
+  template:
+    spec:
+      containers:
+      - name: fake-log-generator
+        image: localhost/fake-log-generator:local-test
+        imagePullPolicy: Never

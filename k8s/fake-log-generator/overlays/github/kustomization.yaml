@@ -5,29 +5,7 @@ metadata:
   name: fake-log-generator-github-overlay
 
 resources:
-- ../../base
-
-patches:
-- path: e2e-deployment-patch.yaml
-  target:
-    kind: Deployment
-    name: fake-log-generator-e2e
-- path: multi-deployment-patch.yaml
-  target:
-    kind: Deployment
-    name: fake-log-generator-multi
-- path: payment-deployment-patch.yaml
-  target:
-    kind: Deployment
-    name: payment-service
-- path: user-deployment-patch.yaml
-  target:
-    kind: Deployment
-    name: user-service
-- path: blocked-deployment-patch.yaml
-  target:
-    kind: Deployment
-    name: blocked-service
+- multi-tenant-setup.yaml
 
 labels:
 - includeSelectors: true

@@ -8,7 +8,7 @@ resources:
 
 namespace: logging
 
-# Patches for GitHub Actions integration testing
+# Patches for local integration testing
 patches:
   - target:
       kind: ConfigMap
@@ -17,7 +17,7 @@ patches:
   - target:
       kind: DaemonSet
       name: vector-logs
-    path: vector-daemonset-patch.yaml
+    path: daemonset-patch.yaml
 
 # Override some labels for testing
 labels:
@@ -25,4 +25,4 @@ labels:
   pairs:
     app.kubernetes.io/name: vector
     app.kubernetes.io/part-of: multi-tenant-logging
-    testing.environment: github-actions
+    testing.environment: local-test

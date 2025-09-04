@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: minio-credentials
-  namespace: default
+  namespace: logging
 type: Opaque
 stringData:
   access-key: "minioadmin"
@@ -13,7 +13,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: default
+  namespace: logging
   labels:
     app: minio
 spec:
@@ -33,7 +33,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
-  namespace: default
+  namespace: logging
   labels:
     app: minio
 spec:
@@ -101,7 +101,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: minio-setup
-  namespace: default
+  namespace: logging
   labels:
     app: minio-setup
 spec:

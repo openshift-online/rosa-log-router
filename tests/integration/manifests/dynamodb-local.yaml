@@ -1,25 +1,8 @@
-apiVersion: v1
-kind: Service
-metadata:
-  name: dynamodb-local
-  namespace: default
-  labels:
-    app: dynamodb-local
-spec:
-  selector:
-    app: dynamodb-local
-  ports:
-  - name: api
-    port: 8000
-    targetPort: 8000
-  type: ClusterIP
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dynamodb-local
-  namespace: default
+  namespace: logging
   labels:
     app: dynamodb-local
 spec:
@@ -34,29 +17,11 @@ spec:
     spec:
       containers:
       - name: dynamodb-local
-        image: amazon/dynamodb-local:latest
-        command:
-        - java
-        args:
-        - -jar
-        - DynamoDBLocal.jar
-        - -sharedDb
-        - -inMemory
-        - -port
-        - "8000"
+        image: docker.io/amazon/dynamodb-local:latest
+        args: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
         ports:
         - containerPort: 8000
-          name: api
-        readinessProbe:
-          tcpSocket:
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        livenessProbe:
-          tcpSocket:
-            port: 8000
-          initialDelaySeconds: 15
-          periodSeconds: 10
+          name: dynamodb
         resources:
           requests:
             memory: "256Mi"
@@ -64,10 +29,34 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "200m"
-        env:
-        - name: AWS_ACCESS_KEY_ID
-          value: "test"
-        - name: AWS_SECRET_ACCESS_KEY
-          value: "test"
-        - name: AWS_DEFAULT_REGION
-          value: "us-east-1"
+        readinessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 45
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamodb-local
+  namespace: logging
+  labels:
+    app: dynamodb-local
+spec:
+  selector:
+    app: dynamodb-local
+  ports:
+  - name: dynamodb
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
