@@ -1,4 +1,4 @@
-FROM registry.fedoraproject.org/fedora:42
+FROM registry.access.redhat.com/ubi9
 
 # Install Python and basic tools
 RUN dnf update -y && \

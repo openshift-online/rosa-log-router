@@ -1,13 +1,17 @@
 # API Service Container for Tenant Management
 # This container provides REST API endpoints for managing tenant configurations
 
-FROM public.ecr.aws/lambda/python:3.13
+FROM registry.access.redhat.com/ubi9
+
+# Install Python and basic tools
+RUN dnf install -y python3 python3-pip && \
+    dnf clean all
 
 # Set working directory
-WORKDIR ${LAMBDA_TASK_ROOT}
+WORKDIR /var/task
 
 # Install uv for fast Python package management
-RUN pip install --no-cache-dir uv
+RUN pip3 install --no-cache-dir uv
 
 # Copy dependency files first for better caching
 COPY pyproject.toml uv.lock README.md ./
@@ -18,5 +22,5 @@ RUN uv sync --frozen --no-dev
 # Copy API source code
 COPY src/ ./src/
 
-# Set the Lambda handler
-CMD ["src.app.lambda_handler"]
+# Set the Lambda handler using AWS Lambda Runtime Interface Client
+CMD ["python3", "-m", "awslambdaric", "src.app.lambda_handler"]
