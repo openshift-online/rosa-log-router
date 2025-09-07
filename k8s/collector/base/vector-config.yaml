@@ -52,71 +52,76 @@ data:
           # Attempt to parse the message field as JSON for timestamp extraction only
           # Do NOT merge parsed JSON into the top-level event - preserve original message
           # Original JSON payload should remain in .message for delivery
-          parsed, err = parse_json(.message)
-          if err == null && is_object(parsed) {
-            # Handle timestamp precedence: prefer JSON log timestamps over Vector's timestamp
-            # Priority order: ts -> time -> stageTimestamp -> requestReceivedTimestamp -> Vector default
-            
-            # Try 'ts' field first (etcd, ignition-server style)
-            if exists(parsed.ts) {
-              ts_value = parsed.ts
-              if is_string(ts_value) {
-                # Handle ISO timestamp strings
-                parsed_ts, ts_err = parse_timestamp(ts_value, "%+")
-                if ts_err == null {
-                  .timestamp = parsed_ts
-                } else {
-                  # Try Unix timestamp in string format
-                  unix_ts, unix_err = to_float(ts_value)
-                  if unix_err == null {
-                    # Convert to timestamp (handle both seconds and milliseconds)
-                    unix_ts_int = to_int(unix_ts)
-                    if unix_ts < 1000000000000.0 {
-                      .timestamp = from_unix_timestamp!(unix_ts_int, "seconds")
-                    } else {
-                      unix_ts_ms = unix_ts / 1000
-                      .timestamp = from_unix_timestamp!(to_int(unix_ts_ms), "seconds")
+          
+          # Performance optimization: only attempt JSON parsing if message looks like JSON
+          message_str = string!(.message)
+          if starts_with(message_str, "{") || starts_with(message_str, "[") {
+            parsed, err = parse_json(.message)
+            if err == null && is_object(parsed) {
+              # Handle timestamp precedence: prefer JSON log timestamps over Vector's timestamp
+              # Priority order: ts -> time -> stageTimestamp -> requestReceivedTimestamp -> Vector default
+              
+              # Try 'ts' field first (etcd, ignition-server style)
+              if exists(parsed.ts) {
+                ts_value = parsed.ts
+                if is_string(ts_value) {
+                  # Handle ISO timestamp strings
+                  parsed_ts, ts_err = parse_timestamp(ts_value, "%+")
+                  if ts_err == null {
+                    .timestamp = parsed_ts
+                  } else {
+                    # Try Unix timestamp in string format
+                    unix_ts, unix_err = to_float(ts_value)
+                    if unix_err == null {
+                      # Convert to timestamp (handle both seconds and milliseconds)
+                      unix_ts_int = to_int(unix_ts)
+                      if unix_ts < 1000000000000.0 {
+                        .timestamp = from_unix_timestamp!(unix_ts_int, "seconds")
+                      } else {
+                        unix_ts_ms = unix_ts / 1000
+                        .timestamp = from_unix_timestamp!(to_int(unix_ts_ms), "seconds")
+                      }
                     }
                   }
+                } else if is_float(ts_value) || is_integer(ts_value) {
+                  # Handle numeric timestamps
+                  ts_float = to_float!(ts_value)
+                  if ts_float < 1000000000000.0 {
+                    .timestamp = from_unix_timestamp!(to_int!(ts_value), "seconds")
+                  } else {
+                    ts_seconds = to_float!(ts_value) / 1000.0
+                    .timestamp = from_unix_timestamp!(to_int(ts_seconds), "seconds")
+                  }
                 }
-              } else if is_float(ts_value) || is_integer(ts_value) {
-                # Handle numeric timestamps
-                ts_float = to_float!(ts_value)
-                if ts_float < 1000000000000.0 {
-                  .timestamp = from_unix_timestamp!(to_int!(ts_value), "seconds")
-                } else {
-                  ts_seconds = to_float!(ts_value) / 1000.0
-                  .timestamp = from_unix_timestamp!(to_int(ts_seconds), "seconds")
+              # Try 'time' field as fallback (alternative JSON timestamp field)
+              } else if exists(parsed.time) {
+                time_value = parsed.time
+                if is_string(time_value) {
+                  # Handle ISO timestamp strings
+                  parsed_time, time_err = parse_timestamp(time_value, "%+")
+                  if time_err == null {
+                    .timestamp = parsed_time
+                  }
                 }
-              }
-            # Try 'time' field as fallback (alternative JSON timestamp field)
-            } else if exists(parsed.time) {
-              time_value = parsed.time
-              if is_string(time_value) {
-                # Handle ISO timestamp strings
-                parsed_time, time_err = parse_timestamp(time_value, "%+")
-                if time_err == null {
-                  .timestamp = parsed_time
+              # Try 'stageTimestamp' field (Kubernetes audit logs - primary)
+              } else if exists(parsed.stageTimestamp) {
+                stage_timestamp = parsed.stageTimestamp
+                if is_string(stage_timestamp) {
+                  # Handle ISO timestamp strings
+                  parsed_ts, ts_err = parse_timestamp(stage_timestamp, "%+")
+                  if ts_err == null {
+                    .timestamp = parsed_ts
+                  }
                 }
-              }
-            # Try 'stageTimestamp' field (Kubernetes audit logs - primary)
-            } else if exists(parsed.stageTimestamp) {
-              stage_timestamp = parsed.stageTimestamp
-              if is_string(stage_timestamp) {
-                # Handle ISO timestamp strings
-                parsed_ts, ts_err = parse_timestamp(stage_timestamp, "%+")
-                if ts_err == null {
-                  .timestamp = parsed_ts
-                }
-              }
-            # Try 'requestReceivedTimestamp' field (Kubernetes audit logs - fallback)
-            } else if exists(parsed.requestReceivedTimestamp) {
-              request_timestamp = parsed.requestReceivedTimestamp
-              if is_string(request_timestamp) {
-                # Handle ISO timestamp strings
-                parsed_ts, ts_err = parse_timestamp(request_timestamp, "%+")
-                if ts_err == null {
-                  .timestamp = parsed_ts
+              # Try 'requestReceivedTimestamp' field (Kubernetes audit logs - fallback)
+              } else if exists(parsed.requestReceivedTimestamp) {
+                request_timestamp = parsed.requestReceivedTimestamp
+                if is_string(request_timestamp) {
+                  # Handle ISO timestamp strings
+                  parsed_ts, ts_err = parse_timestamp(request_timestamp, "%+")
+                  if ts_err == null {
+                    .timestamp = parsed_ts
+                  }
                 }
               }
             }
