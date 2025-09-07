@@ -36,6 +36,12 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Vector metadata fields to exclude when creating fallback messages
+VECTOR_METADATA_FIELDS = {
+    'cluster_id', 'namespace', 'application', 'pod_name',
+    'ingest_timestamp', 'timestamp', 'kubernetes'
+}
+
 # Custom exception classes
 class NonRecoverableError(Exception):
     """Exception for errors that should not be retried (e.g., missing tenant config)"""
@@ -683,8 +689,7 @@ def convert_log_record_to_event(log_record: Dict[str, Any]) -> Optional[Dict[str
             # Fallback: if no message field, use the entire record (excluding Vector metadata)
             # Remove Vector control fields to get clean log data
             message = {k: v for k, v in log_record.items()
-                      if k not in ['cluster_id', 'namespace', 'application', 'pod_name',
-                                   'ingest_timestamp', 'timestamp', 'kubernetes']}
+                      if k not in VECTOR_METADATA_FIELDS}
 
         # Keep JSON as JSON objects for CloudWatch - don't escape to strings
         # CloudWatch Logs will receive actual JSON structure, not escaped JSON strings
