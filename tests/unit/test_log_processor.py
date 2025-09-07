@@ -4,11 +4,9 @@ Unit tests for log_processor.py
 import json
 import gzip
 import pytest
-from unittest.mock import patch, Mock, MagicMock, call, mock_open
-from datetime import datetime
-from typing import Dict, Any, List
+from unittest.mock import patch, Mock, MagicMock
+from typing import Dict, Any
 import boto3
-from moto import mock_aws
 from freezegun import freeze_time
 
 # Import the module under test
@@ -421,10 +419,11 @@ class TestLogProcessing:
     
     @freeze_time("2024-01-01 12:00:00")
     def test_convert_log_record_to_event_with_timestamp(self):
-        """Test converting pre-structured log record with timestamp."""
-        # Since Vector now handles JSON parsing, log records are already structured
+        """Test converting pre-structured log record with parsed timestamp."""
+        # Vector now preserves original message and uses parsed timestamp for CloudWatch
         log_record = {
-            "timestamp": "2024-01-01T10:00:00Z",
+            "ingest_timestamp": "2024-01-01T10:00:00Z",  # Vector's collection time (metadata only)
+            "timestamp": "2024-01-01T09:00:00Z",  # Original log timestamp
             "message": "Test log message",
             "level": "INFO",
             "cluster_id": "test-cluster",
@@ -436,8 +435,8 @@ class TestLogProcessing:
         
         assert event is not None
         assert event['message'] == 'Test log message'
-        # The timestamp should be around 2024-01-01T10:00:00Z, allow some tolerance for timezone conversion
-        assert 1704099600000 <= event['timestamp'] <= 1704103200000
+        # Should use timestamp (09:00) for CloudWatch delivery, not ingest_timestamp (10:00)
+        assert event['timestamp'] == 1704099600000  # 09:00 in milliseconds
     
     @freeze_time("2024-01-01 12:00:00")
     def test_convert_log_record_to_event_without_timestamp(self):
@@ -458,18 +457,20 @@ class TestLogProcessing:
     
     def test_convert_log_record_to_event_no_message(self):
         """Test converting pre-structured log record without message field."""
-        # Since Vector now handles JSON parsing, log records are already structured
+        # Vector now preserves structure but filters out control metadata
         log_record = {
             "timestamp": "2024-01-01T10:00:00Z", 
             "level": "INFO",
-            "cluster_id": "test-cluster",
+            "cluster_id": "test-cluster",  # This gets filtered out
             "data": "some data"
         }
         
         event = convert_log_record_to_event(log_record)
         
         assert event is not None
-        assert json.loads(event['message']) == log_record  # Entire record as JSON fallback
+        # Should get clean log data without Vector metadata
+        expected_message = {"level": "INFO", "data": "some data"}
+        assert event['message'] == expected_message  # JSON object, not escaped string
     
     def test_convert_log_record_to_event_plain_text_from_vector(self):
         """Test converting plain text log that was processed by Vector."""
@@ -490,15 +491,19 @@ class TestLogProcessing:
         assert 1704099600000 <= event['timestamp'] <= 1704103200000
     
     def test_convert_log_record_to_event_json_log_from_vector(self):
-        """Test converting JSON log that was processed and parsed by Vector."""
-        # Vector parses JSON logs and merges fields into the top level
+        """Test converting JSON log that preserves original JSON structure."""
+        # Vector now preserves original JSON in message field, with control metadata separate
         log_record = {
-            "timestamp": "2024-01-01T10:00:00Z",
-            "message": "Payment processed successfully",
-            "level": "INFO",
-            "request_id": "req-12345",
-            "user_id": "user-789",
-            "amount": 100.50,
+            "ingest_timestamp": "2024-01-01T10:00:00Z",  # Vector's collection time (metadata only)
+            "timestamp": "2024-01-01T09:30:00Z",  # Parsed timestamp from log content
+            "message": {  # Original JSON log preserved as JSON object
+                "level": "INFO",
+                "msg": "Payment processed successfully",
+                "request_id": "req-12345",
+                "user_id": "user-789",
+                "amount": 100.50,
+                "ts": "2024-01-01T09:30:00Z"  # Original timestamp in JSON
+            },
             "cluster_id": "test-cluster",
             "namespace": "default",
             "application": "payment-service",
@@ -508,8 +513,57 @@ class TestLogProcessing:
         event = convert_log_record_to_event(log_record)
         
         assert event is not None
-        assert event['message'] == "Payment processed successfully"
-        assert 1704099600000 <= event['timestamp'] <= 1704103200000
+        # Message should be the original JSON object, not escaped string
+        assert isinstance(event['message'], dict)
+        assert event['message']['msg'] == "Payment processed successfully"
+        assert event['message']['request_id'] == "req-12345"
+        assert event['message']['amount'] == 100.50
+        # Should use parsed timestamp (09:30), not ingest_timestamp (10:00)
+        assert event['timestamp'] == 1704101400000  # 09:30 in milliseconds
+    
+    def test_convert_log_record_timestamp_for_cloudwatch_delivery(self):
+        """Test that timestamp (not ingest_timestamp) is used for CloudWatch delivery."""
+        log_record = {
+            "ingest_timestamp": "2024-01-01T12:00:00Z",  # Vector's collection time (metadata only)
+            "timestamp": "2024-01-01T11:00:00Z",         # Original/parsed timestamp
+            "message": "Test message"
+        }
+        
+        event = convert_log_record_to_event(log_record)
+        
+        assert event is not None
+        # Should use timestamp (11:00) for CloudWatch delivery, not ingest_timestamp (12:00)
+        assert event['timestamp'] == 1704106800000  # 11:00 in milliseconds
+    
+    def test_convert_log_record_json_structure_preserved(self):
+        """Test that JSON structure is preserved, not escaped to string."""
+        log_record = {
+            "timestamp": "2024-01-01T10:00:00Z",
+            "message": {
+                "level": "error", 
+                "error": {
+                    "code": 500,
+                    "details": ["timeout", "retry needed"]
+                },
+                "request": {
+                    "id": "req-123",
+                    "user": "alice"
+                }
+            }
+        }
+        
+        event = convert_log_record_to_event(log_record)
+        
+        assert event is not None
+        # Verify JSON structure is preserved at all levels
+        assert isinstance(event['message'], dict)
+        assert event['message']['level'] == "error"
+        assert isinstance(event['message']['error'], dict)
+        assert event['message']['error']['code'] == 500
+        assert isinstance(event['message']['error']['details'], list)
+        assert event['message']['error']['details'] == ["timeout", "retry needed"]
+        assert isinstance(event['message']['request'], dict)
+        assert event['message']['request']['id'] == "req-123"
 
 
 class TestMultiDeliveryLogic:

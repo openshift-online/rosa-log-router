@@ -41,28 +41,25 @@ data:
           if !exists(.timestamp) {
             .timestamp = now()
           }
-      
+          
+          # Store Vector's ingestion timestamp before any processing
+          .ingest_timestamp = .timestamp
+          
       parse_json_logs:
         type: "remap"
         inputs: ["enrich_metadata"]
         source: |
-          # Attempt to parse the message field as JSON
-          # If successful, merge the parsed JSON fields into the top-level event
-          # If parsing fails, leave the message field as plain text
+          # Attempt to parse the message field as JSON for timestamp extraction only
+          # Do NOT merge parsed JSON into the top-level event - preserve original message
+          # Original JSON payload should remain in .message for delivery
           parsed, err = parse_json(.message)
           if err == null && is_object(parsed) {
-            # Store Vector's original timestamp as fallback
-            original_timestamp = .timestamp
-            
-            # Merge parsed JSON into the event, preserving existing fields
-            . = merge!(., parsed)
-            
             # Handle timestamp precedence: prefer JSON log timestamps over Vector's timestamp
             # Priority order: ts -> time -> stageTimestamp -> requestReceivedTimestamp -> Vector default
             
             # Try 'ts' field first (etcd, ignition-server style)
-            if exists(.ts) {
-              ts_value = .ts
+            if exists(parsed.ts) {
+              ts_value = parsed.ts
               if is_string(ts_value) {
                 # Handle ISO timestamp strings
                 parsed_ts, ts_err = parse_timestamp(ts_value, "%+")
@@ -80,9 +77,6 @@ data:
                       unix_ts_ms = unix_ts / 1000
                       .timestamp = from_unix_timestamp!(to_int(unix_ts_ms), "seconds")
                     }
-                  } else {
-                    # Keep Vector's original timestamp if parsing fails
-                    .timestamp = original_timestamp
                   }
                 }
               } else if is_float(ts_value) || is_integer(ts_value) {
@@ -94,84 +88,39 @@ data:
                   ts_seconds = to_float!(ts_value) / 1000.0
                   .timestamp = from_unix_timestamp!(to_int(ts_seconds), "seconds")
                 }
-              } else {
-                # Keep Vector's original timestamp if ts is not a recognized format
-                .timestamp = original_timestamp
               }
-              
-              # Remove the 'ts' field to avoid duplication
-              del(.ts)
             # Try 'time' field as fallback (alternative JSON timestamp field)
-            } else if exists(.time) {
-              time_value = .time
+            } else if exists(parsed.time) {
+              time_value = parsed.time
               if is_string(time_value) {
                 # Handle ISO timestamp strings
                 parsed_time, time_err = parse_timestamp(time_value, "%+")
                 if time_err == null {
                   .timestamp = parsed_time
-                } else {
-                  # Keep Vector's original timestamp if parsing fails
-                  .timestamp = original_timestamp
                 }
-              } else {
-                # Keep Vector's original timestamp if time is not a string
-                .timestamp = original_timestamp
               }
-              
-              # Remove the 'time' field to avoid duplication
-              del(.time)
             # Try 'stageTimestamp' field (Kubernetes audit logs - primary)
-            } else if exists(.stageTimestamp) {
-              stage_timestamp = .stageTimestamp
+            } else if exists(parsed.stageTimestamp) {
+              stage_timestamp = parsed.stageTimestamp
               if is_string(stage_timestamp) {
                 # Handle ISO timestamp strings
                 parsed_ts, ts_err = parse_timestamp(stage_timestamp, "%+")
                 if ts_err == null {
                   .timestamp = parsed_ts
-                } else {
-                  # Keep Vector's original timestamp if parsing fails
-                  .timestamp = original_timestamp
                 }
-              } else {
-                # Keep Vector's original timestamp if stageTimestamp is not a string
-                .timestamp = original_timestamp
               }
             # Try 'requestReceivedTimestamp' field (Kubernetes audit logs - fallback)
-            } else if exists(.requestReceivedTimestamp) {
-              request_timestamp = .requestReceivedTimestamp
+            } else if exists(parsed.requestReceivedTimestamp) {
+              request_timestamp = parsed.requestReceivedTimestamp
               if is_string(request_timestamp) {
                 # Handle ISO timestamp strings
                 parsed_ts, ts_err = parse_timestamp(request_timestamp, "%+")
                 if ts_err == null {
                   .timestamp = parsed_ts
-                } else {
-                  # Keep Vector's original timestamp if parsing fails
-                  .timestamp = original_timestamp
                 }
-              } else {
-                # Keep Vector's original timestamp if requestReceivedTimestamp is not a string
-                .timestamp = original_timestamp
               }
             }
-            
-            # Handle message field to eliminate duplication
-            # Replace .message with actual message content from parsed JSON
-            if exists(.msg) {
-              .message = .msg
-              del(.msg)
-            } else if exists(.message_content) {
-              .message = .message_content
-              del(.message_content)
-            } else if exists(.log) {
-              .message = .log
-              del(.log)
-            } else if exists(.text) {
-              .message = .text
-              del(.text)
-            }
-            # Keep original .message if no specific message field found
           }
-          # If err is not null or parsed is not an object, keep original message
       
       parse_plain_text_timestamps:
         type: "remap"
