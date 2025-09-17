@@ -888,20 +888,23 @@ def ensure_log_group_and_stream_exist(logs_client, log_group: str, log_stream: s
     """
     try:
         # Check if log group exists, create if not
-        try:
-            logs_client.describe_log_groups(logGroupNamePrefix=log_group, limit=1)
-        except logs_client.exceptions.ResourceNotFoundException:
+        groups = logs_client.describe_log_groups(logGroupNamePrefix=log_group)
+        for group in groups['logGroups']:
+            if group['logGroupName'] == log_group:
+                break
+        else:
             logger.info(f"Creating log group: {log_group}")
             logs_client.create_log_group(logGroupName=log_group)
 
         # Check if log stream exists, create if not
-        try:
-            logs_client.describe_log_streams(
-                logGroupName=log_group,
-                logStreamNamePrefix=log_stream,
-                limit=1
-            )
-        except logs_client.exceptions.ResourceNotFoundException:
+        streams = logs_client.describe_log_streams(
+            logGroupName=log_group,
+            logStreamNamePrefix=log_stream
+        )
+        for stream in streams['logStreams']:
+            if stream['logStreamName'] == log_stream:
+                break
+        else:
             logger.info(f"Creating log stream: {log_stream} in group: {log_group}")
             logs_client.create_log_stream(
                 logGroupName=log_group,
