@@ -734,7 +734,7 @@ def deliver_logs_to_cloudwatch(
         target_region = delivery_config.get('target_region', AWS_REGION)
 
         # Use native Python CloudWatch Logs delivery (replaces Vector)
-        deliver_logs_to_cloudwatch_native(
+        delivery_stats = deliver_logs_to_cloudwatch_native(
             log_events=log_events,
             central_credentials=central_credentials,
             customer_role_arn=delivery_config['log_distribution_role_arn'],
@@ -745,6 +745,17 @@ def deliver_logs_to_cloudwatch(
             session_id=session_id,
             s3_timestamp=s3_timestamp
         )
+
+        try:
+            push_metrics(
+                tenant_info['tenant_id'],
+                "cloudwatch",
+                {
+                    "successful_events": delivery_stats["successful_events"],
+                    "total_processed": delivery_stats["total_processed"]
+                })
+        except Exception as e:
+            logger.error(f"Failed to write metrics to CW for CW for tenant {tenant_info['tenant_id']} :{str(e)}")
 
         logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} CloudWatch Logs using native Python implementation")
 
@@ -1292,8 +1303,19 @@ def deliver_logs_to_s3(
             logger.info(f"Successfully copied log file to S3 for tenant {tenant_info['tenant_id']}")
             logger.info(f"Delivered to: s3://{destination_bucket}/{destination_key}")
 
+            try:
+                push_metrics(tenant_info['tenant_id'], "s3", {"successful_delivery": 1})
+            except Exception as e:
+                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+
         except ClientError as copy_error:
             error_code = copy_error.response['Error']['Code']
+
+            try:
+                push_metrics(tenant_info['tenant_id'], "s3", {"failed_delivery": 1})
+            except Exception as e:
+                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+
 
             if error_code == 'NoSuchBucket':
                 raise NonRecoverableError(f"Destination S3 bucket '{destination_bucket}' does not exist")
@@ -1314,7 +1336,34 @@ def deliver_logs_to_s3(
         raise
 
 
+def push_metrics(tenant_id: str, method: str, metrics_data: {str, int}):
+    """
+    Push metrics to cloudwatch
+    """
+    post_data = []
+    for metric_dimension, count in metrics_data.items():
+        post_data.append({
+            'MetricName': f'LogCount/{method}/{metric_dimension}',
+            'Dimensions': [
+                {
+                    'Name': 'Tenant',
+                    'Value': tenant_id
+                },
+            ],
+            'Value': count,
+            'Unit': 'Count'
+        })
 
+    cloudwatch_client = boto3.client('cloudwatch', region_name=AWS_REGION)
+    try:
+        response = cloudwatch_client.put_metric_data(
+            Namespace='Test/LogForwarding',  # A custom namespace for your metrics
+            MetricData=post_data
+        )
+        return response
+    except Exception as e:
+        print(f"Error publishing metric: {e}")
+        raise
 
 def scan_mode():
     """
