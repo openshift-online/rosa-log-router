@@ -20,10 +20,10 @@ module "regional-resource-us-east-1" {
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
 }
-module "regional-resource-us-east-2" {
+module "regional-resource-us-west-1" {
   source = "../../modules/regional"
   providers = {
-    aws = aws.us-east-2
+    aws = aws.us-west-1
   }
   project_name                      = var.project_name
   environment                       = var.environment

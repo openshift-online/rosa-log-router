@@ -19,18 +19,18 @@ output "central_s3_writer_role_arn" {
 output "central_logging_bucket_name_us-east-1" {
   value = module.regional-resource-us-east-1.central_logging_bucket_name
 }
-output "central_logging_bucket_name_us-east-2" {
-  value = module.regional-resource-us-east-2.central_logging_bucket_name
+output "central_logging_bucket_name_us-west-1" {
+  value = module.regional-resource-us-west-1.central_logging_bucket_name
 }
 output "tenant_config_table_name_us-east-1" {
   value = module.regional-resource-us-east-1.tenant_config_table_name
 }
-output "tenant_config_table_name_us-east-2" {
-  value = module.regional-resource-us-east-2.tenant_config_table_name
+output "tenant_config_table_name_us-west-1" {
+  value = module.regional-resource-us-west-1.tenant_config_table_name
 }
 output "tenant_config_table_arn_us-east-1" {
   value = module.regional-resource-us-east-1.tenant_config_table_arn
 }
-output "tenant_config_table_arn_us-east-2" {
-  value = module.regional-resource-us-east-2.tenant_config_table_arn
+output "tenant_config_table_arn_us-west-1" {
+  value = module.regional-resource-us-west-1.tenant_config_table_arn
 }

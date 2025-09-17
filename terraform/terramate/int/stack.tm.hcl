@@ -4,7 +4,7 @@ stack {
 }
 
 globals "aws" {
-  regions = ["us-east-1", "us-east-2"]
+  regions = ["us-east-1", "us-west-1"]
 }
 
 generate_hcl "main.tf" {
