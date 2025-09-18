@@ -88,7 +88,8 @@ aws dynamodb put-item \
     "log_distribution_role_arn": {"S": "arn:aws:iam::123456789012:role/LogDistributionRole"},
     "log_group_name": {"S": "/aws/logs/acme-corp"},
     "target_region": {"S": "us-east-1"},
-    "enabled": {"BOOL": true}
+    "enabled": {"BOOL": true},
+    "groups": {"SS": ["API", "Authentication"]}
   }'
 ```
 
@@ -123,6 +124,7 @@ podman run --rm -e AWS_PROFILE=your-profile log-processor:latest
 - [x] **Vector log collection** with namespace filtering and intelligent parsing
 - [x] **Direct S3 storage** with GZIP compression and dynamic partitioning
 - [x] **Multi-delivery support** - CloudWatch Logs + S3 per tenant
+- [x] **Application filtering** with individual apps and pre-defined groups (API, Authentication, etc.)
 - [x] **Container-based Lambda** processing with ECR images
 - [x] **Cross-account security** via double-hop role assumption
 - [x] **Cost optimization** with S3 lifecycle policies and compression
