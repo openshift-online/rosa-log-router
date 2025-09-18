@@ -34,18 +34,20 @@ resource "aws_cloudwatch_log_group" "log_distributor_log_group" {
 
 # Container-based Lambda function for log distribution
 resource "aws_lambda_function" "log_distributor_function" {
-  function_name = "${var.project_name}-${var.environment}-log-distributor"
-  package_type  = "Image"
-  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/${var.ecr_image}"
-  role          = var.lambda_execution_role_arn
+  function_name    = "${var.project_name}-${var.environment}-log-distributor"
+  role             = var.lambda_execution_role_arn
+  filename         = "../../modules/regional/modules/lambda-stack/log-processor.zip"
+  handler          = "log_processor.lambda_handler"
+  runtime          = "python3.11"
+  source_code_hash = filebase64sha256("../../modules/regional/modules/lambda-stack/log-processor.zip")
 
   environment {
     variables = {
       TENANT_CONFIG_TABLE               = var.tenant_config_table_name
-      MAX_BATCH_SIZE                   = "1000"
-      RETRY_ATTEMPTS                   = "3"
+      MAX_BATCH_SIZE                    = "1000"
+      RETRY_ATTEMPTS                    = "3"
       CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = var.central_log_distribution_role_arn
-      EXECUTION_MODE                   = "lambda"
+      SQS_QUEUE_URL                     = var.sqs_queue_url
     }
   }
 
