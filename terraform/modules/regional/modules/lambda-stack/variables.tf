@@ -23,6 +23,10 @@ variable "sqs_queue_arn" {
   description = "ARN of the SQS queue to process messages from"
   type        = string
 }
+variable "sqs_queue_url" {
+  description = "URL of the SQS queue to re-queue messages"
+  type        = string
+}
 
 variable "ecr_image" {
   description = "ECR container image for the log processor"

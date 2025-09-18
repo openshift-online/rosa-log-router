@@ -55,6 +55,7 @@ module "lambda_stack" {
   project_name                      = var.project_name
   tenant_config_table_name          = module.core_infrastructure.tenant_config_table_name
   sqs_queue_arn                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_arn : ""
+  sqs_queue_url                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_url : ""
   ecr_image                         = var.ecr_image
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
   lambda_execution_role_arn         = var.lambda_execution_role_arn
