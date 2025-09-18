@@ -297,7 +297,18 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
 
                         elif delivery_type == 's3':
                             # S3 delivery uses direct S3-to-S3 copy, no download needed
-                            deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
+                            try:
+                                deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
+                                try:
+                                    push_metrics(tenant_info['tenant_id'], "s3", {"successful_delivery": 1})
+                                except Exception as e:
+                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+                            except Exception as e:
+                                try:
+                                    push_metrics(tenant_info['tenant_id'], "s3", {"failed_delivery": 1})
+                                except Exception as e:
+                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+                                raise
                             delivery_stats['successful_deliveries'] += 1
                         else:
                             logger.error(f"Unknown delivery type '{delivery_type}' for tenant '{tenant_info['tenant_id']}' - skipping")
@@ -752,7 +763,8 @@ def deliver_logs_to_cloudwatch(
                 "cloudwatch",
                 {
                     "successful_events": delivery_stats["successful_events"],
-                    "total_processed": delivery_stats["total_processed"]
+                    "failed_events": delivery_stats["failed_events"],
+                    "successful_delivery": 1,
                 })
         except Exception as e:
             logger.error(f"Failed to write metrics to CW for CW for tenant {tenant_info['tenant_id']} :{str(e)}")
@@ -760,6 +772,17 @@ def deliver_logs_to_cloudwatch(
         logger.info(f"Successfully delivered {len(log_events)} log events to {tenant_info['tenant_id']} CloudWatch Logs using native Python implementation")
 
     except Exception as e:
+
+        try:
+            push_metrics(
+                tenant_info['tenant_id'],
+                "cloudwatch",
+                {
+                    "failed_delivery": 1,
+                })
+        except Exception as e:
+            logger.error(f"Failed to write metrics to CW for CW for tenant {tenant_info['tenant_id']} :{str(e)}")
+
         logger.error(f"Failed to deliver logs to customer {tenant_info['tenant_id']}: {str(e)}")
         raise
 
@@ -1315,7 +1338,6 @@ def deliver_logs_to_s3(
                 push_metrics(tenant_info['tenant_id'], "s3", {"failed_delivery": 1})
             except Exception as e:
                 logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
-
 
             if error_code == 'NoSuchBucket':
                 raise NonRecoverableError(f"Destination S3 bucket '{destination_bucket}' does not exist")
