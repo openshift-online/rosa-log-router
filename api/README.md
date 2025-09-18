@@ -33,6 +33,7 @@ The Tenant Management API provides a secure, REST-based interface for managing t
   "target_region": "us-east-1",
   "enabled": true,
   "desired_logs": ["payment-service", "user-service"],
+  "groups": ["API"],
   "created_at": "2024-01-15T10:30:00Z",
   "updated_at": "2024-01-15T10:30:00Z"
 }
@@ -48,6 +49,7 @@ The Tenant Management API provides a secure, REST-based interface for managing t
   "target_region": "us-east-1",
   "enabled": true,
   "desired_logs": ["payment-service", "user-service"],
+  "groups": ["Authentication"],
   "created_at": "2024-01-15T10:30:00Z",
   "updated_at": "2024-01-15T10:30:00Z"
 }
@@ -136,6 +138,7 @@ type CloudWatchDeliveryConfig struct {
     TargetRegion           string   `json:"target_region,omitempty"`
     Enabled                *bool    `json:"enabled,omitempty"`
     DesiredLogs            []string `json:"desired_logs,omitempty"`
+    Groups                 []string `json:"groups,omitempty"`
     TTL                    *int64   `json:"ttl,omitempty"`
     CreatedAt              string   `json:"created_at,omitempty"`
     UpdatedAt              string   `json:"updated_at,omitempty"`
@@ -150,6 +153,7 @@ type S3DeliveryConfig struct {
     TargetRegion string   `json:"target_region,omitempty"`
     Enabled      *bool    `json:"enabled,omitempty"`
     DesiredLogs  []string `json:"desired_logs,omitempty"`
+    Groups       []string `json:"groups,omitempty"`
     TTL          *int64   `json:"ttl,omitempty"`
     CreatedAt    string   `json:"created_at,omitempty"`
     UpdatedAt    string   `json:"updated_at,omitempty"`
@@ -161,6 +165,7 @@ type DeliveryConfigCreateRequest struct {
     Type         string   `json:"type"` // "cloudwatch" or "s3"
     Enabled      *bool    `json:"enabled,omitempty"`
     DesiredLogs  []string `json:"desired_logs,omitempty"`
+    Groups       []string `json:"groups,omitempty"`
     TargetRegion string   `json:"target_region,omitempty"`
     TTL          *int64   `json:"ttl,omitempty"`
     
@@ -494,7 +499,8 @@ Content-Type: application/json
   "log_group_name": "/aws/logs/acme-corp",
   "target_region": "us-east-1",
   "enabled": true,
-  "desired_logs": ["payment-service", "user-service"]
+  "desired_logs": ["payment-service", "user-service"],
+  "groups": ["API"]
 }
 
 # S3 Configuration
@@ -505,7 +511,8 @@ Content-Type: application/json
   "bucket_prefix": "ROSA/cluster-logs/",
   "target_region": "us-east-1",
   "enabled": true,
-  "desired_logs": ["payment-service", "user-service"]
+  "desired_logs": ["payment-service", "user-service"],
+  "groups": ["Authentication"]
 }
 ```
 
@@ -519,7 +526,8 @@ Content-Type: application/json
   "log_group_name": "/aws/logs/acme-corp-updated",
   "target_region": "us-west-2",
   "enabled": true,
-  "desired_logs": ["payment-service", "user-service", "api-gateway"]
+  "desired_logs": ["payment-service", "user-service", "api-gateway"],
+  "groups": ["Scheduler"]
 }
 ```
 
@@ -555,10 +563,45 @@ GET /tenants/{tenant_id}/delivery-configs/{delivery_type}/validate
 | `type` | String | Yes | Delivery type: `"cloudwatch"` or `"s3"` |
 | `enabled` | Boolean | No | Enable/disable processing (default: true) |
 | `desired_logs` | Array | No | Application filter list (default: all) |
+| `groups` | Array | No | Application group filter list (see groups documentation) |
 | `target_region` | String | No | AWS region for delivery (default: processor region) |
 | `ttl` | Integer | No | Unix timestamp for DynamoDB TTL expiration |
 | `created_at` | String | No | Configuration creation timestamp (ISO 8601) |
 | `updated_at` | String | No | Configuration last update timestamp (ISO 8601) |
+
+### Application Groups
+
+Pre-defined application groups simplify filtering configuration for common sets of related applications.
+
+**Available Groups:**
+
+| Group Name | Applications |
+|------------|-------------|
+| `API` | `kube-apiserver`, `openshift-apiserver` |
+| `Authentication` | `oauth-server`, `oauth-apiserver` |
+| `Controller Manager` | `kube-controller-manager`, `openshift-controller-manager`, `openshift-route-controller-manager` |
+| `Scheduler` | `kube-scheduler` |
+
+**Usage:**
+- Groups are specified in the `groups` field as an array of group names
+- Group names are case-insensitive (`"API"`, `"api"`, and `"Api"` are equivalent)  
+- Application matching is case-sensitive (must match exact application names)
+- Applications from groups are combined with applications from `desired_logs`
+- Duplicates are automatically filtered out
+- Invalid group names log warnings but don't cause errors
+
+**Example with groups:**
+```json
+{
+  "tenant_id": "acme-corp",
+  "type": "cloudwatch",
+  "desired_logs": ["custom-app-1"],
+  "groups": ["API", "Authentication"],
+  "enabled": true
+}
+```
+
+This will process logs from: `custom-app-1`, `kube-apiserver`, `openshift-apiserver`, `oauth-server`, `oauth-apiserver`
 
 ### CloudWatch-Specific Fields
 
@@ -736,7 +779,8 @@ curl -X POST "https://api.example.com/api/v1/tenants/acme-corp/delivery-configs"
     "log_group_name": "/aws/logs/acme-corp",
     "target_region": "us-east-1",
     "enabled": true,
-    "desired_logs": ["payment-service", "user-service"]
+    "desired_logs": ["payment-service", "user-service"],
+    "groups": ["API"]
   }'
 
 # Create S3 delivery configuration for the same tenant
@@ -751,7 +795,8 @@ curl -X POST "https://api.example.com/api/v1/tenants/acme-corp/delivery-configs"
     "bucket_prefix": "ROSA/cluster-logs/",
     "target_region": "us-east-1",
     "enabled": true,
-    "desired_logs": ["payment-service", "user-service"]
+    "desired_logs": ["payment-service", "user-service"],
+    "groups": ["Authentication"]
   }'
 
 # List all configurations for a tenant
