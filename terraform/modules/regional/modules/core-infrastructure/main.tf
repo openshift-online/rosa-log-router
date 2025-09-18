@@ -194,46 +194,12 @@ resource "aws_dynamodb_table" "tenant_config_table" {
     name = "type"
     type = "S"
   }
-
-  attribute {
-    name = "account_id"
-    type = "S"
-  }
-
-  attribute {
-    name = "status"
-    type = "S"
-  }
-
-  attribute {
-    name = "target_region"
-    type = "S"
-  }
-
-  global_secondary_index {
-    name     = "AccountIdIndex"
-    hash_key = "account_id"
-    projection_type = "ALL"
-  }
-
-  global_secondary_index {
-    name     = "StatusIndex"
-    hash_key = "status"
-    projection_type = "ALL"
-  }
-
-  global_secondary_index {
-    name     = "TargetRegionIndex"
-    hash_key = "target_region"
-    projection_type = "ALL"
-  }
-
   point_in_time_recovery {
     enabled = true
   }
 
   server_side_encryption {
-    enabled  = true
+    enabled  = var.enable_s3_encryption
     kms_key_arn = var.enable_s3_encryption ? aws_kms_key.logging_kms_key[0].arn : null
   }
 
