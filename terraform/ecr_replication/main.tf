@@ -20,6 +20,20 @@ variable "replicate_regions" {
 
 data "aws_caller_identity" "current" {}
 
+variable "access_key" {}
+variable "secret_key" {}
+variable "region" {}
+terraform {
+  required_version = ">= 1.8.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.100.0"
+    }
+  }
+  backend "s3" {}
+}
+
 resource "aws_ecr_replication_configuration" "ecr_replication" {
   replication_configuration {
     rule {
