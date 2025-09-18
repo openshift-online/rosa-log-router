@@ -1,7 +1,13 @@
 // TERRAMATE: GENERATED AUTOMATICALLY DO NOT EDIT
 
+variable "access_key" {
+}
+variable "secret_key" {
+}
+variable "region" {
+}
 terraform {
-  required_version = ">= 1.0"
+  required_version = ">= 1.8.5"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -12,9 +18,13 @@ terraform {
       version = "~> 3.1"
     }
   }
+  backend "s3" {
+  }
 }
 provider "aws" {
-  region = var.aws_region
+  access_key = var.access_key
+  region     = var.region
+  secret_key = var.secret_key
 }
 provider "aws" {
   alias  = "us-east-1"

@@ -43,8 +43,13 @@ generate_hcl "main.tf" {
 
 generate_hcl "config.tf" {
   content {
+
+    variable "access_key" {}
+    variable "secret_key" {}
+    variable "region" {}
+
     terraform {
-      required_version = ">= 1.0"
+      required_version = ">= 1.8.5"
       required_providers {
         aws = {
           source  = "hashicorp/aws"
@@ -55,10 +60,13 @@ generate_hcl "config.tf" {
           version = "~> 3.1"
         }
       }
+      backend "s3" {}
     }
 
     provider "aws" {
-      region = var.aws_region
+      access_key = var.access_key
+      secret_key = var.secret_key
+      region     = var.region
     }
 
     tm_dynamic "provider" {
