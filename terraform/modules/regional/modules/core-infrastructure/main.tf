@@ -107,8 +107,8 @@ resource "aws_s3_bucket_policy" "allow_access_from_osdfm_org" {
         },
         "Action": ["s3:GetBucketAcl", "s3:PutObject"],
         "Resource": [
-          "arn:aws:s3:::${var.project_name}-*",
-          "arn:aws:s3:::${var.project_name}-*/*"
+          "arn:aws:s3:::${aws_s3_bucket.central_logging_bucket.id}",
+          "arn:aws:s3:::${aws_s3_bucket.central_logging_bucket.id}/*"
         ],
         "Condition": {
           "ArnLike": {
