@@ -38,6 +38,7 @@ generate_hcl "main.tf" {
         }
         project_name                      = var.project_name
         environment                       = var.environment
+        org_id                            = var.org_id
         include_sqs_stack                 = var.include_sqs_stack
         include_lambda_stack              = var.include_lambda_stack
         ecr_image                         = var.ecr_image

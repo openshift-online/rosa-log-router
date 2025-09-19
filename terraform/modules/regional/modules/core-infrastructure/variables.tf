@@ -14,6 +14,12 @@ variable "project_name" {
   default     = "hcp-log"
 }
 
+variable "org_id" {
+  description = "ID of osdfm org"
+  type        = string
+  default     = ""
+}
+
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
   type        = number
