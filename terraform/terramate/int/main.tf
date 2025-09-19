@@ -12,6 +12,7 @@ module "regional-resource-ap-northeast-1" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -27,6 +28,7 @@ module "regional-resource-ap-northeast-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -42,6 +44,7 @@ module "regional-resource-ap-southeast-1" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -57,6 +60,7 @@ module "regional-resource-eu-west-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -72,6 +76,7 @@ module "regional-resource-eu-west-3" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -87,6 +92,7 @@ module "regional-resource-us-east-1" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -102,6 +108,7 @@ module "regional-resource-us-east-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image
@@ -117,6 +124,7 @@ module "regional-resource-us-west-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
+  org_id                            = var.org_id
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
   ecr_image                         = var.ecr_image

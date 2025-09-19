@@ -14,6 +14,12 @@ variable "project_name" {
   default     = "hcp-log"
 }
 
+variable "org_id" {
+  description = "ID of osdfm org"
+  type        = string
+  default     = ""
+}
+
 # Optional Stack Configuration
 variable "include_sqs_stack" {
   description = "Whether to deploy the SQS stack for log processing"

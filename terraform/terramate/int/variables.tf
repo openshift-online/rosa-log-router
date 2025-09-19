@@ -15,6 +15,12 @@ variable "environment" {
   }
 }
 
+variable "org_id" {
+  description = "ID of osdfm org"
+  type        = string
+  default     = ""
+}
+
 variable "aws_region" {
   description = "AWS region for deployment"
   type        = string

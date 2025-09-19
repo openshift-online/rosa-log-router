@@ -93,6 +93,35 @@ resource "aws_s3_bucket" "central_logging_bucket" {
     Name = "${var.project_name}-${var.environment}-central-logging"
   })
 }
+resource "aws_s3_bucket_policy" "allow_access_from_osdfm_org" {
+  bucket = aws_s3_bucket.central_logging_bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        "Sid": "Allow Log Forwarder Writes",
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "*"
+        },
+        "Action": ["s3:GetBucketAcl", "s3:PutObject"],
+        "Resource": [
+          "arn:aws:s3:::${var.project_name}-*",
+          "arn:aws:s3:::${var.project_name}-*/*"
+        ],
+        "Condition": {
+          "ArnLike": {
+            "aws:SourceArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
+          },
+          "StringEquals": {
+            "aws:SourceOrgID": "${var.org_id}"
+          }
+        }
+      }
+    ]
+  })
+}
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "central_logging_bucket_encryption" {
   bucket = aws_s3_bucket.central_logging_bucket.id
