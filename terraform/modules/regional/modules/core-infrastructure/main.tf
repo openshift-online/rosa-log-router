@@ -115,7 +115,7 @@ resource "aws_s3_bucket_policy" "allow_access_from_osdfm_org" {
             "aws:SourceArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
           },
           "StringEquals": {
-            "aws:SourceOrgID": "${var.org_id}"
+            "aws:PrincipalOrgID": "${var.org_id}"
           }
         }
       }
