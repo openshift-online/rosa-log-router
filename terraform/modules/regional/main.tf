@@ -23,7 +23,7 @@ module "core_infrastructure" {
 
   environment                       = var.environment
   project_name                      = var.project_name
-  random_suffix                     = vat.random_suffix
+  random_suffix                     = var.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
