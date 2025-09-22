@@ -27,10 +27,9 @@ variable "include_lambda_stack" {
   default     = true
 }
 
-variable "ecr_image" {
-  description = "ECR container image for the log processor (required if include_lambda_stack is true)"
+variable "random_suffix" {
+  description = "Bucket name random suffix"
   type        = string
-  default     = ""
 }
 
 # S3 Configuration

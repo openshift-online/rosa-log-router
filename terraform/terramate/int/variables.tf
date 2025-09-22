@@ -44,16 +44,6 @@ variable "include_lambda_stack" {
   default     = true
 }
 
-variable "ecr_image" {
-  description = "ECR container image for the log processor (required if include_lambda_stack is true)"
-  type        = string
-  default     = ""
-  validation {
-    condition     = var.ecr_image == "" || can(regex("^[a-zA-Z0-9\\-_/]+:[a-zA-Z0-9\\-_.]+$", var.ecr_image))
-    error_message = "ECR image URI must be a valid image or empty string."
-  }
-}
-
 # S3 Configuration
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
