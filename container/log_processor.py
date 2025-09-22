@@ -716,7 +716,7 @@ def deliver_logs_to_cloudwatch(
         # Step 1: Assume the central log distribution role
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
-            RoleSessionName=f"CentralLogDistribution-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
+            RoleSessionName=f"CentralLogDistribution-{str(uuid.uuid4())}-{int(datetime.now().timestamp())}"
         )
 
         # Extract central role credentials (Vector will use these to assume customer role)
@@ -1226,7 +1226,7 @@ def deliver_logs_to_s3(
         # Assume the central log distribution role (single-hop)
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
-            RoleSessionName=f"S3LogDelivery-{tenant_info['tenant_id']}-{int(datetime.now().timestamp())}"
+            RoleSessionName=f"S3LogDelivery-{str(uuid.uuid4())}-{int(datetime.now().timestamp())}"
         )
 
         # Create S3 client with central role credentials
