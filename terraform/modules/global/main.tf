@@ -112,11 +112,11 @@ resource "aws_iam_role" "central_s3_writer_role" {
         Principal = {
           AWS = "*"
         }
-        "Condition": {
-          "StringEquals": {
+        Condition = {
+          StringEquals = {
             "aws:PrincipalOrgID": "${var.org_id}"
-          },
-          "ArnLike": {
+          }
+          ArnLike =  {
             "aws:PrincipalArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
           }
         }
