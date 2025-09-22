@@ -110,7 +110,15 @@ resource "aws_iam_role" "central_s3_writer_role" {
       {
         Effect = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          AWS = "*"
+        }
+        "Condition": {
+          "StringEquals": {
+            "aws:PrincipalOrgID": "${var.org_id}"
+          },
+          "ArnLike": {
+            "aws:PrincipalArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
+          }
         }
         Action = "sts:AssumeRole"
       }

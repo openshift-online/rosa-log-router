@@ -24,6 +24,7 @@ generate_hcl "main.tf" {
 
       project_name = var.project_name
       environment  = var.environment
+      org_id       = var.org_id
     }
 
     tm_dynamic "module" {
@@ -63,7 +64,7 @@ generate_hcl "config.tf" {
       required_providers {
         aws = {
           source  = "hashicorp/aws"
-          version = "~> 5.0"
+          version = "~> 6.0"
         }
         random = {
           source  = "hashicorp/random"
