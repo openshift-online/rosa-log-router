@@ -6,12 +6,24 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.1"
+    }
   }
 }
 
 # Data sources
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+
+resource "random_id" "suffix" {
+  byte_length = 4
+}
+
+locals {
+  random_suffix = random_id.suffix.hex
+}
 
 # Local values
 locals {
@@ -88,7 +100,7 @@ resource "aws_sns_topic" "log_delivery_topic" {
 
 # Central S3 Bucket for log storage
 resource "aws_s3_bucket" "central_logging_bucket" {
-  bucket = substr("${var.project_name}-${var.environment}-${data.aws_region.current.name}-${replace(uuidv5("url",var.project_name),"-","")}",0,55)
+  bucket = "${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-${data.aws_region.current.name}-${local.random_suffix}"
   tags   = merge(local.common_tags, {
     Name = "${var.project_name}-${var.environment}-central-logging"
   })
