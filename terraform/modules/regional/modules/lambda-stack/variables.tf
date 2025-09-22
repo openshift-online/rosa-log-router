@@ -28,11 +28,6 @@ variable "sqs_queue_url" {
   type        = string
 }
 
-variable "ecr_image" {
-  description = "ECR container image for the log processor"
-  type        = string
-}
-
 variable "central_log_distribution_role_arn" {
   description = "ARN of the central log distribution role for cross-account access"
   type        = string
