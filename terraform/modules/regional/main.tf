@@ -23,7 +23,6 @@ module "core_infrastructure" {
 
   environment                       = var.environment
   project_name                      = var.project_name
-  org_id                            = var.org_id
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
