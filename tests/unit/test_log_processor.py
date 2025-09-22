@@ -3104,7 +3104,8 @@ class TestS3LogDelivery:
             # Verify role assumption
             mock_sts.assume_role.assert_called_once()
             assume_role_call = mock_sts.assume_role.call_args
-            assert 'S3LogDelivery-acme-corp-' in assume_role_call[1]['RoleSessionName']
+            assert assume_role_call[1]['RoleSessionName'].startswith('S3LogDelivery-')
+            assert len(assume_role_call[1]['RoleSessionName'].split('-')) >= 7  # S3LogDelivery-{uuid}-{timestamp}
             
             # Verify S3 copy operation
             mock_s3.copy_object.assert_called_once()
