@@ -2,6 +2,7 @@
 
 module "global" {
   environment  = var.environment
+  org_id       = var.org_id
   project_name = var.project_name
   source       = "../../modules/global"
 }

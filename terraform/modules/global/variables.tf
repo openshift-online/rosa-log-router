@@ -13,3 +13,9 @@ variable "environment" {
     error_message = "Environment must be one of: prod, stage, int."
   }
 }
+
+variable "org_id" {
+  description = "ID of osdfm org"
+  type        = string
+  default     = ""
+}
