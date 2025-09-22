@@ -206,6 +206,10 @@ resource "aws_dynamodb_table" "tenant_config_table" {
     name = "type"
     type = "S"
   }
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
   point_in_time_recovery {
     enabled = true
   }
