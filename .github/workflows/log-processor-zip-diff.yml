@@ -1,0 +1,73 @@
+name: Log Processor ZIP Diff
+
+on:
+  pull_request:
+    branches: [ main ]
+    # paths:
+    #   - 'terraform/modules/regional/modules/lambda-stack/log-processor.zip'
+
+jobs:
+  compare-log-processor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout current branch
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Extract log_processor.py from current ZIP
+      run: |
+        mkdir -p /tmp/current
+        unzip -j terraform/modules/regional/modules/lambda-stack/log-processor.zip log_processor.py -d /tmp/current/
+        
+    - name: Get main branch container/log_processor.py
+      run: |
+        mkdir -p /tmp/main
+        git show main:container/log_processor.py > /tmp/main/log_processor.py || echo "container/log_processor.py does not exist in main branch" > /tmp/main/log_processor.py
+        
+    - name: Compare log_processor.py files
+      id: compare
+      run: |
+        echo "=== Comparing log_processor.py from ZIP vs container/log_processor.py on main ==="
+        if [ -f /tmp/main/log_processor.py ] && [ -f /tmp/current/log_processor.py ]; then
+          if diff -u /tmp/main/log_processor.py /tmp/current/log_processor.py > /tmp/diff_output.txt; then
+            echo "No differences found in log_processor.py"
+            echo "diff_found=false" >> $GITHUB_OUTPUT
+            echo "diff_content=No differences found in log_processor.py" >> $GITHUB_OUTPUT
+          else
+            echo "Differences found in log_processor.py:"
+            cat /tmp/diff_output.txt
+            echo "diff_found=true" >> $GITHUB_OUTPUT
+            {
+              echo "diff_content<<EOF"
+              echo "## Log Processor Changes Detected"
+              echo ""
+              echo "Changes found between ZIP file and \`container/log_processor.py\` on main:"
+              echo ""
+              echo '```diff'
+              cat /tmp/diff_output.txt
+              echo '```'
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Could not compare files - one or both files missing"
+          ls -la /tmp/main/ /tmp/current/
+          echo "diff_found=true" >> $GITHUB_OUTPUT
+          echo "diff_content=Could not compare files - one or both files missing" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Comment on PR
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const diffContent = `${{ steps.compare.outputs.diff_content }}`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: diffContent
+          });
