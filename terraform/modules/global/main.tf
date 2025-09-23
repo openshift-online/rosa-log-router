@@ -252,6 +252,13 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
           "kms:DescribeKey"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
       }
     ]
   })
