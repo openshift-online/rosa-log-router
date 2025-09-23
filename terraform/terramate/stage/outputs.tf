@@ -31,21 +31,6 @@ output "central_logging_bucket_name_us-east-2" {
 output "central_logging_bucket_name_us-west-2" {
   value = module.regional-resource-us-west-2.central_logging_bucket_name
 }
-output "tenant_config_table_name_ap-southeast-1" {
-  value = module.regional-resource-ap-southeast-1.tenant_config_table_name
-}
-output "tenant_config_table_name_mx-central-1" {
-  value = module.regional-resource-mx-central-1.tenant_config_table_name
-}
-output "tenant_config_table_name_us-east-1" {
-  value = module.regional-resource-us-east-1.tenant_config_table_name
-}
-output "tenant_config_table_name_us-east-2" {
-  value = module.regional-resource-us-east-2.tenant_config_table_name
-}
-output "tenant_config_table_name_us-west-2" {
-  value = module.regional-resource-us-west-2.tenant_config_table_name
-}
 output "tenant_config_table_arn_ap-southeast-1" {
   value = module.regional-resource-ap-southeast-1.tenant_config_table_arn
 }

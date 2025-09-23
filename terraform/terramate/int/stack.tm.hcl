@@ -133,15 +133,6 @@ generate_hcl "outputs.tf" {
     tm_dynamic "output" {
       for_each = global.aws.regions
       iterator = region
-      labels   = ["tenant_config_table_name_${region.value}"]
-      attributes = {
-        value = tm_hcl_expression("module.regional-resource-${region.value}.tenant_config_table_name")
-      }
-    }
-
-    tm_dynamic "output" {
-      for_each = global.aws.regions
-      iterator = region
       labels   = ["tenant_config_table_arn_${region.value}"]
       attributes = {
         value = tm_hcl_expression("module.regional-resource-${region.value}.tenant_config_table_arn")
