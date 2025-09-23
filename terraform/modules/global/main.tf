@@ -256,6 +256,13 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
       {
         Effect = "Allow"
         Action = [
+          "sqs:sendmessage"
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "cloudwatch:PutMetricData"
         ]
         Resource = "*"
