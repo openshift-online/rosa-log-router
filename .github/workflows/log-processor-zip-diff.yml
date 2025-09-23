@@ -6,6 +6,8 @@ on:
     # paths:
     #   - 'terraform/modules/regional/modules/lambda-stack/log-processor.zip'
 
+permissions: write-all
+
 jobs:
   compare-log-processor:
     runs-on: ubuntu-latest
@@ -20,7 +22,20 @@ jobs:
       run: |
         mkdir -p /tmp/current
         unzip -j terraform/modules/regional/modules/lambda-stack/log-processor.zip log_processor.py -d /tmp/current/
+
+    - name: Checkout main branch
+      run: |
+        git checkout main
         
+    # - name: Extract log_processor.py from main branch ZIP
+    #   run: |
+    #     if [ -f terraform/modules/regional/modules/lambda-stack/log-processor.zip ]; then
+    #       unzip -j terraform/modules/regional/modules/lambda-stack/log-processor.zip log_processor.py -d /tmp/main/
+    #     else
+    #       echo "log-processor.zip does not exist in main branch"
+    #       touch /tmp/main/log_processor.py
+    #     fi
+
     - name: Get main branch container/log_processor.py
       run: |
         mkdir -p /tmp/main
@@ -29,7 +44,7 @@ jobs:
     - name: Compare log_processor.py files
       id: compare
       run: |
-        echo "=== Comparing log_processor.py from ZIP vs container/log_processor.py on main ==="
+        echo "=== Comparing log_processor.py between main and current branch ==="
         if [ -f /tmp/main/log_processor.py ] && [ -f /tmp/current/log_processor.py ]; then
           if diff -u /tmp/main/log_processor.py /tmp/current/log_processor.py > /tmp/diff_output.txt; then
             echo "No differences found in log_processor.py"
@@ -43,7 +58,7 @@ jobs:
               echo "diff_content<<EOF"
               echo "## Log Processor Changes Detected"
               echo ""
-              echo "Changes found between ZIP file and \`container/log_processor.py\` on main:"
+              echo "Changes found in \`log_processor.py\` within the ZIP file:"
               echo ""
               echo '```diff'
               cat /tmp/diff_output.txt
@@ -57,17 +72,23 @@ jobs:
           echo "diff_found=true" >> $GITHUB_OUTPUT
           echo "diff_content=Could not compare files - one or both files missing" >> $GITHUB_OUTPUT
         fi
-        
+
+    - name: Log token permissions
+      run: |
+        curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}/actions/permissions/workflow
+
     - name: Comment on PR
-      if: always()
-      uses: actions/github-script@v7
+      if: steps.compare.outputs.diff_found == 'true'
+      uses: actions/github-script@v8
       with:
         script: |
-          const diffContent = `${{ steps.compare.outputs.diff_content }}`;
-          
+          const diffContent = process.env.DIFF_CONTENT;
+
           github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: diffContent
+            body: 'test'
           });
+      env:
+        DIFF_CONTENT: ${{ steps.compare.outputs.diff_content }}
