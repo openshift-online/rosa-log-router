@@ -18,6 +18,7 @@ import log_processor
 from log_processor import (
     extract_tenant_info_from_key,
     get_tenant_delivery_configs,
+    expand_groups_to_applications,
     should_process_application,
     should_process_delivery_config,
     download_and_process_log_file,
@@ -276,14 +277,19 @@ class TestTenantConfiguration:
         assert should_process_application(config, 'user-service') is True
         assert should_process_application(config, 'admin-service') is False
     
-    def test_should_process_application_case_insensitive(self, environment_variables, dynamodb_table):
-        """Test application filtering is case insensitive."""
+    def test_should_process_application_case_sensitive(self, environment_variables, dynamodb_table):
+        """Test application filtering is case sensitive."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             configs = get_tenant_delivery_configs('acme-corp')
         config = configs[0]
         
-        assert should_process_application(config, 'Payment-Service') is True
-        assert should_process_application(config, 'USER-SERVICE') is True
+        # Should match exact case (desired_logs contains 'payment-service', 'user-service')
+        assert should_process_application(config, 'payment-service') is True
+        assert should_process_application(config, 'user-service') is True
+        
+        # Should NOT match different case
+        assert should_process_application(config, 'Payment-Service') is False
+        assert should_process_application(config, 'USER-SERVICE') is False
     
     def test_should_process_application_no_filtering(self, environment_variables, dynamodb_table):
         """Test application processing when no desired_logs is specified."""
@@ -333,6 +339,190 @@ class TestTenantConfiguration:
                 # Should not be converted to TenantNotFoundError
                 assert "Some other DynamoDB error" in str(exc_info.value)
                 assert not isinstance(exc_info.value, TenantNotFoundError)
+
+
+class TestGroupsFiltering:
+    """Test groups-based application filtering functionality."""
+    
+    def test_expand_groups_to_applications_valid_groups(self):
+        """Test expanding valid groups to application lists."""
+        # Test single group
+        result = expand_groups_to_applications(['API'])
+        expected = ['kube-apiserver', 'openshift-apiserver']
+        assert result == expected
+        
+        # Test multiple groups
+        result = expand_groups_to_applications(['API', 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_case_insensitive(self):
+        """Test that group expansion is case insensitive."""
+        # Test lowercase
+        result = expand_groups_to_applications(['api'])
+        expected = ['kube-apiserver', 'openshift-apiserver']
+        assert result == expected
+        
+        # Test mixed case
+        result = expand_groups_to_applications(['Api', 'authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_invalid_group(self):
+        """Test handling of invalid group names."""
+        # Single invalid group
+        result = expand_groups_to_applications(['INVALID_GROUP'])
+        assert result == []
+        
+        # Mix of valid and invalid groups
+        result = expand_groups_to_applications(['API', 'INVALID_GROUP', 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_non_string_input(self):
+        """Test handling of non-string inputs in groups list."""
+        result = expand_groups_to_applications(['API', 123, None, 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_empty_list(self):
+        """Test handling of empty groups list."""
+        result = expand_groups_to_applications([])
+        assert result == []
+    
+    def test_should_process_application_with_groups_only(self):
+        """Test application filtering with groups field only."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['API', 'Authentication']
+        }
+        
+        # Should match applications in API group
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should match applications in Authentication group
+        assert should_process_application(config, 'oauth-server') is True
+        assert should_process_application(config, 'oauth-apiserver') is True
+        
+        # Should not match applications not in groups
+        assert should_process_application(config, 'kube-scheduler') is False
+        assert should_process_application(config, 'some-random-app') is False
+    
+    def test_should_process_application_with_groups_and_desired_logs(self):
+        """Test application filtering with both groups and desired_logs fields."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': ['custom-app-1', 'custom-app-2'],
+            'groups': ['API']
+        }
+        
+        # Should match applications from desired_logs
+        assert should_process_application(config, 'custom-app-1') is True
+        assert should_process_application(config, 'custom-app-2') is True
+        
+        # Should match applications from groups
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should not match applications not in either list
+        assert should_process_application(config, 'kube-scheduler') is False
+        assert should_process_application(config, 'random-app') is False
+    
+    def test_should_process_application_groups_case_insensitive(self):
+        """Test that group names are case insensitive but application matching is case sensitive."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['api']  # lowercase group name
+        }
+        
+        # Should match exact application names from the group (case-sensitive)
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should NOT match different case (application matching is case-sensitive)
+        assert should_process_application(config, 'KUBE-APISERVER') is False
+        assert should_process_application(config, 'OpenShift-ApiServer') is False
+    
+    def test_should_process_application_duplicate_filtering(self):
+        """Test that duplicates between desired_logs and groups are handled correctly."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': ['kube-apiserver', 'custom-app'],  # kube-apiserver also in API group
+            'groups': ['API']
+        }
+        
+        # Should work correctly despite kube-apiserver being in both lists
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'custom-app') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        assert should_process_application(config, 'kube-scheduler') is False
+    
+    def test_should_process_application_invalid_groups_field(self):
+        """Test handling of invalid groups field types."""
+        # groups is not a list
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': 'API'  # Should be a list
+        }
+        
+        # Should process all applications when groups field is invalid
+        assert should_process_application(config, 'any-app') is True
+        
+        # groups is None
+        config['groups'] = None
+        assert should_process_application(config, 'any-app') is True
+        
+        # groups is a number
+        config['groups'] = 123
+        assert should_process_application(config, 'any-app') is True
+    
+    def test_should_process_application_empty_groups_and_desired_logs(self):
+        """Test behavior when both groups and desired_logs are empty or invalid."""
+        # Both empty lists
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': [],
+            'groups': []
+        }
+        assert should_process_application(config, 'any-app') is True
+        
+        # Both None
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': None,
+            'groups': None
+        }
+        assert should_process_application(config, 'any-app') is True
+        
+        # Both invalid types
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': 'invalid',
+            'groups': 123
+        }
+        assert should_process_application(config, 'any-app') is True
+    
+    def test_should_process_application_groups_with_invalid_group_names(self):
+        """Test behavior when groups list contains invalid group names."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['API', 'INVALID_GROUP', 'Authentication', 'ANOTHER_INVALID']
+        }
+        
+        # Should still work with valid groups, ignoring invalid ones
+        assert should_process_application(config, 'kube-apiserver') is True  # from API
+        assert should_process_application(config, 'oauth-server') is True  # from Authentication
+        assert should_process_application(config, 'kube-scheduler') is False  # not in any valid group
 
 
 class TestLogProcessing:
@@ -3105,7 +3295,7 @@ class TestS3LogDelivery:
             mock_sts.assume_role.assert_called_once()
             assume_role_call = mock_sts.assume_role.call_args
             assert assume_role_call[1]['RoleSessionName'].startswith('S3LogDelivery-')
-            assert len(assume_role_call[1]['RoleSessionName'].split('-')) >= 7  # S3LogDelivery-{uuid}-{timestamp}
+            assert len(assume_role_call[1]['RoleSessionName'].split('-')) >= 6  # S3LogDelivery-{uuid}
             
             # Verify S3 copy operation
             mock_s3.copy_object.assert_called_once()
