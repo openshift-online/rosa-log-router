@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   annotations:
-    grafana-folder: /grafana-dashboard-definitions
+    grafana-folder: /grafana-dashboard-definitions/OSD
   labels:
     grafana_dashboard: "true"
   name: grafana-dashboard-hypershift-log-forwarding
