@@ -3301,7 +3301,7 @@ class TestS3LogDelivery:
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
             assert copy_call['Bucket'] == 'destination-bucket'
-            assert copy_call['Key'] == 'customer-logs/test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
+            assert copy_call['Key'] == 'customer-logs/acme-corp/payment-service/pod-123/file.json.gz'
             assert copy_call['CopySource']['Bucket'] == 'source-bucket'
             assert copy_call['CopySource']['Key'] == 'test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
             assert copy_call['ACL'] == 'bucket-owner-full-control'
@@ -3311,7 +3311,7 @@ class TestS3LogDelivery:
             metadata = copy_call['Metadata']
             assert metadata['source-bucket'] == 'source-bucket'
             assert metadata['tenant-id'] == 'acme-corp'
-            assert metadata['cluster-id'] == 'test-cluster'
+            # cluster-id removed from metadata to avoid exposing MC cluster ID
             assert metadata['application'] == 'payment-service'
             assert metadata['pod-name'] == 'pod-123'
     
@@ -3409,7 +3409,7 @@ class TestS3LogDelivery:
             # Verify default prefix is used
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
-            expected_key = 'ROSA/cluster-logs/test-cluster/test-tenant/web-service/web-pod-789/file.json.gz'
+            expected_key = 'ROSA/cluster-logs/test-tenant/web-service/web-pod-789/file.json.gz'
             assert copy_call['Key'] == expected_key
     
     def test_deliver_logs_to_s3_bucket_not_found(self, environment_variables, mock_aws_services):
@@ -3666,5 +3666,5 @@ class TestS3LogDelivery:
             # Verify slash was added to prefix
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
-            expected_key = 'customer-logs/test-cluster/test-tenant/test-app/test-pod/file.json.gz'
+            expected_key = 'customer-logs/test-tenant/test-app/test-pod/file.json.gz'
             assert copy_call['Key'] == expected_key
