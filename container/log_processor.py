@@ -1342,12 +1342,11 @@ def deliver_logs_to_s3(
         bucket_prefix = normalize_bucket_prefix(bucket_prefix)
 
         # Create destination key maintaining directory structure
-        # Format: {prefix}{cluster_id}/{tenant_id}/{application}/{pod_name}/{filename}
-        # This mirrors the source structure from Vector: cluster_id/namespace/application/pod_name/
+        # Format: {prefix}{tenant_id}/{application}/{pod_name}/{filename}
+        # This excludes cluster_id to avoid exposing MC cluster ID to destination
         source_filename = source_key.split('/')[-1]  # Extract just the filename
         destination_key = (
-            f"{bucket_prefix}{tenant_info['cluster_id']}/"
-            f"{tenant_info['tenant_id']}/"
+            f"{bucket_prefix}{tenant_info['tenant_id']}/"
             f"{tenant_info['application']}/"
             f"{tenant_info['pod_name']}/{source_filename}"
         )
@@ -1367,7 +1366,6 @@ def deliver_logs_to_s3(
             'source-bucket': source_bucket,
             'source-key': source_key,
             'tenant-id': tenant_info['tenant_id'],
-            'cluster-id': tenant_info['cluster_id'],
             'application': tenant_info['application'],
             'pod-name': tenant_info['pod_name'],
             'delivery-timestamp': str(int(datetime.now().timestamp()))
