@@ -91,7 +91,7 @@ class TestPushMetrics:
         
         # Verify the structure of the call
         call_args = mock_cloudwatch_client.put_metric_data.call_args
-        assert call_args[1]['Namespace'] == 'Test/LogForwarding'
+        assert call_args[1]['Namespace'] == 'HCPLF/LogForwarding'
         assert len(call_args[1]['MetricData']) == 1
         assert call_args[1]['MetricData'][0]['MetricName'] == 'LogCount/cloudwatch/successful_events'
         assert call_args[1]['MetricData'][0]['Value'] == 100
@@ -243,4 +243,4 @@ class TestPushMetrics:
         push_metrics(tenant_id, method, metrics_data)
         
         call_args = mock_cloudwatch_client.put_metric_data.call_args
-        assert call_args[1]['Namespace'] == 'Test/LogForwarding'
+        assert call_args[1]['Namespace'] == 'HCPLF/LogForwarding'
