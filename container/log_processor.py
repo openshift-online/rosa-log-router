@@ -1438,7 +1438,7 @@ def push_metrics(tenant_id: str, method: str, metrics_data: {str, int}):
     cloudwatch_client = boto3.client('cloudwatch', region_name=AWS_REGION)
     try:
         response = cloudwatch_client.put_metric_data(
-            Namespace='Test/LogForwarding',  # A custom namespace for your metrics
+            Namespace='HCPLF/LogForwarding',  # A custom namespace for your metrics
             MetricData=post_data
         )
         return response
