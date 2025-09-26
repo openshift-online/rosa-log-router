@@ -353,7 +353,7 @@ class TestGroupsFiltering:
         
         # Test multiple groups
         result = expand_groups_to_applications(['API', 'Authentication'])
-        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
         assert result == expected
     
     def test_expand_groups_to_applications_case_insensitive(self):
@@ -365,7 +365,7 @@ class TestGroupsFiltering:
         
         # Test mixed case
         result = expand_groups_to_applications(['Api', 'authentication'])
-        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
         assert result == expected
     
     def test_expand_groups_to_applications_invalid_group(self):
@@ -376,13 +376,13 @@ class TestGroupsFiltering:
         
         # Mix of valid and invalid groups
         result = expand_groups_to_applications(['API', 'INVALID_GROUP', 'Authentication'])
-        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
         assert result == expected
     
     def test_expand_groups_to_applications_non_string_input(self):
         """Test handling of non-string inputs in groups list."""
         result = expand_groups_to_applications(['API', 123, None, 'Authentication'])
-        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-server', 'oauth-apiserver']
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
         assert result == expected
     
     def test_expand_groups_to_applications_empty_list(self):
@@ -403,8 +403,8 @@ class TestGroupsFiltering:
         assert should_process_application(config, 'openshift-apiserver') is True
         
         # Should match applications in Authentication group
-        assert should_process_application(config, 'oauth-server') is True
-        assert should_process_application(config, 'oauth-apiserver') is True
+        assert should_process_application(config, 'oauth-openshift') is True
+        assert should_process_application(config, 'openshift-oauth-apiserver') is True
         
         # Should not match applications not in groups
         assert should_process_application(config, 'kube-scheduler') is False
@@ -521,7 +521,7 @@ class TestGroupsFiltering:
         
         # Should still work with valid groups, ignoring invalid ones
         assert should_process_application(config, 'kube-apiserver') is True  # from API
-        assert should_process_application(config, 'oauth-server') is True  # from Authentication
+        assert should_process_application(config, 'oauth-openshift') is True  # from Authentication
         assert should_process_application(config, 'kube-scheduler') is False  # not in any valid group
 
 
@@ -1299,7 +1299,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1338,7 +1338,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,  # 1MB
+            max_bytes_per_batch=1037576,  # 1MB
             timeout_secs=5
         )
         
@@ -1350,7 +1350,7 @@ class TestCloudWatchBatchOptimization:
             batch_events = call[1]['logEvents']
             # Approximate size calculation: message length + 26 bytes overhead per event
             total_size = sum(len(event['message'].encode('utf-8')) + 26 for event in batch_events)
-            assert total_size <= 1048576, f"Batch size {total_size} exceeds 1MB limit"
+            assert total_size <= 1037576, f"Batch size {total_size} exceeds 1MB limit"
         
         # Verify all events were processed
         assert result['total_processed'] == 1100
@@ -1412,7 +1412,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1461,7 +1461,7 @@ class TestCloudWatchBatchOptimization:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5  # 5 second timeout
             )
         
@@ -1497,7 +1497,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1531,7 +1531,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,  # 1MB limit
+            max_bytes_per_batch=1037576,  # 1MB limit
             timeout_secs=5
         )
         
@@ -1543,7 +1543,7 @@ class TestCloudWatchBatchOptimization:
         for call in mock_logs_client.put_log_events.call_args_list:
             batch_events = call[1]['logEvents']
             total_size = sum(len(event['message'].encode('utf-8')) + 26 for event in batch_events)
-            assert total_size <= 1048576
+            assert total_size <= 1037576
 
 
 class TestPartialLogDelivery:
@@ -1575,7 +1575,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1611,7 +1611,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -1640,7 +1640,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -1685,7 +1685,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=10,  # Small batches to force multiple calls
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1742,7 +1742,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
             
@@ -1770,7 +1770,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2831,7 +2831,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream', 
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2852,7 +2852,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2879,7 +2879,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1,  # Force one event per batch
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2907,7 +2907,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2948,7 +2948,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2985,7 +2985,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3020,7 +3020,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3053,7 +3053,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events_exactly_1000,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3078,7 +3078,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events_1001,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3105,7 +3105,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3144,7 +3144,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=10,  # Force multiple batches
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -3184,7 +3184,7 @@ class TestCloudWatchBatchEdgeCases:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -3218,7 +3218,7 @@ class TestCloudWatchBatchEdgeCases:
                     log_stream='test-stream',
                     events=events,
                     max_events_per_batch=1000,
-                    max_bytes_per_batch=1048576,
+                    max_bytes_per_batch=1037576,
                     timeout_secs=5
                 )
         
