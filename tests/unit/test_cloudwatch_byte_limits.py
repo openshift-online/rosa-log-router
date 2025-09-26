@@ -1473,3 +1473,225 @@ class TestCloudWatchEdgeCasesAndBoundaries:
         huge_size_optimal, max_count = analyzer.calculate_optimal_batch_size(2000000)  # 2MB events
         assert huge_size_optimal == 0  # No events fit (2MB + 26 > 1MB limit)
         assert max_count == 1000  # CloudWatch limit
+
+
+class TestMessageContentPreservation:
+    """Test that exact message content and order are preserved across size-triggered batches."""
+
+    def test_exact_message_preservation_across_multiple_batches(self):
+        """
+        Critical test: Verify that exact message content and chronological order
+        are preserved when events are split across multiple batches due to size limits.
+
+        This test creates a scenario where size limits force multiple batches,
+        then verifies every single message appears exactly once with correct content.
+        """
+        mock_logs_client = Mock()
+        mock_logs_client.put_log_events.return_value = {'rejectedLogEventsInfo': {}}
+
+        # Create events with unique, identifiable content that will force multiple batches
+        # Use large messages (300KB each) so only 3-4 events fit per 1MB batch
+        base_timestamp = 1640995200000
+        original_events = []
+
+        for i in range(12):  # 12 events * ~300KB = ~3.6MB, requiring 4+ batches
+            # Create unique, verifiable message content
+            unique_id = f"EVENT_{i:03d}"
+            timestamp = base_timestamp + (i * 1000)  # 1 second apart for clear ordering
+
+            # Large message with identifiable patterns
+            message_parts = [
+                f"=== LOG ENTRY {unique_id} ===",
+                f"Timestamp: {timestamp}",
+                f"Sequence: {i} of 12",
+                f"Content: Processing transaction TXN-{i:06d}",
+                f"Details: " + ("X" * 300000),  # ~300KB of padding
+                f"Checksum: {hash(f'{unique_id}_{timestamp}') % 10000:04d}",
+                f"=== END {unique_id} ==="
+            ]
+            message = "\n".join(message_parts)
+
+            original_events.append({
+                'timestamp': timestamp,
+                'message': message
+            })
+
+        # Record original event details for verification
+        original_messages = [event['message'] for event in original_events]
+        original_timestamps = [event['timestamp'] for event in original_events]
+        original_unique_ids = [f"EVENT_{i:03d}" for i in range(12)]
+
+        # Process events through batching system
+        result = deliver_events_in_batches(
+            logs_client=mock_logs_client,
+            log_group='test-group',
+            log_stream='test-stream',
+            events=original_events,
+            max_events_per_batch=1000,  # Won't be hit due to size limits
+            max_bytes_per_batch=1047576,  # 1MB limit will force multiple batches
+            timeout_secs=60
+        )
+
+        # Verify multiple batches were created due to size limits
+        assert mock_logs_client.put_log_events.call_count >= 4, (
+            f"Expected at least 4 batches for 12 large events, got {mock_logs_client.put_log_events.call_count}"
+        )
+
+        # Collect all events from all batches
+        all_batched_events = []
+        batch_info = []
+
+        for batch_num, call in enumerate(mock_logs_client.put_log_events.call_args_list):
+            batch_events = call[1]['logEvents']
+            all_batched_events.extend(batch_events)
+
+            batch_info.append({
+                'batch_num': batch_num,
+                'event_count': len(batch_events),
+                'first_timestamp': batch_events[0]['timestamp'] if batch_events else None,
+                'last_timestamp': batch_events[-1]['timestamp'] if batch_events else None
+            })
+
+        # CRITICAL VERIFICATION 1: Exact count match
+        assert len(all_batched_events) == len(original_events), (
+            f"Event count mismatch: expected {len(original_events)}, got {len(all_batched_events)}"
+        )
+
+        # CRITICAL VERIFICATION 2: Exact message content preservation
+        batched_messages = [event['message'] for event in all_batched_events]
+        batched_timestamps = [event['timestamp'] for event in all_batched_events]
+
+        # Sort both lists by timestamp to compare in chronological order
+        original_sorted = sorted(zip(original_timestamps, original_messages))
+        batched_sorted = sorted(zip(batched_timestamps, batched_messages))
+
+        for i, ((orig_ts, orig_msg), (batch_ts, batch_msg)) in enumerate(zip(original_sorted, batched_sorted)):
+            assert orig_ts == batch_ts, (
+                f"Timestamp mismatch at position {i}: expected {orig_ts}, got {batch_ts}"
+            )
+            assert orig_msg == batch_msg, (
+                f"Message content mismatch at position {i}: "
+                f"Original length: {len(orig_msg)}, Batched length: {len(batch_msg)}"
+            )
+
+        # CRITICAL VERIFICATION 3: Chronological order within each batch
+        for batch_num, call in enumerate(mock_logs_client.put_log_events.call_args_list):
+            batch_events = call[1]['logEvents']
+
+            # Verify events within each batch are in chronological order
+            for i in range(1, len(batch_events)):
+                assert batch_events[i]['timestamp'] >= batch_events[i-1]['timestamp'], (
+                    f"Batch {batch_num}: Events out of order at positions {i-1},{i}: "
+                    f"{batch_events[i-1]['timestamp']} > {batch_events[i]['timestamp']}"
+                )
+
+        # CRITICAL VERIFICATION 4: Unique ID preservation
+        batched_unique_ids = []
+        for event in all_batched_events:
+            # Extract unique ID from message
+            for line in event['message'].split('\n'):
+                if line.startswith('=== LOG ENTRY EVENT_'):
+                    unique_id = line.split()[3]
+                    batched_unique_ids.append(unique_id)
+                    break
+
+        assert set(batched_unique_ids) == set(original_unique_ids), (
+            f"Unique ID mismatch: "
+            f"Missing: {set(original_unique_ids) - set(batched_unique_ids)}, "
+            f"Extra: {set(batched_unique_ids) - set(original_unique_ids)}"
+        )
+
+        # CRITICAL VERIFICATION 5: No duplicate messages
+        assert len(set(batched_messages)) == len(batched_messages), (
+            "Duplicate messages detected in batched output"
+        )
+
+        # VERIFICATION 6: Batch efficiency validation
+        analyzer = PayloadAnalyzer()
+        total_original_size = sum(len(msg.encode('utf-8')) + 26 for msg in original_messages)
+
+        print(f"\n=== Batch Analysis ===")
+        print(f"Original events: {len(original_events)}")
+        print(f"Total original size: {total_original_size:,} bytes")
+        print(f"Batches created: {mock_logs_client.put_log_events.call_count}")
+
+        for batch_num, info in enumerate(batch_info):
+            print(f"Batch {batch_num}: {info['event_count']} events, "
+                  f"timestamps {info['first_timestamp']}-{info['last_timestamp']}")
+
+        # Verify successful processing
+        assert result['successful_events'] == len(original_events)
+        assert result['failed_events'] == 0
+
+    def test_message_content_with_special_characters_across_batches(self):
+        """
+        Test message preservation with special characters, Unicode, and JSON
+        across multiple batches to ensure no encoding issues during batching.
+        """
+        mock_logs_client = Mock()
+        mock_logs_client.put_log_events.return_value = {'rejectedLogEventsInfo': {}}
+
+        # Create events with various challenging content types
+        base_timestamp = 1640995200000
+        special_events = []
+
+        test_messages = [
+            # Unicode and special characters
+            f"Event 0: Unicode test - Héllo Wörld! 🚀 中文 العربية {'X' * 400000}",
+            f"Event 1: JSON content - " + json.dumps({
+                "user": "test@example.com",
+                "data": {"items": [f"item_{i}" for i in range(1000)]},
+                "padding": "Y" * 400000
+            }),
+            # Multi-line with special formatting
+            f"Event 2: Multi-line\nwith\ttabs and\nnewlines\n{'Z' * 400000}",
+            # Edge case characters
+            f"Event 3: Special chars - \\n \\t \\r \\\\ \\\" {chr(0)} {'A' * 400000}",
+        ]
+
+        for i, message in enumerate(test_messages):
+            special_events.append({
+                'timestamp': base_timestamp + (i * 1000),
+                'message': message
+            })
+
+        # Store original for comparison
+        original_messages = [event['message'] for event in special_events]
+        original_checksums = [hash(msg) for msg in original_messages]
+
+        # Process through batching
+        result = deliver_events_in_batches(
+            logs_client=mock_logs_client,
+            log_group='test-group',
+            log_stream='test-stream',
+            events=special_events,
+            max_events_per_batch=1000,
+            max_bytes_per_batch=1047576,
+            timeout_secs=60
+        )
+
+        # Collect all batched events
+        all_batched_events = []
+        for call in mock_logs_client.put_log_events.call_args_list:
+            all_batched_events.extend(call[1]['logEvents'])
+
+        # Sort by timestamp for comparison
+        all_batched_events.sort(key=lambda x: x['timestamp'])
+        batched_messages = [event['message'] for event in all_batched_events]
+        batched_checksums = [hash(msg) for msg in batched_messages]
+
+        # Verify exact message preservation including special characters
+        assert len(batched_messages) == len(original_messages)
+        assert batched_checksums == original_checksums, (
+            "Message content changed during batching - hash mismatch"
+        )
+
+        # Byte-level comparison
+        for i, (orig, batched) in enumerate(zip(original_messages, batched_messages)):
+            assert orig == batched, f"Byte-level mismatch in message {i}"
+            assert len(orig.encode('utf-8')) == len(batched.encode('utf-8')), (
+                f"UTF-8 byte length mismatch in message {i}"
+            )
+
+        assert result['successful_events'] == len(special_events)
+        assert result['failed_events'] == 0
