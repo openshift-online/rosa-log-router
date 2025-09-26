@@ -46,7 +46,7 @@ VECTOR_METADATA_FIELDS = {
 # Each group key maps to a list of application names that belong to that group
 APPLICATION_GROUPS = {
     'API': ['kube-apiserver', 'openshift-apiserver'],
-    'Authentication': ['oauth-server', 'oauth-apiserver'],
+    'Authentication': ['oauth-openshift', 'openshift-oauth-apiserver'],
     'Controller Manager': ['kube-controller-manager', 'openshift-controller-manager', 'openshift-route-controller-manager'],
     'Scheduler': ['kube-scheduler']
 }
@@ -922,7 +922,7 @@ def deliver_logs_to_cloudwatch_native(
             log_stream=log_stream,
             events=processed_events,
             max_events_per_batch=1000,  # Match Vector's max_events
-            max_bytes_per_batch=1047576,  # AWS CloudWatch limit
+            max_bytes_per_batch=1037576,  # AWS CloudWatch limit
             timeout_secs=5  # Match Vector's timeout_secs
         )
 
@@ -1017,7 +1017,7 @@ def deliver_events_in_batches(
     log_stream: str,
     events: List[Dict[str, Any]],
     max_events_per_batch: int = 1000,
-    max_bytes_per_batch: int = 1047576,
+    max_bytes_per_batch: int = 1037576,
     timeout_secs: int = 5
 ) -> Dict[str, int]:
     """
