@@ -65,6 +65,7 @@ Primary Key: tenant_id (Partition Key) + type (Sort Key)
 | type           | String     | Yes      | Delivery type: "cloudwatch" or "s3"        |
 | enabled        | Boolean    | No       | Enable/disable delivery (defaults to True) |
 | desired_logs   | StringList | No       | Application filter list (defaults to all)  |
+| groups         | StringList | No       | Application group filter list (see Application Groups) |
 | target_region  | String     | No       | AWS region (defaults to processor region)  |
 | ttl            | Number     | No       | Unix timestamp for automatic expiration    |
 | created_at     | String     | No       | ISO timestamp (auto-generated)             |
@@ -84,7 +85,47 @@ Primary Key: tenant_id (Partition Key) + type (Sort Key)
 | bucket_name    | String  | Yes      | Target S3 bucket name                            |
 | bucket_prefix  | String  | No       | S3 object prefix (default: "ROSA/cluster-logs/") |
 
-### 4. API Layer
+### 4. Application Groups
+
+**Purpose**: Pre-defined application groups simplify filtering configuration for common sets of related applications.
+
+**Available Groups**:
+
+| Group Name         | Applications                                                                          |
+|--------------------|---------------------------------------------------------------------------------------|
+| `API`              | `kube-apiserver`, `openshift-apiserver`                                              |
+| `Authentication`   | `oauth-server`, `oauth-apiserver`                                                    |
+| `Controller Manager` | `kube-controller-manager`, `openshift-controller-manager`, `openshift-route-controller-manager` |
+| `Scheduler`        | `kube-scheduler`                                                                      |
+
+**Usage**:
+- Groups are specified in the `groups` field as a list of group names
+- Group names are case-insensitive (`"API"`, `"api"`, and `"Api"` are equivalent)
+- Application matching is case-sensitive (must match exact application names)
+- Applications from groups are combined with applications from `desired_logs`
+- Duplicates are automatically filtered out
+- Invalid group names log warnings but don't cause errors
+
+**Example Configuration**:
+```json
+{
+  "tenant_id": "acme-corp",
+  "type": "cloudwatch",
+  "enabled": true,
+  "desired_logs": ["custom-app-1", "custom-app-2"],
+  "groups": ["API", "Authentication"],
+  "target_region": "us-east-1",
+  "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
+  "log_group_name": "/aws/logs/acme-corp"
+}
+```
+
+This configuration will process logs from:
+- `custom-app-1` and `custom-app-2` (from `desired_logs`)
+- `kube-apiserver` and `openshift-apiserver` (from `API` group)
+- `oauth-server` and `oauth-apiserver` (from `Authentication` group)
+
+### 5. API Layer
 
 **Technology**: FastAPI with Pydantic validation
 
@@ -118,6 +159,7 @@ Lambda/Container → Central Role → Customer Role → CloudWatch Logs
   "type": "cloudwatch",
   "enabled": true,
   "desired_logs": ["payment-service", "user-service"],
+  "groups": ["API", "Scheduler"],
   "target_region": "us-east-1",
   "log_distribution_role_arn": "arn:aws:iam::123456789012:role/LogDistributionRole",
   "log_group_name": "/aws/logs/acme-corp"
@@ -149,6 +191,7 @@ Lambda/Container → Central Role → S3 Copy Operation
   "type": "s3",
   "enabled": true,
   "desired_logs": [],
+  "groups": ["Controller Manager"],
   "target_region": "us-east-1",
   "bucket_name": "acme-corp-logs",
   "bucket_prefix": "ROSA/cluster-logs/"
