@@ -17,7 +17,7 @@ jobs:
     - name: Checkout current branch
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        ref: "refs/pull/${{ github.event.number }}/merge"
     
     - name: Extract log_processor.py from current ZIP
       run: |
@@ -25,8 +25,9 @@ jobs:
         unzip -j terraform/modules/regional/modules/lambda-stack/log-processor.zip log_processor.py -d /tmp/current/
 
     - name: Checkout main branch
-      run: |
-        git checkout main
+      uses: actions/checkout@v4
+      with:
+        ref: "main"
         
     - name: Extract log_processor.py from main branch ZIP
       run: |
