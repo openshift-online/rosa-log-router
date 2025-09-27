@@ -46,7 +46,7 @@ VECTOR_METADATA_FIELDS = {
 # Each group key maps to a list of application names that belong to that group
 APPLICATION_GROUPS = {
     'API': ['kube-apiserver', 'openshift-apiserver'],
-    'Authentication': ['oauth-server', 'oauth-apiserver'],
+    'Authentication': ['oauth-openshift', 'openshift-oauth-apiserver'],
     'Controller Manager': ['kube-controller-manager', 'openshift-controller-manager', 'openshift-route-controller-manager'],
     'Scheduler': ['kube-scheduler']
 }
@@ -922,7 +922,7 @@ def deliver_logs_to_cloudwatch_native(
             log_stream=log_stream,
             events=processed_events,
             max_events_per_batch=1000,  # Match Vector's max_events
-            max_bytes_per_batch=1048576,  # AWS CloudWatch limit
+            max_bytes_per_batch=1037576,  # AWS CloudWatch limit
             timeout_secs=5  # Match Vector's timeout_secs
         )
 
@@ -1017,7 +1017,7 @@ def deliver_events_in_batches(
     log_stream: str,
     events: List[Dict[str, Any]],
     max_events_per_batch: int = 1000,
-    max_bytes_per_batch: int = 1048576,
+    max_bytes_per_batch: int = 1037576,
     timeout_secs: int = 5
 ) -> Dict[str, int]:
     """
@@ -1342,12 +1342,11 @@ def deliver_logs_to_s3(
         bucket_prefix = normalize_bucket_prefix(bucket_prefix)
 
         # Create destination key maintaining directory structure
-        # Format: {prefix}{cluster_id}/{tenant_id}/{application}/{pod_name}/{filename}
-        # This mirrors the source structure from Vector: cluster_id/namespace/application/pod_name/
+        # Format: {prefix}{tenant_id}/{application}/{pod_name}/{filename}
+        # This excludes cluster_id to avoid exposing MC cluster ID to destination
         source_filename = source_key.split('/')[-1]  # Extract just the filename
         destination_key = (
-            f"{bucket_prefix}{tenant_info['cluster_id']}/"
-            f"{tenant_info['tenant_id']}/"
+            f"{bucket_prefix}{tenant_info['tenant_id']}/"
             f"{tenant_info['application']}/"
             f"{tenant_info['pod_name']}/{source_filename}"
         )
@@ -1367,7 +1366,6 @@ def deliver_logs_to_s3(
             'source-bucket': source_bucket,
             'source-key': source_key,
             'tenant-id': tenant_info['tenant_id'],
-            'cluster-id': tenant_info['cluster_id'],
             'application': tenant_info['application'],
             'pod-name': tenant_info['pod_name'],
             'delivery-timestamp': str(int(datetime.now().timestamp()))
@@ -1440,7 +1438,7 @@ def push_metrics(tenant_id: str, method: str, metrics_data: {str, int}):
     cloudwatch_client = boto3.client('cloudwatch', region_name=AWS_REGION)
     try:
         response = cloudwatch_client.put_metric_data(
-            Namespace='Test/LogForwarding',  # A custom namespace for your metrics
+            Namespace='HCPLF/LogForwarding',  # A custom namespace for your metrics
             MetricData=post_data
         )
         return response
