@@ -88,38 +88,9 @@ resource "aws_sns_topic" "log_delivery_topic" {
 
 # Central S3 Bucket for log storage
 resource "aws_s3_bucket" "central_logging_bucket" {
-  bucket = substr("${var.project_name}-${var.environment}-${data.aws_region.current.name}-${replace(uuidv5("url",var.project_name),"-","")}",0,55)
+  bucket = "${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-${data.aws_region.current.name}-${var.random_suffix}"
   tags   = merge(local.common_tags, {
     Name = "${var.project_name}-${var.environment}-central-logging"
-  })
-}
-resource "aws_s3_bucket_policy" "allow_access_from_osdfm_org" {
-  bucket = aws_s3_bucket.central_logging_bucket.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        "Sid": "Allow Log Forwarder Writes",
-        "Effect": "Allow",
-        "Principal": {
-          "AWS": "*"
-        },
-        "Action": ["s3:GetBucketAcl", "s3:PutObject"],
-        "Resource": [
-          "arn:aws:s3:::${aws_s3_bucket.central_logging_bucket.id}",
-          "arn:aws:s3:::${aws_s3_bucket.central_logging_bucket.id}/*"
-        ],
-        "Condition": {
-          "ArnLike": {
-            "aws:SourceArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
-          },
-          "StringEquals": {
-            "aws:PrincipalOrgID": "${var.org_id}"
-          }
-        }
-      }
-    ]
   })
 }
 
@@ -222,6 +193,10 @@ resource "aws_dynamodb_table" "tenant_config_table" {
   attribute {
     name = "type"
     type = "S"
+  }
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
   }
   point_in_time_recovery {
     enabled = true

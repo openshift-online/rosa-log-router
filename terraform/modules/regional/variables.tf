@@ -14,12 +14,6 @@ variable "project_name" {
   default     = "hcp-log"
 }
 
-variable "org_id" {
-  description = "ID of osdfm org"
-  type        = string
-  default     = ""
-}
-
 # Optional Stack Configuration
 variable "include_sqs_stack" {
   description = "Whether to deploy the SQS stack for log processing"
@@ -33,10 +27,9 @@ variable "include_lambda_stack" {
   default     = true
 }
 
-variable "ecr_image" {
-  description = "ECR container image for the log processor (required if include_lambda_stack is true)"
+variable "random_suffix" {
+  description = "Bucket name random suffix"
   type        = string
-  default     = ""
 }
 
 # S3 Configuration

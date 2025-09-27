@@ -74,8 +74,8 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${var.project_name}-*",
-          "arn:aws:s3:::${var.project_name}-*/*"
+          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
+          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
         ]
       },
       {
@@ -110,7 +110,15 @@ resource "aws_iam_role" "central_s3_writer_role" {
       {
         Effect = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          AWS = "*"
+        }
+        Condition = {
+          StringEquals = {
+            "aws:PrincipalOrgID": "${var.org_id}"
+          }
+          ArnLike =  {
+            "aws:PrincipalArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
+          }
         }
         Action = "sts:AssumeRole"
       }
@@ -138,7 +146,7 @@ resource "aws_iam_role_policy" "central_s3_writer_policy" {
           "s3:PutObject",
           "s3:PutObjectAcl"
         ]
-        Resource = "arn:aws:s3:::${var.project_name}-*/*"
+        Resource = "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
       },
       {
         Effect = "Allow"
@@ -146,7 +154,7 @@ resource "aws_iam_role_policy" "central_s3_writer_policy" {
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
-        Resource = "arn:aws:s3:::${var.project_name}-*"
+        Resource = "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*"
       },
       {
         Effect = "Allow"
@@ -226,8 +234,8 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${var.project_name}-*",
-          "arn:aws:s3:::${var.project_name}-*/*"
+          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
+          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
         ]
       },
       # Assume the central log distribution role
@@ -242,6 +250,20 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
         Action = [
           "kms:Decrypt",
           "kms:DescribeKey"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:sendmessage"
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
         ]
         Resource = "*"
       }

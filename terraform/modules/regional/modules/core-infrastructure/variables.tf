@@ -14,12 +14,6 @@ variable "project_name" {
   default     = "hcp-log"
 }
 
-variable "org_id" {
-  description = "ID of osdfm org"
-  type        = string
-  default     = ""
-}
-
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
   type        = number
@@ -43,6 +37,11 @@ variable "central_log_distribution_role_arn" {
     condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$", var.central_log_distribution_role_arn))
     error_message = "Must be a valid IAM role ARN matching the expected pattern."
   }
+}
+
+variable "random_suffix" {
+  description = "Bucket name random suffix"
+  type        = string
 }
 
 variable "tags" {

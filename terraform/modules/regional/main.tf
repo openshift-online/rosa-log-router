@@ -23,7 +23,7 @@ module "core_infrastructure" {
 
   environment                       = var.environment
   project_name                      = var.project_name
-  org_id                            = var.org_id
+  random_suffix                     = var.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
@@ -57,7 +57,6 @@ module "lambda_stack" {
   tenant_config_table_name          = module.core_infrastructure.tenant_config_table_name
   sqs_queue_arn                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_arn : ""
   sqs_queue_url                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_url : ""
-  ecr_image                         = var.ecr_image
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
   lambda_execution_role_arn         = var.lambda_execution_role_arn
 

@@ -19,11 +19,20 @@ globals "aws" {
 generate_hcl "main.tf" {
   content {
 
+    resource "random_id" "suffix" {
+      byte_length = 4
+    }
+
+    locals {
+      random_suffix = random_id.suffix.hex
+    }
+
     module "global" {
       source = "../../modules/global"
 
       project_name = var.project_name
       environment  = var.environment
+      org_id       = var.org_id
     }
 
     tm_dynamic "module" {
@@ -38,10 +47,9 @@ generate_hcl "main.tf" {
         }
         project_name                      = var.project_name
         environment                       = var.environment
-        org_id                            = var.org_id
         include_sqs_stack                 = var.include_sqs_stack
         include_lambda_stack              = var.include_lambda_stack
-        ecr_image                         = var.ecr_image
+        random_suffix                     = local.random_suffix
         s3_delete_after_days              = var.s3_delete_after_days
         enable_s3_encryption              = var.enable_s3_encryption
         central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
@@ -63,7 +71,7 @@ generate_hcl "config.tf" {
       required_providers {
         aws = {
           source  = "hashicorp/aws"
-          version = "~> 5.0"
+          version = "~> 6.0"
         }
         random = {
           source  = "hashicorp/random"
@@ -119,15 +127,6 @@ generate_hcl "outputs.tf" {
       labels   = ["central_logging_bucket_name_${region.value}"]
       attributes = {
         value = tm_hcl_expression("module.regional-resource-${region.value}.central_logging_bucket_name")
-      }
-    }
-
-    tm_dynamic "output" {
-      for_each = global.aws.regions
-      iterator = region
-      labels   = ["tenant_config_table_name_${region.value}"]
-      attributes = {
-        value = tm_hcl_expression("module.regional-resource-${region.value}.tenant_config_table_name")
       }
     }
 

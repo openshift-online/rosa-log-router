@@ -69,7 +69,7 @@ sinks:
       method: "newline_delimited"
     compression: "gzip"
     batch:
-      max_bytes: 1048576  # 1MB for testing
+      max_bytes: 1037576  # 1MB for testing
       max_events: 100
       timeout_secs: 30  # 30 seconds for testing
     buffer:
