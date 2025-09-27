@@ -18,6 +18,7 @@ import log_processor
 from log_processor import (
     extract_tenant_info_from_key,
     get_tenant_delivery_configs,
+    expand_groups_to_applications,
     should_process_application,
     should_process_delivery_config,
     download_and_process_log_file,
@@ -276,14 +277,19 @@ class TestTenantConfiguration:
         assert should_process_application(config, 'user-service') is True
         assert should_process_application(config, 'admin-service') is False
     
-    def test_should_process_application_case_insensitive(self, environment_variables, dynamodb_table):
-        """Test application filtering is case insensitive."""
+    def test_should_process_application_case_sensitive(self, environment_variables, dynamodb_table):
+        """Test application filtering is case sensitive."""
         with patch('log_processor.TENANT_CONFIG_TABLE', 'test-tenant-configs'):
             configs = get_tenant_delivery_configs('acme-corp')
         config = configs[0]
         
-        assert should_process_application(config, 'Payment-Service') is True
-        assert should_process_application(config, 'USER-SERVICE') is True
+        # Should match exact case (desired_logs contains 'payment-service', 'user-service')
+        assert should_process_application(config, 'payment-service') is True
+        assert should_process_application(config, 'user-service') is True
+        
+        # Should NOT match different case
+        assert should_process_application(config, 'Payment-Service') is False
+        assert should_process_application(config, 'USER-SERVICE') is False
     
     def test_should_process_application_no_filtering(self, environment_variables, dynamodb_table):
         """Test application processing when no desired_logs is specified."""
@@ -333,6 +339,190 @@ class TestTenantConfiguration:
                 # Should not be converted to TenantNotFoundError
                 assert "Some other DynamoDB error" in str(exc_info.value)
                 assert not isinstance(exc_info.value, TenantNotFoundError)
+
+
+class TestGroupsFiltering:
+    """Test groups-based application filtering functionality."""
+    
+    def test_expand_groups_to_applications_valid_groups(self):
+        """Test expanding valid groups to application lists."""
+        # Test single group
+        result = expand_groups_to_applications(['API'])
+        expected = ['kube-apiserver', 'openshift-apiserver']
+        assert result == expected
+        
+        # Test multiple groups
+        result = expand_groups_to_applications(['API', 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_case_insensitive(self):
+        """Test that group expansion is case insensitive."""
+        # Test lowercase
+        result = expand_groups_to_applications(['api'])
+        expected = ['kube-apiserver', 'openshift-apiserver']
+        assert result == expected
+        
+        # Test mixed case
+        result = expand_groups_to_applications(['Api', 'authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_invalid_group(self):
+        """Test handling of invalid group names."""
+        # Single invalid group
+        result = expand_groups_to_applications(['INVALID_GROUP'])
+        assert result == []
+        
+        # Mix of valid and invalid groups
+        result = expand_groups_to_applications(['API', 'INVALID_GROUP', 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_non_string_input(self):
+        """Test handling of non-string inputs in groups list."""
+        result = expand_groups_to_applications(['API', 123, None, 'Authentication'])
+        expected = ['kube-apiserver', 'openshift-apiserver', 'oauth-openshift', 'openshift-oauth-apiserver']
+        assert result == expected
+    
+    def test_expand_groups_to_applications_empty_list(self):
+        """Test handling of empty groups list."""
+        result = expand_groups_to_applications([])
+        assert result == []
+    
+    def test_should_process_application_with_groups_only(self):
+        """Test application filtering with groups field only."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['API', 'Authentication']
+        }
+        
+        # Should match applications in API group
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should match applications in Authentication group
+        assert should_process_application(config, 'oauth-openshift') is True
+        assert should_process_application(config, 'openshift-oauth-apiserver') is True
+        
+        # Should not match applications not in groups
+        assert should_process_application(config, 'kube-scheduler') is False
+        assert should_process_application(config, 'some-random-app') is False
+    
+    def test_should_process_application_with_groups_and_desired_logs(self):
+        """Test application filtering with both groups and desired_logs fields."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': ['custom-app-1', 'custom-app-2'],
+            'groups': ['API']
+        }
+        
+        # Should match applications from desired_logs
+        assert should_process_application(config, 'custom-app-1') is True
+        assert should_process_application(config, 'custom-app-2') is True
+        
+        # Should match applications from groups
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should not match applications not in either list
+        assert should_process_application(config, 'kube-scheduler') is False
+        assert should_process_application(config, 'random-app') is False
+    
+    def test_should_process_application_groups_case_insensitive(self):
+        """Test that group names are case insensitive but application matching is case sensitive."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['api']  # lowercase group name
+        }
+        
+        # Should match exact application names from the group (case-sensitive)
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        
+        # Should NOT match different case (application matching is case-sensitive)
+        assert should_process_application(config, 'KUBE-APISERVER') is False
+        assert should_process_application(config, 'OpenShift-ApiServer') is False
+    
+    def test_should_process_application_duplicate_filtering(self):
+        """Test that duplicates between desired_logs and groups are handled correctly."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': ['kube-apiserver', 'custom-app'],  # kube-apiserver also in API group
+            'groups': ['API']
+        }
+        
+        # Should work correctly despite kube-apiserver being in both lists
+        assert should_process_application(config, 'kube-apiserver') is True
+        assert should_process_application(config, 'custom-app') is True
+        assert should_process_application(config, 'openshift-apiserver') is True
+        assert should_process_application(config, 'kube-scheduler') is False
+    
+    def test_should_process_application_invalid_groups_field(self):
+        """Test handling of invalid groups field types."""
+        # groups is not a list
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': 'API'  # Should be a list
+        }
+        
+        # Should process all applications when groups field is invalid
+        assert should_process_application(config, 'any-app') is True
+        
+        # groups is None
+        config['groups'] = None
+        assert should_process_application(config, 'any-app') is True
+        
+        # groups is a number
+        config['groups'] = 123
+        assert should_process_application(config, 'any-app') is True
+    
+    def test_should_process_application_empty_groups_and_desired_logs(self):
+        """Test behavior when both groups and desired_logs are empty or invalid."""
+        # Both empty lists
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': [],
+            'groups': []
+        }
+        assert should_process_application(config, 'any-app') is True
+        
+        # Both None
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': None,
+            'groups': None
+        }
+        assert should_process_application(config, 'any-app') is True
+        
+        # Both invalid types
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'desired_logs': 'invalid',
+            'groups': 123
+        }
+        assert should_process_application(config, 'any-app') is True
+    
+    def test_should_process_application_groups_with_invalid_group_names(self):
+        """Test behavior when groups list contains invalid group names."""
+        config = {
+            'tenant_id': 'test-tenant',
+            'type': 'cloudwatch',
+            'groups': ['API', 'INVALID_GROUP', 'Authentication', 'ANOTHER_INVALID']
+        }
+        
+        # Should still work with valid groups, ignoring invalid ones
+        assert should_process_application(config, 'kube-apiserver') is True  # from API
+        assert should_process_application(config, 'oauth-openshift') is True  # from Authentication
+        assert should_process_application(config, 'kube-scheduler') is False  # not in any valid group
 
 
 class TestLogProcessing:
@@ -1109,7 +1299,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1148,7 +1338,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,  # 1MB
+            max_bytes_per_batch=1037576,  # 1MB
             timeout_secs=5
         )
         
@@ -1160,7 +1350,7 @@ class TestCloudWatchBatchOptimization:
             batch_events = call[1]['logEvents']
             # Approximate size calculation: message length + 26 bytes overhead per event
             total_size = sum(len(event['message'].encode('utf-8')) + 26 for event in batch_events)
-            assert total_size <= 1048576, f"Batch size {total_size} exceeds 1MB limit"
+            assert total_size <= 1037576, f"Batch size {total_size} exceeds 1MB limit"
         
         # Verify all events were processed
         assert result['total_processed'] == 1100
@@ -1222,7 +1412,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1271,7 +1461,7 @@ class TestCloudWatchBatchOptimization:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5  # 5 second timeout
             )
         
@@ -1307,7 +1497,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1341,7 +1531,7 @@ class TestCloudWatchBatchOptimization:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,  # 1MB limit
+            max_bytes_per_batch=1037576,  # 1MB limit
             timeout_secs=5
         )
         
@@ -1353,7 +1543,7 @@ class TestCloudWatchBatchOptimization:
         for call in mock_logs_client.put_log_events.call_args_list:
             batch_events = call[1]['logEvents']
             total_size = sum(len(event['message'].encode('utf-8')) + 26 for event in batch_events)
-            assert total_size <= 1048576
+            assert total_size <= 1037576
 
 
 class TestPartialLogDelivery:
@@ -1385,7 +1575,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1421,7 +1611,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -1450,7 +1640,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -1495,7 +1685,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=10,  # Small batches to force multiple calls
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -1552,7 +1742,7 @@ class TestPartialLogDelivery:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
             
@@ -1580,7 +1770,7 @@ class TestPartialLogDelivery:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2641,7 +2831,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream', 
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2662,7 +2852,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2689,7 +2879,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1,  # Force one event per batch
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2717,7 +2907,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2758,7 +2948,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2795,7 +2985,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2830,7 +3020,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2863,7 +3053,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events_exactly_1000,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2888,7 +3078,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events_1001,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2915,7 +3105,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=1000,
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2954,7 +3144,7 @@ class TestCloudWatchBatchEdgeCases:
             log_stream='test-stream',
             events=events,
             max_events_per_batch=10,  # Force multiple batches
-            max_bytes_per_batch=1048576,
+            max_bytes_per_batch=1037576,
             timeout_secs=5
         )
         
@@ -2994,7 +3184,7 @@ class TestCloudWatchBatchEdgeCases:
                 log_stream='test-stream',
                 events=events,
                 max_events_per_batch=1000,
-                max_bytes_per_batch=1048576,
+                max_bytes_per_batch=1037576,
                 timeout_secs=5
             )
         
@@ -3028,7 +3218,7 @@ class TestCloudWatchBatchEdgeCases:
                     log_stream='test-stream',
                     events=events,
                     max_events_per_batch=1000,
-                    max_bytes_per_batch=1048576,
+                    max_bytes_per_batch=1037576,
                     timeout_secs=5
                 )
         
@@ -3105,13 +3295,13 @@ class TestS3LogDelivery:
             mock_sts.assume_role.assert_called_once()
             assume_role_call = mock_sts.assume_role.call_args
             assert assume_role_call[1]['RoleSessionName'].startswith('S3LogDelivery-')
-            assert len(assume_role_call[1]['RoleSessionName'].split('-')) >= 7  # S3LogDelivery-{uuid}-{timestamp}
+            assert len(assume_role_call[1]['RoleSessionName'].split('-')) >= 6  # S3LogDelivery-{uuid}
             
             # Verify S3 copy operation
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
             assert copy_call['Bucket'] == 'destination-bucket'
-            assert copy_call['Key'] == 'customer-logs/test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
+            assert copy_call['Key'] == 'customer-logs/acme-corp/payment-service/pod-123/file.json.gz'
             assert copy_call['CopySource']['Bucket'] == 'source-bucket'
             assert copy_call['CopySource']['Key'] == 'test-cluster/acme-corp/payment-service/pod-123/file.json.gz'
             assert copy_call['ACL'] == 'bucket-owner-full-control'
@@ -3121,7 +3311,7 @@ class TestS3LogDelivery:
             metadata = copy_call['Metadata']
             assert metadata['source-bucket'] == 'source-bucket'
             assert metadata['tenant-id'] == 'acme-corp'
-            assert metadata['cluster-id'] == 'test-cluster'
+            # cluster-id removed from metadata to avoid exposing MC cluster ID
             assert metadata['application'] == 'payment-service'
             assert metadata['pod-name'] == 'pod-123'
     
@@ -3219,7 +3409,7 @@ class TestS3LogDelivery:
             # Verify default prefix is used
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
-            expected_key = 'ROSA/cluster-logs/test-cluster/test-tenant/web-service/web-pod-789/file.json.gz'
+            expected_key = 'ROSA/cluster-logs/test-tenant/web-service/web-pod-789/file.json.gz'
             assert copy_call['Key'] == expected_key
     
     def test_deliver_logs_to_s3_bucket_not_found(self, environment_variables, mock_aws_services):
@@ -3476,5 +3666,5 @@ class TestS3LogDelivery:
             # Verify slash was added to prefix
             mock_s3.copy_object.assert_called_once()
             copy_call = mock_s3.copy_object.call_args[1]
-            expected_key = 'customer-logs/test-cluster/test-tenant/test-app/test-pod/file.json.gz'
+            expected_key = 'customer-logs/test-tenant/test-app/test-pod/file.json.gz'
             assert copy_call['Key'] == expected_key

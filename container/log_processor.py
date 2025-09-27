@@ -42,6 +42,15 @@ VECTOR_METADATA_FIELDS = {
     'ingest_timestamp', 'timestamp', 'kubernetes'
 }
 
+# Application group definitions for filtering
+# Each group key maps to a list of application names that belong to that group
+APPLICATION_GROUPS = {
+    'API': ['kube-apiserver', 'openshift-apiserver'],
+    'Authentication': ['oauth-openshift', 'openshift-oauth-apiserver'],
+    'Controller Manager': ['kube-controller-manager', 'openshift-controller-manager', 'openshift-route-controller-manager'],
+    'Scheduler': ['kube-scheduler']
+}
+
 # Custom exception classes
 class NonRecoverableError(Exception):
     """Exception for errors that should not be retried (e.g., missing tenant config)"""
@@ -301,13 +310,13 @@ def process_sqs_record(sqs_record: Dict[str, Any]) -> Dict[str, int]:
                                 deliver_logs_to_s3(bucket_name, object_key, delivery_config, tenant_info)
                                 try:
                                     push_metrics(tenant_info['tenant_id'], "s3", {"successful_delivery": 1})
-                                except Exception as e:
-                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+                                except Exception as metric_e:
+                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(metric_e)}")
                             except Exception as e:
                                 try:
                                     push_metrics(tenant_info['tenant_id'], "s3", {"failed_delivery": 1})
-                                except Exception as e:
-                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+                                except Exception as metric_e:
+                                    logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(metric_e)}")
                                 raise
                             delivery_stats['successful_deliveries'] += 1
                         else:
@@ -499,9 +508,40 @@ def get_tenant_delivery_configs(tenant_id: str) -> List[Dict[str, Any]]:
         logger.error(f"Failed to get tenant delivery configurations for {tenant_id}: {str(e)}")
         raise
 
+def expand_groups_to_applications(groups: List[str]) -> List[str]:
+    """
+    Expand group names to their corresponding application lists
+    
+    Args:
+        groups: List of group names to expand
+        
+    Returns:
+        List of application names from all specified groups
+    """
+    expanded_applications = []
+    
+    for group in groups:
+        if not isinstance(group, str):
+            logger.warning(f"Group name is not a string: {type(group)}. Skipping.")
+            continue
+            
+        # Case-insensitive group lookup
+        group_found = False
+        for key, applications in APPLICATION_GROUPS.items():
+            if key.lower() == group.lower():
+                expanded_applications.extend(applications)
+                logger.info(f"Expanded group '{group}' to applications: {applications}")
+                group_found = True
+                break
+        
+        if not group_found:
+            logger.warning(f"Group '{group}' not found in APPLICATION_GROUPS dictionary. Available groups: {list(APPLICATION_GROUPS.keys())}")
+    
+    return expanded_applications
+
 def should_process_application(delivery_config: Dict[str, Any], application_name: str) -> bool:
     """
-    Check if the application should be processed based on delivery configuration's desired_logs
+    Check if the application should be processed based on delivery configuration's desired_logs and groups
     
     Args:
         delivery_config: Delivery configuration from DynamoDB
@@ -511,26 +551,47 @@ def should_process_application(delivery_config: Dict[str, Any], application_name
         True if application should be processed, False if it should be filtered out
     """
     desired_logs = delivery_config.get('desired_logs')
+    groups = delivery_config.get('groups')
 
-    # If no desired_logs specified, process all applications (backward compatibility)
-    if not desired_logs:
+    # If neither desired_logs nor groups specified, process all applications (backward compatibility)
+    if not desired_logs and not groups:
         return True
 
-    # If desired_logs is not a list, log warning and process all applications
-    if not isinstance(desired_logs, list):
-        logger.warning(f"desired_logs is not a list: {type(desired_logs)}. Processing all applications.")
+    # Collect all allowed applications from both desired_logs and groups
+    allowed_applications = []
+    
+    # Process desired_logs field
+    if desired_logs:
+        if not isinstance(desired_logs, list):
+            logger.warning(f"desired_logs is not a list: {type(desired_logs)}. Ignoring desired_logs field.")
+        else:
+            # Add applications from desired_logs
+            allowed_applications.extend([log for log in desired_logs if isinstance(log, str)])
+    
+    # Process groups field
+    if groups:
+        if not isinstance(groups, list):
+            logger.warning(f"groups is not a list: {type(groups)}. Ignoring groups field.")
+        else:
+            # Expand groups to applications and add them
+            expanded_applications = expand_groups_to_applications(groups)
+            allowed_applications.extend(expanded_applications)
+    
+    # If we still have no allowed applications after processing, process all applications
+    if not allowed_applications:
+        logger.warning("No valid applications found in desired_logs or groups. Processing all applications.")
         return True
+    
+    # Remove duplicates (case-sensitive application matching)
+    unique_allowed_applications = list(set(allowed_applications))
 
-    # Case-insensitive matching for robustness
-    desired_logs_lower = [log.lower() for log in desired_logs if isinstance(log, str)]
-    application_lower = application_name.lower()
-
-    should_process = application_lower in desired_logs_lower
+    should_process = application_name in unique_allowed_applications
 
     if should_process:
-        logger.info(f"Application '{application_name}' is in desired_logs list - will process")
+        logger.info(f"Application '{application_name}' matches filtering criteria - will process")
     else:
-        logger.info(f"Application '{application_name}' is NOT in desired_logs list {desired_logs} - will skip processing")
+        logger.info(f"Application '{application_name}' does NOT match filtering criteria - will skip processing")
+        logger.debug(f"Allowed applications: {sorted(unique_allowed_applications)}")
 
     return should_process
 
@@ -727,7 +788,7 @@ def deliver_logs_to_cloudwatch(
         # Step 1: Assume the central log distribution role
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
-            RoleSessionName=f"CentralLogDistribution-{str(uuid.uuid4())}-{int(datetime.now().timestamp())}"
+            RoleSessionName=f"CentralLogDistribution-{str(uuid.uuid4())}"
         )
 
         # Extract central role credentials (Vector will use these to assume customer role)
@@ -780,8 +841,8 @@ def deliver_logs_to_cloudwatch(
                 {
                     "failed_delivery": 1,
                 })
-        except Exception as e:
-            logger.error(f"Failed to write metrics to CW for CW for tenant {tenant_info['tenant_id']} :{str(e)}")
+        except Exception as metric_e:
+            logger.error(f"Failed to write metrics to CW for CW for tenant {tenant_info['tenant_id']} :{str(metric_e)}")
 
         logger.error(f"Failed to deliver logs to customer {tenant_info['tenant_id']}: {str(e)}")
         raise
@@ -861,7 +922,7 @@ def deliver_logs_to_cloudwatch_native(
             log_stream=log_stream,
             events=processed_events,
             max_events_per_batch=1000,  # Match Vector's max_events
-            max_bytes_per_batch=1048576,  # AWS CloudWatch limit
+            max_bytes_per_batch=1037576,  # AWS CloudWatch limit
             timeout_secs=5  # Match Vector's timeout_secs
         )
 
@@ -956,7 +1017,7 @@ def deliver_events_in_batches(
     log_stream: str,
     events: List[Dict[str, Any]],
     max_events_per_batch: int = 1000,
-    max_bytes_per_batch: int = 1048576,
+    max_bytes_per_batch: int = 1037576,
     timeout_secs: int = 5
 ) -> Dict[str, int]:
     """
@@ -1260,7 +1321,7 @@ def deliver_logs_to_s3(
         # Assume the central log distribution role (single-hop)
         central_role_response = sts_client.assume_role(
             RoleArn=CENTRAL_LOG_DISTRIBUTION_ROLE_ARN,
-            RoleSessionName=f"S3LogDelivery-{str(uuid.uuid4())}-{int(datetime.now().timestamp())}"
+            RoleSessionName=f"S3LogDelivery-{str(uuid.uuid4())}"
         )
 
         # Create S3 client with central role credentials
@@ -1281,12 +1342,11 @@ def deliver_logs_to_s3(
         bucket_prefix = normalize_bucket_prefix(bucket_prefix)
 
         # Create destination key maintaining directory structure
-        # Format: {prefix}{cluster_id}/{tenant_id}/{application}/{pod_name}/{filename}
-        # This mirrors the source structure from Vector: cluster_id/namespace/application/pod_name/
+        # Format: {prefix}{tenant_id}/{application}/{pod_name}/{filename}
+        # This excludes cluster_id to avoid exposing MC cluster ID to destination
         source_filename = source_key.split('/')[-1]  # Extract just the filename
         destination_key = (
-            f"{bucket_prefix}{tenant_info['cluster_id']}/"
-            f"{tenant_info['tenant_id']}/"
+            f"{bucket_prefix}{tenant_info['tenant_id']}/"
             f"{tenant_info['application']}/"
             f"{tenant_info['pod_name']}/{source_filename}"
         )
@@ -1306,7 +1366,6 @@ def deliver_logs_to_s3(
             'source-bucket': source_bucket,
             'source-key': source_key,
             'tenant-id': tenant_info['tenant_id'],
-            'cluster-id': tenant_info['cluster_id'],
             'application': tenant_info['application'],
             'pod-name': tenant_info['pod_name'],
             'delivery-timestamp': str(int(datetime.now().timestamp()))
@@ -1328,16 +1387,16 @@ def deliver_logs_to_s3(
 
             try:
                 push_metrics(tenant_info['tenant_id'], "s3", {"successful_delivery": 1})
-            except Exception as e:
-                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+            except Exception as metric_e:
+                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(metric_e)}")
 
         except ClientError as copy_error:
             error_code = copy_error.response['Error']['Code']
 
             try:
                 push_metrics(tenant_info['tenant_id'], "s3", {"failed_delivery": 1})
-            except Exception as e:
-                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(e)}")
+            except Exception as metric_e:
+                logger.error(f"Failed to write metrics to CW for S3 for tenant {tenant_info['tenant_id']} :{str(metric_e)}")
 
             if error_code == 'NoSuchBucket':
                 raise NonRecoverableError(f"Destination S3 bucket '{destination_bucket}' does not exist")
@@ -1379,7 +1438,7 @@ def push_metrics(tenant_id: str, method: str, metrics_data: {str, int}):
     cloudwatch_client = boto3.client('cloudwatch', region_name=AWS_REGION)
     try:
         response = cloudwatch_client.put_metric_data(
-            Namespace='Test/LogForwarding',  # A custom namespace for your metrics
+            Namespace='HCPLF/LogForwarding',  # A custom namespace for your metrics
             MetricData=post_data
         )
         return response

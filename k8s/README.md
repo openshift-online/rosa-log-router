@@ -390,7 +390,7 @@ annotations:
 ### Batching Configuration
 Vector is configured with optimal batching for cost efficiency:
 - `batch.timeout_secs: 300` (5 minutes)
-- `batch.max_bytes: 10485760` (10MB)
+- `batch.max_bytes: 10375760` (10MB)
 
 These settings reduce S3 PUT requests and improve throughput.
 
