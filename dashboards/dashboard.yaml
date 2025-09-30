@@ -641,7 +641,7 @@ data:
             "options": [],
             "query": "prometheus",
             "refresh": 1,
-            "regex": "/^app.*11ue1-prom/",
+            "regex": "/appsres11ue1-prometheus|appsrep09ue1-prometheus/",
             "type": "datasource"
           },
           {
@@ -676,5 +676,5 @@ data:
       "timezone": "UTC",
       "title": "Hypershift Log Forwarding",
       "uid": "fez5435mhhibka",
-      "version": 11
+      "version": 15
     }
