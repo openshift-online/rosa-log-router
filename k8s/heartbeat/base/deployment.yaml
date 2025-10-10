@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vector-heartbeat
+  namespace: logging
+  labels:
+    app: vector-heartbeat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vector-heartbeat
+  template:
+    metadata:
+      labels:
+        app: vector-heartbeat
+    spec:
+      containers:
+      - name: heartbeat
+        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/heartbeat:main
+        resources:
+          requests:
+            memory: "8Mi"
+            cpu: "10m"
+          limits:
+            memory: "16Mi"
+            cpu: "20m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
