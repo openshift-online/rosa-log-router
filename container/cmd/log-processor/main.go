@@ -27,11 +27,14 @@ func main() {
 	mode := flag.String("mode", "", "Execution mode: sqs, manual, or scan (default: lambda)")
 	flag.Parse()
 
-	// Setup logger
+	// Setup logger with LOG_LEVEL environment variable support
+	logLevel := parseLogLevel()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}))
 	slog.SetDefault(logger)
+
+	logger.Info("log processor starting", "log_level", logLevel.String())
 
 	// Load configuration from environment
 	cfg := loadConfig()
@@ -324,4 +327,26 @@ func scanMode(ctx context.Context, proc *processor.Processor, s3Client *s3.Clien
 
 func endsWithJSONGZ(s string) bool {
 	return len(s) >= 8 && s[len(s)-8:] == ".json.gz"
+}
+
+// parseLogLevel parses LOG_LEVEL environment variable and returns corresponding slog.Level
+func parseLogLevel() slog.Level {
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		return slog.LevelInfo // Default to INFO
+	}
+
+	switch logLevel {
+	case "DEBUG", "debug":
+		return slog.LevelDebug
+	case "INFO", "info":
+		return slog.LevelInfo
+	case "WARN", "warn", "WARNING", "warning":
+		return slog.LevelWarn
+	case "ERROR", "error":
+		return slog.LevelError
+	default:
+		fmt.Fprintf(os.Stderr, "Invalid LOG_LEVEL '%s', defaulting to INFO. Valid values: DEBUG, INFO, WARN, ERROR\n", logLevel)
+		return slog.LevelInfo
+	}
 }

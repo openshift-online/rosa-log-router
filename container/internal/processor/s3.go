@@ -125,13 +125,6 @@ func DownloadAndProcessLogFile(ctx context.Context, s3Client *s3.Client, bucketN
 			"size_bytes_decompressed", len(fileContent))
 	}
 
-	// Log first 500 characters of the file for debugging
-	sample := string(fileContent)
-	if len(sample) > 500 {
-		sample = sample[:500]
-	}
-	logger.Info("file content sample (first 500 chars)", "sample", sample)
-
 	logEvents, err := ProcessJSONFile(fileContent, logger)
 	if err != nil {
 		return nil, 0, err
@@ -179,7 +172,7 @@ func ProcessJSONFile(fileContent []byte, logger *slog.Logger) ([]*models.LogEven
 			for idx, logRecord := range arr {
 				if idx == 0 && lineNum == 0 {
 					if record, ok := logRecord.(map[string]interface{}); ok {
-						logger.Info("first log record", "keys", getKeys(record), "sample", truncateString(fmt.Sprintf("%v", record), 200))
+						logger.Info("first log record", "keys", getKeys(record))
 					}
 				}
 				event := ConvertLogRecordToEvent(logRecord, logger)
@@ -191,7 +184,7 @@ func ProcessJSONFile(fileContent []byte, logger *slog.Logger) ([]*models.LogEven
 			// Single log record
 			if lineNum == 0 {
 				if record, ok := parsedData.(map[string]interface{}); ok {
-					logger.Info("first log record", "keys", getKeys(record), "sample", truncateString(fmt.Sprintf("%v", record), 200))
+					logger.Info("first log record", "keys", getKeys(record))
 				}
 			}
 			event := ConvertLogRecordToEvent(parsedData, logger)
