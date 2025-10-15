@@ -30,9 +30,27 @@ except ImportError:
             return prefix + '/'
         return prefix
 
-# Configure logging
+# Configure logging with LOG_LEVEL environment variable support
+def get_log_level():
+    """Parse LOG_LEVEL environment variable and return corresponding logging level"""
+    log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    level_map = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARNING': logging.WARNING,
+        'WARN': logging.WARNING,
+        'ERROR': logging.ERROR,
+        'CRITICAL': logging.CRITICAL,
+    }
+
+    if log_level not in level_map:
+        print(f"Invalid LOG_LEVEL '{log_level}', defaulting to INFO. Valid values: DEBUG, INFO, WARNING, ERROR", file=sys.stderr)
+        return logging.INFO
+
+    return level_map[log_level]
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=get_log_level(),
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -64,16 +82,16 @@ class InvalidS3NotificationError(NonRecoverableError):
     """Exception for invalid S3 notifications that cannot be processed"""
     pass
 
-# For Lambda, we need to ensure the root logger and all handlers are set to INFO
+# For Lambda, we need to ensure the root logger and all handlers use the configured log level
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+root_logger.setLevel(get_log_level())
 
-# Set all existing handlers to INFO level (Lambda adds its own handler)
+# Set all existing handlers to the configured log level (Lambda adds its own handler)
 for handler in root_logger.handlers:
-    handler.setLevel(logging.INFO)
+    handler.setLevel(get_log_level())
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(get_log_level())
 
 # Environment variables
 TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
@@ -82,6 +100,7 @@ RETRY_ATTEMPTS = int(os.environ.get('RETRY_ATTEMPTS', '3'))
 CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = os.environ.get('CENTRAL_LOG_DISTRIBUTION_ROLE_ARN')
 SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
 
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
@@ -636,11 +655,7 @@ def download_and_process_log_file(bucket_name: str, object_key: str) -> tuple[Li
         # Decompress if gzipped
         if object_key.endswith('.gz'):
             file_content = gzip.decompress(file_content)
-            logger.info(f"Decompressed file size: {len(file_content)} bytes")
-
-        # Log first 500 characters of the file for debugging
-        sample = file_content[:500].decode('utf-8', errors='replace')
-        logger.info(f"File content sample (first 500 chars): {sample}")
+            logger.debug(f"Decompressed file size: {len(file_content)} bytes")
 
         log_events = process_json_file(file_content)
         return log_events, s3_timestamp_ms
@@ -678,7 +693,6 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
                             if idx == 0 and line_num == 0:
                                 if isinstance(log_record, dict):
                                     logger.info(f"First log record keys: {list(log_record.keys())}")
-                                    logger.info(f"First log record sample: {str(log_record)[:200]}...")
                             event = convert_log_record_to_event(log_record)
                             if event:
                                 log_events.append(event)
@@ -686,7 +700,6 @@ def process_json_file(file_content: bytes) -> List[Dict[str, Any]]:
                         # Single log record
                         if line_num == 0 and isinstance(parsed_data, dict):
                             logger.info(f"First log record keys: {list(parsed_data.keys())}")
-                            logger.info(f"First log record sample: {str(parsed_data)[:200]}...")
                         event = convert_log_record_to_event(parsed_data)
                         if event:
                             log_events.append(event)
