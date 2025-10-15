@@ -44,6 +44,12 @@ variable "include_lambda_stack" {
   default     = true
 }
 
+variable "include_api_stack" {
+  description = "Whether to deploy the API stack"
+  type        = bool
+  default     = false
+}
+
 # S3 Configuration
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
@@ -59,4 +65,19 @@ variable "enable_s3_encryption" {
   description = "Enable S3 server-side encryption"
   type        = bool
   default     = true
+}
+
+variable "api_auth_ssm_parameter" {
+  description = "SSM parameter name containing the PSK for API authentication"
+  type        = string
+}
+
+variable "authorizer_image" {
+  description = "ECR image for the Lambda authorizer container image"
+  type        = string
+}
+
+variable "api_image" {
+  description = "ECR image for the API service container image"
+  type        = string
 }

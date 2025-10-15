@@ -30,9 +30,10 @@ generate_hcl "main.tf" {
     module "global" {
       source = "../../modules/global"
 
-      project_name = var.project_name
-      environment  = var.environment
-      org_id       = var.org_id
+      project_name           = var.project_name
+      environment            = var.environment
+      org_id                 = var.org_id
+      api_auth_ssm_parameter = var.api_auth_ssm_parameter
     }
 
     tm_dynamic "module" {
@@ -49,11 +50,18 @@ generate_hcl "main.tf" {
         environment                       = var.environment
         include_sqs_stack                 = var.include_sqs_stack
         include_lambda_stack              = var.include_lambda_stack
+        include_api_stack                 = var.include_api_stack
         random_suffix                     = local.random_suffix
         s3_delete_after_days              = var.s3_delete_after_days
         enable_s3_encryption              = var.enable_s3_encryption
         central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
         lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+        api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+        authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+        authorizer_image                  = var.authorizer_image
+        api_execution_role_arn            = module.global.api_execution_role_arn
+        api_image                         = var.api_image
+        api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
       }
     }
   }
@@ -127,15 +135,6 @@ generate_hcl "outputs.tf" {
       labels   = ["central_logging_bucket_name_${region.value}"]
       attributes = {
         value = tm_hcl_expression("module.regional-resource-${region.value}.central_logging_bucket_name")
-      }
-    }
-
-    tm_dynamic "output" {
-      for_each = global.aws.regions
-      iterator = region
-      labels   = ["tenant_config_table_arn_${region.value}"]
-      attributes = {
-        value = tm_hcl_expression("module.regional-resource-${region.value}.tenant_config_table_arn")
       }
     }
   }

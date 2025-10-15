@@ -40,27 +40,3 @@ output "central_logging_bucket_name_us-east-2" {
 output "central_logging_bucket_name_us-west-2" {
   value = module.regional-resource-us-west-2.central_logging_bucket_name
 }
-output "tenant_config_table_arn_ap-northeast-1" {
-  value = module.regional-resource-ap-northeast-1.tenant_config_table_arn
-}
-output "tenant_config_table_arn_ap-northeast-2" {
-  value = module.regional-resource-ap-northeast-2.tenant_config_table_arn
-}
-output "tenant_config_table_arn_ap-southeast-1" {
-  value = module.regional-resource-ap-southeast-1.tenant_config_table_arn
-}
-output "tenant_config_table_arn_eu-west-2" {
-  value = module.regional-resource-eu-west-2.tenant_config_table_arn
-}
-output "tenant_config_table_arn_eu-west-3" {
-  value = module.regional-resource-eu-west-3.tenant_config_table_arn
-}
-output "tenant_config_table_arn_us-east-1" {
-  value = module.regional-resource-us-east-1.tenant_config_table_arn
-}
-output "tenant_config_table_arn_us-east-2" {
-  value = module.regional-resource-us-east-2.tenant_config_table_arn
-}
-output "tenant_config_table_arn_us-west-2" {
-  value = module.regional-resource-us-west-2.tenant_config_table_arn
-}

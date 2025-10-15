@@ -15,24 +15,24 @@ locals {
     Project     = var.project_name
     Environment = var.environment
     ManagedBy   = "terraform"
-    StackType   = "sqs-infrastructure"
+    StackType   = "sqs-stack"
   })
 }
 
 # Dead Letter Queue for failed messages
 resource "aws_sqs_queue" "log_delivery_dlq" {
   name                      = "${var.project_name}-${var.environment}-log-delivery-dlq"
-  message_retention_seconds = 1209600  # 14 days
+  message_retention_seconds = 1209600 # 14 days
 
   tags = local.common_tags
 }
 
 # SQS queue for log delivery processing
 resource "aws_sqs_queue" "log_delivery_queue" {
-  name                        = "${var.project_name}-${var.environment}-log-delivery-queue"
-  message_retention_seconds   = 1209600  # 14 days
-  visibility_timeout_seconds  = 900      # 15 minutes
-  receive_wait_time_seconds   = 20       # Long polling
+  name                       = "${var.project_name}-${var.environment}-log-delivery-queue"
+  message_retention_seconds  = 1209600 # 14 days
+  visibility_timeout_seconds = 900     # 15 minutes
+  receive_wait_time_seconds  = 20      # Long polling
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.log_delivery_dlq.arn
