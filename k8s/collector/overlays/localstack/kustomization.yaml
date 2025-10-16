@@ -7,6 +7,6 @@ resources:
   - ../../base
   - localstack-secret.yaml
 
-patches:
-  - path: vector-config-patch.yaml
-  - path: vector-daemonset-patch.yaml
+patchesStrategicMerge:
+  - vector-config-patch.yaml
+  - vector-daemonset-patch.yaml
