@@ -49,10 +49,15 @@ jobs:
         driver: docker
         kubernetes-version: v1.33.0
 
-    - name: Verify minikube
+    - name: Verify minikube and configure kubectl
       run: |
+        # Ensure kubectl is using minikube context
+        kubectl config use-context minikube
         kubectl cluster-info
         kubectl get nodes
+
+        # Create logging namespace for Vector
+        kubectl create namespace logging
 
     - name: Start LocalStack
       run: |
@@ -147,20 +152,41 @@ jobs:
       run: |
         echo "=== Debug Information ==="
         echo ""
+
+        # Ensure kubectl is using minikube context
+        kubectl config use-context minikube || echo "Could not set kubectl context"
+
+        echo "Minikube status:"
+        minikube status || echo "Minikube not running"
+        echo ""
+
+        echo "Docker containers:"
+        docker ps -a || echo "Could not list containers"
+        echo ""
+
         echo "LocalStack logs:"
-        docker logs rosa-localstack --tail=50 || echo "Could not get LocalStack logs"
+        docker logs rosa-localstack --tail=50 2>&1 || docker-compose logs localstack --tail=50 2>&1 || echo "Could not get LocalStack logs"
         echo ""
+
         echo "Vector logs:"
-        kubectl logs -l app.kubernetes.io/name=vector --tail=50 --namespace=logging || echo "No Vector logs"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=50 --namespace=logging 2>&1 || echo "No Vector logs"
         echo ""
+
         echo "Fake generator logs (acme-corp):"
-        kubectl logs -l app=payment-service --tail=20 --namespace=acme-corp || echo "No payment-service logs"
+        kubectl logs -l app=payment-service --tail=20 --namespace=acme-corp 2>&1 || echo "No payment-service logs"
         echo ""
+
         echo "Fake generator logs (globex-industries):"
-        kubectl logs -l app=platform-api --tail=20 --namespace=globex-industries || echo "No platform-api logs"
+        kubectl logs -l app=platform-api --tail=20 --namespace=globex-industries 2>&1 || echo "No platform-api logs"
         echo ""
+
+        echo "Kubernetes pods:"
+        kubectl get pods --all-namespaces 2>&1 || echo "Could not get pods"
+        echo ""
+
         echo "Terraform state:"
-        cd terraform/local && terraform show || echo "Could not show terraform state"
+        (cd terraform/local && terraform show) 2>&1 || echo "Could not show terraform state"
         echo ""
+
         echo "Cleaning up..."
-        make clean
+        make clean 2>&1 || echo "Could not run make clean (may already be cleaned up)"
