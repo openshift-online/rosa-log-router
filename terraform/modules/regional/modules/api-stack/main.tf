@@ -294,10 +294,10 @@ resource "aws_api_gateway_deployment" "api_deployment" {
 }
 
 # API Gateway Stage
-resource "aws_api_gateway_stage" "tenant_management" {
+resource "aws_api_gateway_stage" "api_stage" {
   stage_name    = var.environment
-  rest_api_id   = aws_api_gateway_rest_api.tenant_management.id
-  deployment_id = aws_api_gateway_deployment.tenant_management.id
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  deployment_id = aws_api_gateway_deployment.api_deployment.id
 }
 
 # CloudWatch Log Group for API Gateway
