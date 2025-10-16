@@ -104,7 +104,20 @@ jobs:
         kubectl apply -k k8s/collector/overlays/localstack
 
         # Wait for Vector to be ready
-        kubectl wait --for=condition=ready pod -l app=vector-logs --timeout=120s --namespace=logging
+        echo "Waiting for Vector pods to be ready..."
+        kubectl wait --for=condition=ready pod -l app=vector-logs --timeout=120s --namespace=logging || {
+          echo "❌ Vector pods failed to become ready. Debugging..."
+          echo ""
+          echo "Pod status:"
+          kubectl get pods -n logging -l app=vector-logs
+          echo ""
+          echo "Pod details:"
+          kubectl describe pods -n logging -l app=vector-logs
+          echo ""
+          echo "Pod logs (if available):"
+          kubectl logs -n logging -l app=vector-logs --tail=50 || echo "No logs available yet"
+          exit 1
+        }
 
         echo "✅ Vector deployed and ready"
 
