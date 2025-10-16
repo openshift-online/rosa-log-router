@@ -14,18 +14,18 @@ start: ## Start LocalStack
 	@echo "Ensuring Podman socket is available..."
 	@systemctl --user enable --now podman.socket 2>/dev/null || true
 	@echo "Starting LocalStack..."
-	docker-compose up -d
+	docker compose up -d
 	@echo "Waiting for LocalStack to be ready..."
 	@sleep 10
-	@docker-compose logs localstack | tail -20
+	@docker compose logs localstack | tail -20
 	@echo "✅ LocalStack is running at http://localhost:4566"
 
 stop: ## Stop LocalStack
 	@echo "Stopping LocalStack..."
-	docker-compose down
+	docker compose down
 
 logs: ## Show LocalStack logs
-	docker-compose logs -f localstack
+	docker compose logs -f localstack
 
 build: ## Build Python container image
 	@echo "Building Python log processor container..."
@@ -289,7 +289,7 @@ validate-vector-flow: ## Validate Vector is routing logs to customer buckets cor
 	@bash scripts/validate-vector-flow.sh
 
 clean: stop ## Stop LocalStack and clean up all local state
-	docker-compose down -v
+	docker compose down -v
 	@echo "Cleaning up Terraform state..."
 	@rm -rf terraform/local/.terraform
 	@rm -f terraform/local/.terraform.lock.hcl
