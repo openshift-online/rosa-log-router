@@ -102,17 +102,30 @@ jobs:
     - name: Deploy Vector with LocalStack configuration
       run: |
         # Get the host IP for LocalStack access from minikube
-        # In GitHub Actions, we need to use the actual host IP, not host.docker.internal
         HOST_IP=$(docker inspect rosa-localstack --format='{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}')
         echo "LocalStack accessible from minikube at: $HOST_IP:4566"
 
-        # Update Vector config with the correct endpoint
-        kubectl get configmap vector-config -n logging -o yaml | \
-          sed "s|host.docker.internal:4566|$HOST_IP:4566|g" | \
-          kubectl apply -f -
+        # Create a temporary patch to add hostAliases for host.docker.internal
+        cat > /tmp/vector-hostalias-patch.yaml <<EOF
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: vector-logs
+          namespace: logging
+        spec:
+          template:
+            spec:
+              hostAliases:
+              - ip: "$HOST_IP"
+                hostnames:
+                - "host.docker.internal"
+        EOF
 
-        # Apply the Vector DaemonSet (will pick up the updated config)
+        # Apply the LocalStack overlay
         kubectl apply -k k8s/collector/overlays/localstack
+
+        # Apply the hostAliases patch
+        kubectl patch daemonset vector-logs -n logging --patch-file /tmp/vector-hostalias-patch.yaml
 
         # Wait for Vector to be ready
         echo "Waiting for Vector pods to be ready..."
