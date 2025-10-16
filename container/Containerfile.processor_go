@@ -14,7 +14,11 @@ RUN go mod download
 # Copy source code
 COPY cmd/ cmd/
 COPY internal/ internal/
-COPY pkg/ pkg/
+
+# Fix permissions for copied files
+USER 0
+RUN chmod -R 755 cmd/ internal/
+USER 1001
 
 # Build the application
 # CGO_ENABLED=0 for static binary, GOOS=linux GOARCH=amd64 for Lambda compatibility

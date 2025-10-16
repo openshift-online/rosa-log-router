@@ -18,14 +18,18 @@ import (
 type S3Deliverer struct {
 	stsClient      *sts.Client
 	centralRoleArn string
+	usePathStyle   bool
+	endpointURL    string
 	logger         *slog.Logger
 }
 
 // NewS3Deliverer creates a new S3 deliverer
-func NewS3Deliverer(stsClient *sts.Client, centralRoleArn string, logger *slog.Logger) *S3Deliverer {
+func NewS3Deliverer(stsClient *sts.Client, centralRoleArn string, usePathStyle bool, endpointURL string, logger *slog.Logger) *S3Deliverer {
 	return &S3Deliverer{
 		stsClient:      stsClient,
 		centralRoleArn: centralRoleArn,
+		usePathStyle:   usePathStyle,
+		endpointURL:    endpointURL,
 		logger:         logger,
 	}
 }
@@ -38,6 +42,8 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 		"source_key", sourceKey)
 
 	// Step 1: Assume the central log distribution role
+	// For S3 delivery, we use single-hop: central role writes directly to customer bucket
+	// (Customer bucket policy grants central role PutObject permissions)
 	sessionName := fmt.Sprintf("S3LogDelivery-%d", time.Now().UnixNano())
 	centralRoleResp, err := d.stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
 		RoleArn:         aws.String(d.centralRoleArn),
@@ -47,21 +53,28 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 		return fmt.Errorf("failed to assume central log distribution role: %w", err)
 	}
 
+	d.logger.Debug("assumed central role for S3 delivery",
+		"role_arn", d.centralRoleArn,
+		"tenant_id", tenantInfo.TenantID)
+
 	// Step 2: Create S3 client with central role credentials
 	targetRegion := deliveryConfig.TargetRegion
 	if targetRegion == "" {
 		targetRegion = "us-east-1"
 	}
 
-	s3Client := s3.NewFromConfig(aws.Config{
-		Region: targetRegion,
-		Credentials: aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-			return aws.Credentials{
-				AccessKeyID:     *centralRoleResp.Credentials.AccessKeyId,
-				SecretAccessKey: *centralRoleResp.Credentials.SecretAccessKey,
-				SessionToken:    *centralRoleResp.Credentials.SessionToken,
-			}, nil
-		}),
+	s3Config, err := buildConfigWithEndpoint(ctx, targetRegion, aws.Credentials{
+		AccessKeyID:     *centralRoleResp.Credentials.AccessKeyId,
+		SecretAccessKey: *centralRoleResp.Credentials.SecretAccessKey,
+		SessionToken:    *centralRoleResp.Credentials.SessionToken,
+	}, d.endpointURL)
+	if err != nil {
+		return fmt.Errorf("failed to create S3 config: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(s3Config, func(o *s3.Options) {
+		// Configure S3 path-style if needed (for LocalStack compatibility)
+		o.UsePathStyle = d.usePathStyle
 	})
 
 	// Step 3: Prepare destination S3 details

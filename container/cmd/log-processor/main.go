@@ -54,14 +54,18 @@ func main() {
 	}
 
 	// Create AWS clients
-	s3Client := s3.NewFromConfig(awsCfg)
+	// Configure S3 path-style if needed (for LocalStack compatibility)
+	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.UsePathStyle = cfg.S3UsePathStyle
+	})
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	sqsClient := sqs.NewFromConfig(awsCfg)
 	stsClient := sts.NewFromConfig(awsCfg)
 	cwClient := cloudwatch.NewFromConfig(awsCfg)
 
 	// Create processor
-	proc := processor.NewProcessor(s3Client, dynamoClient, sqsClient, stsClient, cwClient, cfg, logger)
+	// Pass endpoint URL (if configured) to deliverers for LocalStack support
+	proc := processor.NewProcessor(s3Client, dynamoClient, sqsClient, stsClient, cwClient, cfg.AWSEndpointURL, cfg, logger)
 
 	// Execute based on mode
 	switch executionMode {
@@ -136,6 +140,12 @@ func loadConfig() *models.Config {
 		if i, err := strconv.Atoi(v); err == nil {
 			cfg.ScanInterval = i
 		}
+	}
+	if v := os.Getenv("AWS_S3_USE_PATH_STYLE"); v != "" {
+		cfg.S3UsePathStyle = v == "true" || v == "1"
+	}
+	if v := os.Getenv("AWS_ENDPOINT_URL"); v != "" {
+		cfg.AWSEndpointURL = v
 	}
 
 	return cfg

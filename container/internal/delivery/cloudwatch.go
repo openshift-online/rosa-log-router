@@ -29,19 +29,21 @@ type CloudWatchLogsAPI interface {
 
 // CloudWatchDeliverer handles CloudWatch Logs delivery
 type CloudWatchDeliverer struct {
-	stsClient       *sts.Client
-	centralRoleArn  string
-	logger          *slog.Logger
+	stsClient         *sts.Client
+	centralRoleArn    string
+	endpointURL       string
+	logger            *slog.Logger
 	maxEventsPerBatch int
 	maxBytesPerBatch  int64
 	timeoutSeconds    int
 }
 
 // NewCloudWatchDeliverer creates a new CloudWatch Logs deliverer
-func NewCloudWatchDeliverer(stsClient *sts.Client, centralRoleArn string, logger *slog.Logger) *CloudWatchDeliverer {
+func NewCloudWatchDeliverer(stsClient *sts.Client, centralRoleArn string, endpointURL string, logger *slog.Logger) *CloudWatchDeliverer {
 	return &CloudWatchDeliverer{
 		stsClient:         stsClient,
 		centralRoleArn:    centralRoleArn,
+		endpointURL:       endpointURL,
 		logger:            logger,
 		maxEventsPerBatch: 1000,      // CloudWatch limit
 		maxBytesPerBatch:  1037576,   // ~1MB CloudWatch limit
@@ -100,15 +102,13 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 		"region", region)
 
 	// Create STS client with central credentials
-	centralConfig := aws.Config{
-		Region: region,
-		Credentials: aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-			return aws.Credentials{
-				AccessKeyID:     *centralCreds.AccessKeyId,
-				SecretAccessKey: *centralCreds.SecretAccessKey,
-				SessionToken:    *centralCreds.SessionToken,
-			}, nil
-		}),
+	centralConfig, err := buildConfigWithEndpoint(ctx, region, aws.Credentials{
+		AccessKeyID:     *centralCreds.AccessKeyId,
+		SecretAccessKey: *centralCreds.SecretAccessKey,
+		SessionToken:    *centralCreds.SessionToken,
+	}, d.endpointURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create STS config: %w", err)
 	}
 
 	centralSTS := sts.NewFromConfig(centralConfig)
@@ -127,15 +127,13 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 	d.logger.Info("successfully assumed customer role")
 
 	// Create CloudWatch Logs client with customer credentials
-	customerConfig := aws.Config{
-		Region: region,
-		Credentials: aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-			return aws.Credentials{
-				AccessKeyID:     *customerRoleResp.Credentials.AccessKeyId,
-				SecretAccessKey: *customerRoleResp.Credentials.SecretAccessKey,
-				SessionToken:    *customerRoleResp.Credentials.SessionToken,
-			}, nil
-		}),
+	customerConfig, err := buildConfigWithEndpoint(ctx, region, aws.Credentials{
+		AccessKeyID:     *customerRoleResp.Credentials.AccessKeyId,
+		SecretAccessKey: *customerRoleResp.Credentials.SecretAccessKey,
+		SessionToken:    *customerRoleResp.Credentials.SessionToken,
+	}, d.endpointURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CloudWatch config: %w", err)
 	}
 
 	logsClient := cloudwatchlogs.NewFromConfig(customerConfig)
