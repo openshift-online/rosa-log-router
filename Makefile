@@ -1,6 +1,6 @@
 # Makefile for local development with LocalStack
 
-.PHONY: help start stop logs build deploy test clean
+.PHONY: help start stop logs build deploy test clean validate-vector-flow
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
