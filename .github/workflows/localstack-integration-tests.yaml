@@ -100,13 +100,16 @@ jobs:
         echo "✅ Fake log generators deployed"
 
     - name: Deploy Vector with LocalStack configuration
+      env:
+        CENTRAL_BUCKET: ${{ steps.localstack-config.outputs.central_bucket }}
       run: |
         # Get the host IP for LocalStack access from minikube
         HOST_IP=$(docker inspect rosa-localstack --format='{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}')
         echo "LocalStack accessible from minikube at: $HOST_IP:4566"
+        echo "Using S3 bucket: $CENTRAL_BUCKET"
 
-        # Create a temporary patch to add hostAliases for host.docker.internal
-        cat > /tmp/vector-hostalias-patch.yaml <<EOF
+        # Create a temporary patch to add hostAliases and update S3 bucket name
+        cat > /tmp/vector-patch.yaml <<EOF
         apiVersion: apps/v1
         kind: DaemonSet
         metadata:
@@ -119,13 +122,18 @@ jobs:
               - ip: "$HOST_IP"
                 hostnames:
                 - "host.docker.internal"
+              containers:
+              - name: vector
+                env:
+                - name: S3_BUCKET_NAME
+                  value: "$CENTRAL_BUCKET"
         EOF
 
         # Apply the LocalStack overlay
         kubectl apply -k k8s/collector/overlays/localstack
 
-        # Apply the hostAliases patch
-        kubectl patch daemonset vector-logs -n logging --patch-file /tmp/vector-hostalias-patch.yaml
+        # Apply the runtime patches (hostAliases and bucket name)
+        kubectl patch daemonset vector-logs -n logging --patch-file /tmp/vector-patch.yaml
 
         # Wait for Vector to be ready
         echo "Waiting for Vector pods to be ready..."
