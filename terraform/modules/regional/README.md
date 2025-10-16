@@ -39,6 +39,10 @@ terraform/regional/
     │   ├── main.tf                  # Lambda function resources
     │   ├── variables.tf             # Module variables
     │   └── outputs.tf               # Module outputs
+    └── api-stack/
+        ├── main.tf                  # API Gateway and Lambda functions
+        ├── variables.tf             # Module variables
+        └── outputs.tf               # Module outputs
 ```
 
 ## Usage
@@ -82,7 +86,14 @@ terraform apply \
 - `project_name` - Project name (default: "hcp-log")
 - `include_sqs_stack` - Deploy SQS stack (default: true)
 - `include_lambda_stack` - Deploy Lambda stack (default: false)
+- `include_api_stack` - Deploy API stack (default: false)
 - `ecr_image_uri` - ECR container image URI (required if include_lambda_stack=true)
+- `api_image` - ECR container image URI for API service (required if include_api_stack=true)
+- `authorizer_image` - ECR container image URI for API authorizer (required if include_api_stack=true)
+- `api_auth_ssm_parameter` - SSM parameter name containing PSK for API authentication (required if include_api_stack=true)
+- `authorizer_execution_role_arn` - ARN of global Lambda authorizer execution role (required if include_api_stack=true)
+- `api_execution_role_arn` - ARN of global Lambda API execution role (required if include_api_stack=true)
+- `api_gateway_authorizer_role_arn` - ARN of global API Gateway authorizer role (required if include_api_stack=true)
 - `s3_delete_after_days` - S3 lifecycle deletion (default: 7)
 - `enable_s3_encryption` - Enable S3 KMS encryption (default: true)
 
@@ -101,6 +112,7 @@ module "regional_int" {
   
   include_sqs_stack    = true
   include_lambda_stack = false  # Use polling for integration testing
+  include_api_stack    = false  # API not needed for basic testing
   
   s3_delete_after_days = 1      # Quick cleanup for testing
   enable_s3_encryption = false  # Reduce complexity for testing
@@ -120,7 +132,16 @@ module "regional_stage" {
   
   include_sqs_stack    = true
   include_lambda_stack = true
+  include_api_stack    = true
+  
   ecr_image_uri       = "123456789012.dkr.ecr.us-east-1.amazonaws.com/log-processor:stage"
+  api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/api-service:stage"
+  authorizer_image    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/api-authorizer:stage"
+  
+  api_auth_ssm_parameter          = "/hcp-log/stage/api-auth-psk"
+  authorizer_execution_role_arn   = var.global_authorizer_role_arn
+  api_execution_role_arn          = var.global_api_role_arn
+  api_gateway_authorizer_role_arn = var.global_api_gateway_role_arn
   
   s3_delete_after_days = 7
   enable_s3_encryption = true
@@ -140,7 +161,16 @@ module "regional_prod" {
   
   include_sqs_stack    = true
   include_lambda_stack = true
+  include_api_stack    = true
+  
   ecr_image_uri       = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/log-processor:v1.2.3"
+  api_image           = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/api-service:v1.2.3"
+  authorizer_image    = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/api-authorizer:v1.2.3"
+  
+  api_auth_ssm_parameter          = "/hcp-log/prod/api-auth-psk"
+  authorizer_execution_role_arn   = var.global_authorizer_role_arn
+  api_execution_role_arn          = var.global_api_role_arn
+  api_gateway_authorizer_role_arn = var.global_api_gateway_role_arn
   
   s3_delete_after_days = 30     # Longer retention for production
   enable_s3_encryption = true   # Required for production
@@ -177,7 +207,16 @@ module "regional_us_east_1" {
   
   include_sqs_stack    = true
   include_lambda_stack = true
+  include_api_stack    = true
+  
   ecr_image_uri       = var.ecr_image_uri
+  api_image           = var.api_image_uri
+  authorizer_image    = var.authorizer_image_uri
+  
+  api_auth_ssm_parameter          = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn   = module.global_iam.authorizer_execution_role_arn
+  api_execution_role_arn          = module.global_iam.api_execution_role_arn
+  api_gateway_authorizer_role_arn = module.global_iam.api_gateway_authorizer_role_arn
 }
 ```
 
@@ -214,6 +253,83 @@ terraform apply \
   -var="lambda_execution_role_arn=YOUR_LAMBDA_ROLE_ARN"
 ```
 
+### Complete Platform with API Management
+```bash
+terraform apply \
+  -var="environment=prod" \
+  -var="include_sqs_stack=true" \
+  -var="include_lambda_stack=true" \
+  -var="include_api_stack=true" \
+  -var="ecr_image_uri=YOUR_ECR_URI" \
+  -var="api_image=YOUR_API_ECR_URI" \
+  -var="authorizer_image=YOUR_AUTHORIZER_ECR_URI" \
+  -var="api_auth_ssm_parameter=/hcp-log/prod/api-auth-psk" \
+  -var="central_log_distribution_role_arn=YOUR_ROLE_ARN" \
+  -var="lambda_execution_role_arn=YOUR_LAMBDA_ROLE_ARN" \
+  -var="authorizer_execution_role_arn=YOUR_AUTHORIZER_ROLE_ARN" \
+  -var="api_execution_role_arn=YOUR_API_ROLE_ARN" \
+  -var="api_gateway_authorizer_role_arn=YOUR_API_GATEWAY_ROLE_ARN"
+```
+
+## API Stack Usage
+
+The API stack provides a RESTful API for tenant configuration management with HMAC authentication.
+
+### API Endpoints
+
+- **Health Check**: `GET /api/v1` - No authentication required
+- **Tenant Management**: `ANY /api/v1/{proxy+}` - HMAC authentication required
+
+### Authentication
+
+The API uses HMAC (Hash-based Message Authentication Code) for request authentication:
+
+- **Authorization Header**: Contains the HMAC signature
+- **X-API-Timestamp Header**: Contains the request timestamp
+- **Pre-shared Key**: Stored in SSM Parameter Store
+
+### API Stack Requirements
+
+When deploying the API stack (`include_api_stack=true`), you must provide:
+
+1. **Container Images**:
+   - `api_image`: ECR URI for the main API service
+   - `authorizer_image`: ECR URI for the Lambda authorizer
+
+2. **IAM Roles** (from global module):
+   - `authorizer_execution_role_arn`: Lambda authorizer execution role
+   - `api_execution_role_arn`: API service Lambda execution role
+   - `api_gateway_authorizer_role_arn`: API Gateway authorizer role
+
+3. **Authentication Configuration**:
+   - `api_auth_ssm_parameter`: SSM parameter containing the PSK
+
+### Example API Stack Deployment
+
+```bash
+# Deploy only API stack (requires core infrastructure)
+terraform apply \
+  -var="include_sqs_stack=false" \
+  -var="include_lambda_stack=false" \
+  -var="include_api_stack=true" \
+  -var="api_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api-service:latest" \
+  -var="authorizer_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api-authorizer:latest" \
+  -var="api_auth_ssm_parameter=/hcp-log/prod/api-auth-psk" \
+  -var="authorizer_execution_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-authorizer-role" \
+  -var="api_execution_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-service-role" \
+  -var="api_gateway_authorizer_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-gateway-authorizer-role"
+```
+
+### API Stack Outputs
+
+After deployment, the API stack provides:
+
+- **API Endpoint**: `https://{api-id}.execute-api.{region}.amazonaws.com/{environment}`
+- **Health Check**: `GET https://{api-endpoint}/api/v1`
+- **Function ARNs**: For monitoring and logging configuration
+
+```
+
 ## Module Details
 
 ### Core Infrastructure Module
@@ -241,6 +357,20 @@ terraform apply \
 - CloudWatch log group
 - SQS event source mapping
 
+### API Stack Module
+**Path**: `modules/api-stack/`
+**Resources**:
+- API Gateway REST API with regional endpoint
+- Lambda authorizer function for HMAC authentication
+- Main API service Lambda function
+- API Gateway authorizer with custom request validation
+- API Gateway resources (/api/v1/{proxy+})
+- Health check endpoint (no authorization)
+- Proxy endpoint with custom authorization
+- CORS support for cross-origin requests
+- Lambda permissions for API Gateway invocation
+- CloudWatch log group for API Gateway logs
+
 
 ## Outputs
 
@@ -257,6 +387,8 @@ terraform apply \
 - `log_distributor_function_arn` - Lambda function ARN (if Lambda stack deployed)
 - `api_endpoint` - API Gateway URL (if API stack deployed)
 - `api_id` - API Gateway ID (if API stack deployed)
+- `authorizer_function_arn` - Lambda authorizer function ARN (if API stack deployed)
+- `api_function_arn` - API service Lambda function ARN (if API stack deployed)
 
 ## Migration from CloudFormation
 
