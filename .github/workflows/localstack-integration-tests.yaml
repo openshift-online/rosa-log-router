@@ -101,6 +101,17 @@ jobs:
 
     - name: Deploy Vector with LocalStack configuration
       run: |
+        # Get the host IP for LocalStack access from minikube
+        # In GitHub Actions, we need to use the actual host IP, not host.docker.internal
+        HOST_IP=$(docker inspect rosa-localstack --format='{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}')
+        echo "LocalStack accessible from minikube at: $HOST_IP:4566"
+
+        # Update Vector config with the correct endpoint
+        kubectl get configmap vector-config -n logging -o yaml | \
+          sed "s|host.docker.internal:4566|$HOST_IP:4566|g" | \
+          kubectl apply -f -
+
+        # Apply the Vector DaemonSet (will pick up the updated config)
         kubectl apply -k k8s/collector/overlays/localstack
 
         # Wait for Vector to be ready
