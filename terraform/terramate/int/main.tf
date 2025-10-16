@@ -7,10 +7,11 @@ locals {
   random_suffix = random_id.suffix.hex
 }
 module "global" {
-  environment  = var.environment
-  org_id       = var.org_id
-  project_name = var.project_name
-  source       = "../../modules/global"
+  api_auth_ssm_parameter = var.api_auth_ssm_parameter
+  environment            = var.environment
+  org_id                 = var.org_id
+  project_name           = var.project_name
+  source                 = "../../modules/global"
 }
 module "regional-resource-ap-northeast-1" {
   source = "../../modules/regional"
@@ -21,11 +22,18 @@ module "regional-resource-ap-northeast-1" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-ap-northeast-2" {
   source = "../../modules/regional"
@@ -36,11 +44,18 @@ module "regional-resource-ap-northeast-2" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-ap-southeast-1" {
   source = "../../modules/regional"
@@ -51,11 +66,18 @@ module "regional-resource-ap-southeast-1" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-eu-west-2" {
   source = "../../modules/regional"
@@ -66,11 +88,18 @@ module "regional-resource-eu-west-2" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-eu-west-3" {
   source = "../../modules/regional"
@@ -81,11 +110,18 @@ module "regional-resource-eu-west-3" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-us-east-1" {
   source = "../../modules/regional"
@@ -96,11 +132,18 @@ module "regional-resource-us-east-1" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-us-east-2" {
   source = "../../modules/regional"
@@ -111,11 +154,18 @@ module "regional-resource-us-east-2" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }
 module "regional-resource-us-west-2" {
   source = "../../modules/regional"
@@ -126,9 +176,16 @@ module "regional-resource-us-west-2" {
   environment                       = var.environment
   include_sqs_stack                 = var.include_sqs_stack
   include_lambda_stack              = var.include_lambda_stack
+  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+  authorizer_image                  = var.authorizer_image
+  api_execution_role_arn            = module.global.api_execution_role_arn
+  api_image                         = var.api_image
+  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
 }

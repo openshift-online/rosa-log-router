@@ -19,3 +19,14 @@ variable "org_id" {
   type        = string
   default     = ""
 }
+
+variable "api_auth_ssm_parameter" {
+  description = "SSM parameter name containing the PSK for API authentication"
+  type        = string
+}
+
+variable "tags" {
+  description = "Common tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}

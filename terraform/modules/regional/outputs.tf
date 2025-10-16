@@ -17,3 +17,8 @@ output "tenant_config_table_arn" {
   description = "ARN of the tenant configuration DynamoDB table"
   value       = module.core_infrastructure.tenant_config_table_arn
 }
+
+# output "api_endpoint" {
+#   description = "API Gateway endpoint URL"
+#   value       = module.api_stack.api_endpoint
+# }

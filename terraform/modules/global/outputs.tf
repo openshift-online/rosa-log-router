@@ -27,3 +27,33 @@ output "lambda_execution_role_name" {
   description = "Name of the Lambda execution role"
   value       = aws_iam_role.lambda_execution_role.name
 }
+
+output "authorizer_execution_role_arn" {
+  description = "ARN of the Lambda authorizer execution role"
+  value       = aws_iam_role.authorizer_execution_role.arn
+}
+
+output "authorizer_execution_role_name" {
+  description = "Name of the Lambda authorizer execution role"
+  value       = aws_iam_role.authorizer_execution_role.name
+}
+
+output "api_execution_role_arn" {
+  description = "ARN of the Lambda api execution role"
+  value       = aws_iam_role.api_execution_role.arn
+}
+
+output "api_execution_role_name" {
+  description = "Name of the Lambda api execution role"
+  value       = aws_iam_role.api_execution_role.name
+}
+
+output "api_gateway_authorizer_role_arn" {
+  description = "ARN of the API Gateway authorizer role"
+  value       = aws_iam_role.api_gateway_authorizer_role.arn
+}
+
+output "api_gateway_authorizer_name" {
+  description = "Name of the API Gateway authorizer role"
+  value       = aws_iam_role.api_gateway_authorizer_role.name
+}

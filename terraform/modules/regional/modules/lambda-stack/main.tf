@@ -19,7 +19,7 @@ locals {
     Project     = var.project_name
     Environment = var.environment
     ManagedBy   = "terraform"
-    StackType   = "lambda-functions"
+    StackType   = "lambda-stack"
   })
 }
 
@@ -54,9 +54,7 @@ resource "aws_lambda_function" "log_distributor_function" {
   timeout     = 300
   memory_size = 512
 
-  tags = merge(local.common_tags, {
-    Name = "${var.project_name}-${var.environment}-log-distributor"
-  })
+  tags = local.common_tags
 
   depends_on = [aws_cloudwatch_log_group.log_distributor_log_group]
 }

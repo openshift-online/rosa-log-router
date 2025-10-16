@@ -18,6 +18,12 @@ resource "random_id" "suffix" {
 
 locals {
   random_suffix = random_id.suffix.hex
+  common_tags = merge(var.tags, {
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "terraform"
+    StackType   = "global"
+  })
 }
 
 data "aws_caller_identity" "current" {}
@@ -38,12 +44,7 @@ resource "aws_iam_role" "central_log_distribution_role" {
     ]
   })
 
-  tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-    StackType   = "global"
-  }
+  tags = local.common_tags
 }
 
 
@@ -114,10 +115,10 @@ resource "aws_iam_role" "central_s3_writer_role" {
         }
         Condition = {
           StringEquals = {
-            "aws:PrincipalOrgID": "${var.org_id}"
+            "aws:PrincipalOrgID" : "${var.org_id}"
           }
-          ArnLike =  {
-            "aws:PrincipalArn": "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
+          ArnLike = {
+            "aws:PrincipalArn" : "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
           }
         }
         Action = "sts:AssumeRole"
@@ -125,12 +126,7 @@ resource "aws_iam_role" "central_s3_writer_role" {
     ]
   })
 
-  tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-    StackType   = "global"
-  }
+  tags = local.common_tags
 }
 
 resource "aws_iam_role_policy" "central_s3_writer_policy" {
@@ -190,12 +186,7 @@ resource "aws_iam_role" "lambda_execution_role" {
     ]
   })
 
-  tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-    StackType   = "global"
-  }
+  tags = local.common_tags
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_execution_basic" {
@@ -266,6 +257,131 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
           "cloudwatch:PutMetricData"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "authorizer_execution_role" {
+  name = "${var.project_name}-${var.environment}-api-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "authorizer_execution_basic" {
+  role       = aws_iam_role.authorizer_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# IAM Policy for SSM Parameter Access
+resource "aws_iam_role_policy" "authorizer_ssm_access" {
+  name = "SSMParameterAccess"
+  role = aws_iam_role.authorizer_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter"
+        ]
+        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter${var.api_auth_ssm_parameter}"
+      }
+    ]
+  })
+}
+
+# API Lambda Execution Role
+resource "aws_iam_role" "api_execution_role" {
+  name = "${var.project_name}-${var.environment}-api-service-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "api_execution_basic" {
+  role       = aws_iam_role.api_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "api_dynamodb_access" {
+  name = "DynamoDBAccess"
+  role = aws_iam_role.api_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-*"
+      }
+    ]
+  })
+}
+
+# API Gateway Authorizer Role
+resource "aws_iam_role" "api_gateway_authorizer_role" {
+  name = "${var.project_name}-${var.environment}-api-gateway-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Policy for API Gateway to invoke authorizer function
+resource "aws_iam_role_policy" "invoke_authorizer_function" {
+  name = "InvokeAuthorizerFunction"
+  role = aws_iam_role.api_gateway_authorizer_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:.*api-authorizer"
       }
     ]
   })
