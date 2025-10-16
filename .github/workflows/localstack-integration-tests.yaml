@@ -1,0 +1,232 @@
+name: LocalStack Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  localstack-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.5.0"
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        kubectl version --client
+
+    - name: Start minikube
+      uses: medyagh/setup-minikube@master
+      with:
+        driver: docker
+        kubernetes-version: v1.33.0
+
+    - name: Verify minikube and configure kubectl
+      run: |
+        # Ensure kubectl is using minikube context
+        kubectl config use-context minikube
+        kubectl cluster-info
+        kubectl get nodes
+
+        # Create logging namespace for Vector
+        kubectl create namespace logging
+
+    - name: Start LocalStack
+      env:
+        DOCKER_SOCK: /var/run/docker.sock
+      run: |
+        make start
+        echo "✅ LocalStack started"
+
+    - name: Deploy infrastructure to LocalStack
+      run: |
+        make deploy
+        echo "✅ Infrastructure deployed"
+
+    - name: Get LocalStack bucket name
+      id: localstack-config
+      run: |
+        CENTRAL_BUCKET=$(cd terraform/local && terraform output -raw central_source_bucket)
+        echo "central_bucket=$CENTRAL_BUCKET" >> $GITHUB_OUTPUT
+        echo "Central bucket: $CENTRAL_BUCKET"
+
+    - name: Create customer namespaces with HyperShift labels
+      run: |
+        # Create acme-corp namespace
+        kubectl create namespace acme-corp
+        kubectl label namespace acme-corp hypershift.openshift.io/hosted-control-plane=true
+
+        # Create globex-industries namespace
+        kubectl create namespace globex-industries
+        kubectl label namespace globex-industries hypershift.openshift.io/hosted-control-plane=true
+
+        echo "✅ Customer namespaces created with HyperShift labels"
+
+    - name: Deploy fake log generators
+      run: |
+        # Deploy acme-corp payment-service
+        kubectl create deployment payment-service --image=busybox:latest --namespace=acme-corp -- sh -c 'while true; do echo "{\"timestamp\":\"$(date -Iseconds)\",\"level\":\"INFO\",\"service\":\"payment-service\",\"message\":\"Processing payment\"}"; sleep 5; done'
+        kubectl label deployment payment-service app=payment-service --namespace=acme-corp
+
+        # Deploy globex-industries platform-api
+        kubectl create deployment platform-api --image=busybox:latest --namespace=globex-industries -- sh -c 'while true; do echo "{\"timestamp\":\"$(date -Iseconds)\",\"level\":\"INFO\",\"service\":\"platform-api\",\"message\":\"API request processed\"}"; sleep 5; done'
+        kubectl label deployment platform-api app=platform-api --namespace=globex-industries
+
+        # Wait for deployments
+        kubectl wait --for=condition=available --timeout=60s deployment/payment-service --namespace=acme-corp
+        kubectl wait --for=condition=available --timeout=60s deployment/platform-api --namespace=globex-industries
+
+        echo "✅ Fake log generators deployed"
+
+    - name: Deploy Vector with LocalStack configuration
+      env:
+        CENTRAL_BUCKET: ${{ steps.localstack-config.outputs.central_bucket }}
+      run: |
+        # Get the host IP for LocalStack access from minikube
+        HOST_IP=$(docker inspect rosa-localstack --format='{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}')
+        echo "LocalStack accessible from minikube at: $HOST_IP:4566"
+        echo "Using S3 bucket: $CENTRAL_BUCKET"
+
+        # Create a temporary patch to add hostAliases and update S3 bucket name
+        cat > /tmp/vector-patch.yaml <<EOF
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: vector-logs
+          namespace: logging
+        spec:
+          template:
+            spec:
+              hostAliases:
+              - ip: "$HOST_IP"
+                hostnames:
+                - "host.docker.internal"
+              containers:
+              - name: vector
+                env:
+                - name: S3_BUCKET_NAME
+                  value: "$CENTRAL_BUCKET"
+        EOF
+
+        # Apply the LocalStack overlay
+        kubectl apply -k k8s/collector/overlays/localstack
+
+        # Apply the runtime patches (hostAliases and bucket name)
+        kubectl patch daemonset vector-logs -n logging --patch-file /tmp/vector-patch.yaml
+
+        # Wait for the rollout to complete (handles pod recreation after patch)
+        echo "Waiting for Vector DaemonSet rollout to complete..."
+        kubectl rollout status daemonset/vector-logs -n logging --timeout=120s || {
+          echo "❌ Vector rollout failed. Debugging..."
+          echo ""
+          echo "Pod status:"
+          kubectl get pods -n logging -l app=vector-logs
+          echo ""
+          echo "Pod details:"
+          kubectl describe pods -n logging -l app=vector-logs
+          echo ""
+          echo "Pod logs (if available):"
+          kubectl logs -n logging -l app=vector-logs --tail=50 || echo "No logs available yet"
+          exit 1
+        }
+
+        echo "✅ Vector deployed and ready"
+
+    - name: Wait for log collection and processing
+      run: |
+        echo "Waiting 90 seconds for Vector to collect and process logs..."
+        sleep 90
+
+        echo "Vector logs:"
+        kubectl logs -l app=vector-logs --tail=30 --namespace=logging || echo "No Vector logs available"
+
+    - name: Validate Vector flow to customer buckets
+      run: |
+        echo "🧪 Validating Vector log flow..."
+        make validate-vector-flow
+        echo "✅ Vector flow validation passed"
+
+    - name: Run Go integration tests (e2e)
+      run: |
+        echo "🧪 Running Go integration tests..."
+        make test-e2e-go-quick
+        echo "✅ Go integration tests passed"
+
+    - name: Show test summary
+      run: |
+        echo "=== LocalStack Integration Test Summary ==="
+        echo "✅ LocalStack deployment: OK"
+        echo "✅ Terraform infrastructure: OK"
+        echo "✅ Minikube cluster: OK"
+        echo "✅ Customer namespaces: OK"
+        echo "✅ Fake log generators: OK"
+        echo "✅ Vector deployment: OK"
+        echo "✅ Vector flow validation: OK"
+        echo "✅ Go e2e tests: OK"
+        echo ""
+        echo "🎉 All LocalStack integration tests passed!"
+
+    - name: Cleanup and debug (if test fails)
+      if: failure()
+      run: |
+        echo "=== Debug Information ==="
+        echo ""
+
+        # Ensure kubectl is using minikube context
+        kubectl config use-context minikube || echo "Could not set kubectl context"
+
+        echo "Minikube status:"
+        minikube status || echo "Minikube not running"
+        echo ""
+
+        echo "Docker containers:"
+        docker ps -a || echo "Could not list containers"
+        echo ""
+
+        echo "LocalStack logs:"
+        docker logs rosa-localstack --tail=50 2>&1 || docker-compose logs localstack --tail=50 2>&1 || echo "Could not get LocalStack logs"
+        echo ""
+
+        echo "Vector logs:"
+        kubectl logs -l app=vector-logs --tail=50 --namespace=logging 2>&1 || echo "No Vector logs"
+        echo ""
+
+        echo "Fake generator logs (acme-corp):"
+        kubectl logs -l app=payment-service --tail=20 --namespace=acme-corp 2>&1 || echo "No payment-service logs"
+        echo ""
+
+        echo "Fake generator logs (globex-industries):"
+        kubectl logs -l app=platform-api --tail=20 --namespace=globex-industries 2>&1 || echo "No platform-api logs"
+        echo ""
+
+        echo "Kubernetes pods:"
+        kubectl get pods --all-namespaces 2>&1 || echo "Could not get pods"
+        echo ""
+
+        echo "Terraform state:"
+        (cd terraform/local && terraform show) 2>&1 || echo "Could not show terraform state"
+        echo ""
+
+        echo "Cleaning up..."
+        make clean 2>&1 || echo "Could not run make clean (may already be cleaned up)"

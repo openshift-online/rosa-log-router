@@ -93,3 +93,4 @@ cloudformation/cluster/rendered/
 .terraform.lock.hcl
 terraform.tfplan
 terraform.tfplan.*
+terraform/local/*.zip
