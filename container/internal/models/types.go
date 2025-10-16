@@ -117,6 +117,8 @@ type Config struct {
 	ExecutionMode                  string // lambda, sqs, manual, scan
 	SourceBucket                   string // For scan mode
 	ScanInterval                   int    // For scan mode
+	S3UsePathStyle                 bool   // Use path-style S3 URLs (for LocalStack; defaults to false for AWS virtual-hosted style)
+	AWSEndpointURL                 string // AWS endpoint URL (for LocalStack/testing; empty for real AWS)
 }
 
 // DefaultConfig returns a configuration with default values
@@ -127,6 +129,7 @@ func DefaultConfig() *Config {
 		RetryAttempts:     3,
 		AWSRegion:         "us-east-1",
 		ScanInterval:      10,
+		S3UsePathStyle:    false, // Default to AWS virtual-hosted style
 	}
 }
 

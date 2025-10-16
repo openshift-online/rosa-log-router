@@ -37,6 +37,7 @@ func NewProcessor(
 	sqsClient *sqs.Client,
 	stsClient *sts.Client,
 	cwClient *cloudwatch.Client,
+	endpointURL string,
 	config *models.Config,
 	logger *slog.Logger,
 ) *Processor {
@@ -44,8 +45,8 @@ func NewProcessor(
 		s3Client:         s3Client,
 		sqsClient:        sqsClient,
 		tenantConfig:     tenant.NewConfigManager(dynamoClient, config.TenantConfigTable, logger),
-		cwDeliverer:      delivery.NewCloudWatchDeliverer(stsClient, config.CentralLogDistributionRoleArn, logger),
-		s3Deliverer:      delivery.NewS3Deliverer(stsClient, config.CentralLogDistributionRoleArn, logger),
+		cwDeliverer:      delivery.NewCloudWatchDeliverer(stsClient, config.CentralLogDistributionRoleArn, endpointURL, logger),
+		s3Deliverer:      delivery.NewS3Deliverer(stsClient, config.CentralLogDistributionRoleArn, config.S3UsePathStyle, endpointURL, logger),
 		metricsPublisher: awsmetrics.NewMetricsPublisher(cwClient, logger),
 		config:           config,
 		logger:           logger,
