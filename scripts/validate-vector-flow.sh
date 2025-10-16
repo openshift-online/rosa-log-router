@@ -27,7 +27,7 @@ echo ""
 echo "Checking Customer 1 (acme-corp) bucket for payment-service logs..."
 ACME_LOGS=$(AWS_ACCESS_KEY_ID=222222222222 AWS_SECRET_ACCESS_KEY=test \
   aws --endpoint-url=http://localhost:4566 \
-  s3 ls s3://$CUSTOMER1_BUCKET/logs/acme-corp/payment-service/ --recursive 2>/dev/null | grep -c "\.json\.gz" || echo "0")
+  s3 ls s3://$CUSTOMER1_BUCKET/logs/acme-corp/payment-service/ --recursive 2>/dev/null | grep "\.json\.gz" | wc -l)
 
 if [ "$ACME_LOGS" -gt 0 ]; then
   echo "✅ Found $ACME_LOGS log file(s) for acme-corp/payment-service"
@@ -55,7 +55,7 @@ echo ""
 echo "Checking Customer 2 (globex-industries) bucket for platform-api logs..."
 GLOBEX_LOGS=$(AWS_ACCESS_KEY_ID=333333333333 AWS_SECRET_ACCESS_KEY=test \
   aws --endpoint-url=http://localhost:4566 \
-  s3 ls s3://$CUSTOMER2_BUCKET/platform-logs/globex-industries/platform-api/ --recursive 2>/dev/null | grep -c "\.json\.gz" || echo "0")
+  s3 ls s3://$CUSTOMER2_BUCKET/platform-logs/globex-industries/platform-api/ --recursive 2>/dev/null | grep "\.json\.gz" | wc -l)
 
 if [ "$GLOBEX_LOGS" -gt 0 ]; then
   echo "✅ Found $GLOBEX_LOGS log file(s) for globex-industries/platform-api"
