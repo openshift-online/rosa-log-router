@@ -285,6 +285,9 @@ test-e2e-go-quick: ## Run Go integration tests without prerequisite check
 	@echo "🧪 Running Go integration tests..."
 	cd container && go test -count=1 -tags=integration ./integration -v -timeout 5m
 
+validate-vector-flow: ## Validate Vector is routing logs to customer buckets correctly
+	@bash scripts/validate-vector-flow.sh
+
 clean: stop ## Stop LocalStack and clean up all local state
 	docker-compose down -v
 	@echo "Cleaning up Terraform state..."

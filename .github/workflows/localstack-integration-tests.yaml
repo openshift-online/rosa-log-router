@@ -1,0 +1,166 @@
+name: LocalStack Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  localstack-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install AWS CLI
+      run: |
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip -q awscliv2.zip
+        sudo ./aws/install
+        aws --version
+
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.5.0"
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        kubectl version --client
+
+    - name: Start minikube
+      uses: medyagh/setup-minikube@master
+      with:
+        driver: docker
+        kubernetes-version: v1.33.0
+
+    - name: Verify minikube
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+
+    - name: Start LocalStack
+      run: |
+        make start
+        echo "✅ LocalStack started"
+
+    - name: Deploy infrastructure to LocalStack
+      run: |
+        make deploy
+        echo "✅ Infrastructure deployed"
+
+    - name: Get LocalStack bucket name
+      id: localstack-config
+      run: |
+        CENTRAL_BUCKET=$(cd terraform/local && terraform output -raw central_source_bucket)
+        echo "central_bucket=$CENTRAL_BUCKET" >> $GITHUB_OUTPUT
+        echo "Central bucket: $CENTRAL_BUCKET"
+
+    - name: Create customer namespaces with HyperShift labels
+      run: |
+        # Create acme-corp namespace
+        kubectl create namespace acme-corp
+        kubectl label namespace acme-corp hypershift.openshift.io/hosted-control-plane=true
+
+        # Create globex-industries namespace
+        kubectl create namespace globex-industries
+        kubectl label namespace globex-industries hypershift.openshift.io/hosted-control-plane=true
+
+        echo "✅ Customer namespaces created with HyperShift labels"
+
+    - name: Deploy fake log generators
+      run: |
+        # Deploy acme-corp payment-service
+        kubectl create deployment payment-service --image=busybox:latest --namespace=acme-corp -- sh -c 'while true; do echo "{\"timestamp\":\"$(date -Iseconds)\",\"level\":\"INFO\",\"service\":\"payment-service\",\"message\":\"Processing payment\"}"; sleep 5; done'
+        kubectl label deployment payment-service app=payment-service --namespace=acme-corp
+
+        # Deploy globex-industries platform-api
+        kubectl create deployment platform-api --image=busybox:latest --namespace=globex-industries -- sh -c 'while true; do echo "{\"timestamp\":\"$(date -Iseconds)\",\"level\":\"INFO\",\"service\":\"platform-api\",\"message\":\"API request processed\"}"; sleep 5; done'
+        kubectl label deployment platform-api app=platform-api --namespace=globex-industries
+
+        # Wait for deployments
+        kubectl wait --for=condition=available --timeout=60s deployment/payment-service --namespace=acme-corp
+        kubectl wait --for=condition=available --timeout=60s deployment/platform-api --namespace=globex-industries
+
+        echo "✅ Fake log generators deployed"
+
+    - name: Deploy Vector with LocalStack configuration
+      run: |
+        kubectl apply -k k8s/collector/overlays/localstack
+
+        # Wait for Vector to be ready
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vector --timeout=120s --namespace=logging
+
+        echo "✅ Vector deployed and ready"
+
+    - name: Wait for log collection and processing
+      run: |
+        echo "Waiting 90 seconds for Vector to collect and process logs..."
+        sleep 90
+
+        echo "Vector logs:"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=30 --namespace=logging || echo "No Vector logs available"
+
+    - name: Validate Vector flow to customer buckets
+      run: |
+        echo "🧪 Validating Vector log flow..."
+        make validate-vector-flow
+        echo "✅ Vector flow validation passed"
+
+    - name: Run Go integration tests (e2e)
+      run: |
+        echo "🧪 Running Go integration tests..."
+        make test-e2e-go-quick
+        echo "✅ Go integration tests passed"
+
+    - name: Show test summary
+      run: |
+        echo "=== LocalStack Integration Test Summary ==="
+        echo "✅ LocalStack deployment: OK"
+        echo "✅ Terraform infrastructure: OK"
+        echo "✅ Minikube cluster: OK"
+        echo "✅ Customer namespaces: OK"
+        echo "✅ Fake log generators: OK"
+        echo "✅ Vector deployment: OK"
+        echo "✅ Vector flow validation: OK"
+        echo "✅ Go e2e tests: OK"
+        echo ""
+        echo "🎉 All LocalStack integration tests passed!"
+
+    - name: Cleanup and debug (if test fails)
+      if: failure()
+      run: |
+        echo "=== Debug Information ==="
+        echo ""
+        echo "LocalStack logs:"
+        docker logs rosa-localstack --tail=50 || echo "Could not get LocalStack logs"
+        echo ""
+        echo "Vector logs:"
+        kubectl logs -l app.kubernetes.io/name=vector --tail=50 --namespace=logging || echo "No Vector logs"
+        echo ""
+        echo "Fake generator logs (acme-corp):"
+        kubectl logs -l app=payment-service --tail=20 --namespace=acme-corp || echo "No payment-service logs"
+        echo ""
+        echo "Fake generator logs (globex-industries):"
+        kubectl logs -l app=platform-api --tail=20 --namespace=globex-industries || echo "No platform-api logs"
+        echo ""
+        echo "Terraform state:"
+        cd terraform/local && terraform show || echo "Could not show terraform state"
+        echo ""
+        echo "Cleaning up..."
+        make clean
