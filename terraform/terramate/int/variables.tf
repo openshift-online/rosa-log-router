@@ -47,7 +47,7 @@ variable "include_lambda_stack" {
 variable "include_api_stack" {
   description = "Whether to deploy the API stack"
   type        = bool
-  default     = false
+  default     = true
 }
 
 # S3 Configuration
