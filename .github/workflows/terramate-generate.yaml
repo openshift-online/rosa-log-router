@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'terraform/**'
+  workflow_dispatch:
 
 jobs:
   terramate-generate:
@@ -15,9 +16,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Terramate
-        run: |
-          curl -fsSL https://releases.terramate.io/terramate/install.sh | bash
-          sudo mv terramate /usr/local/bin/
+        uses: terramate-io/terramate-action@v3
+        with:
+          version: "0.14.7"
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
 
       - name: Find directories and run terramate generate
         run: |
@@ -54,4 +61,4 @@ jobs:
           🤖 Generated with terramate generate
 
           Co-Authored-By: GitHub Action <action@github.com>"
-          git push
+          git push origin main
