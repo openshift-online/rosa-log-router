@@ -1,64 +1,64 @@
-name: Terramate Generate
+# name: Terramate Generate
 
-on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'terraform/**'
-  workflow_dispatch:
+# on:
+#   push:
+#     branches: [ main ]
+#     paths:
+#       - 'terraform/**'
+#   workflow_dispatch:
 
-jobs:
-  terramate-generate:
-    runs-on: ubuntu-latest
+# jobs:
+#   terramate-generate:
+#     runs-on: ubuntu-latest
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
 
-      - name: Install Terramate
-        uses: terramate-io/terramate-action@v3
-        with:
-          version: "0.14.7"
+#       - name: Install Terramate
+#         uses: terramate-io/terramate-action@v3
+#         with:
+#           version: "0.14.7"
 
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.8.5
-          terraform_wrapper: false
+#       - name: Install Terraform
+#         uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: 1.8.5
+#           terraform_wrapper: false
 
-      - name: Find directories and run terramate generate
-        run: |
-          dirs=$(find terraform/terramate -type f -name "*.tm.hcl" -exec dirname {} \; | sort -u)
-          echo "Found directories:"
-          echo "$dirs"
+#       - name: Find directories and run terramate generate
+#         run: |
+#           dirs=$(find terraform/terramate -type f -name "*.tm.hcl" -exec dirname {} \; | sort -u)
+#           echo "Found directories:"
+#           echo "$dirs"
           
-          while IFS= read -r dir; do
-            if [ -n "$dir" ]; then
-              echo "Running terramate generate in $dir"
-              cd "$dir"
-              terramate generate
-              cd - > /dev/null
-            fi
-          done <<< "$dirs"
+#           while IFS= read -r dir; do
+#             if [ -n "$dir" ]; then
+#               echo "Running terramate generate in $dir"
+#               cd "$dir"
+#               terramate generate
+#               cd - > /dev/null
+#             fi
+#           done <<< "$dirs"
 
-      - name: Check for changes
-        id: verify-changed-files
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
+#       - name: Check for changes
+#         id: verify-changed-files
+#         run: |
+#           if [ -n "$(git status --porcelain)" ]; then
+#             echo "changed=true" >> $GITHUB_OUTPUT
+#           else
+#             echo "changed=false" >> $GITHUB_OUTPUT
+#           fi
 
-      - name: Commit and push changes
-        if: steps.verify-changed-files.outputs.changed == 'true'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add .
-          git commit -m "Auto-generate Terramate files
+#       - name: Commit and push changes
+#         if: steps.verify-changed-files.outputs.changed == 'true'
+#         run: |
+#           git config --local user.email "action@github.com"
+#           git config --local user.name "GitHub Action"
+#           git add .
+#           git commit -m "Auto-generate Terramate files
 
-          🤖 Generated with terramate generate
+#           🤖 Generated with terramate generate
 
-          Co-Authored-By: GitHub Action <action@github.com>"
-          git push origin main
+#           Co-Authored-By: GitHub Action <action@github.com>"
+#           git push origin main
