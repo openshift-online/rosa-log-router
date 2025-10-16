@@ -36,9 +36,6 @@ jobs:
         sudo mv kubectl /usr/local/bin/
         kubectl version --client
 
-    - name: Set up Docker Compose
-      uses: docker/setup-compose-action@v1
-
     - name: Start minikube
       uses: medyagh/setup-minikube@master
       with:
