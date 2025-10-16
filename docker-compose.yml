@@ -20,9 +20,11 @@ services:
       - DISABLE_CORS_CHECKS=1
       - EAGER_SERVICE_LOADING=1
     volumes:
-      # Mount Podman socket so LocalStack can run Lambda containers
+      # Mount Docker/Podman socket so LocalStack can run Lambda containers
+      # Default: Podman socket for local development (/run/user/1000/podman/podman.sock)
+      # CI: Set DOCKER_SOCK=/var/run/docker.sock to use Docker socket
       # Note: Update UID (1000) if your user ID is different (run: id -u)
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:Z
+      - ${DOCKER_SOCK:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock:Z
       # Share AWS credentials (for tflocal)
       - ./local-aws:/etc/localstack/init/ready.d
     healthcheck:

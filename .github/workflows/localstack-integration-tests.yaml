@@ -53,6 +53,8 @@ jobs:
         kubectl create namespace logging
 
     - name: Start LocalStack
+      env:
+        DOCKER_SOCK: /var/run/docker.sock
       run: |
         make start
         echo "✅ LocalStack started"
