@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: logging
+data:
+  vector.yaml: |
+    # Vector configuration for LocalStack integration testing
+    data_dir: "/vector-data-dir"
+
+    api:
+      enabled: true
+      address: "0.0.0.0:8686"
+      playground: false
+
+    # Sources
+    sources:
+      kubernetes_logs:
+        type: "kubernetes_logs"
+        # Collect logs from pods in customer namespaces with HyperShift label
+        extra_namespace_label_selector: "hypershift.openshift.io/hosted-control-plane=true"
+        glob_minimum_cooldown_ms: 1000
+        auto_partial_merge: true
+        namespace_annotation_fields:
+          - metadata.labels
+
+    # Transforms
+    transforms:
+      enrich_metadata:
+        type: "remap"
+        inputs: ["kubernetes_logs"]
+        source: |
+          # Extract metadata for S3 path structure
+          .cluster_id = get_env_var!("CLUSTER_ID") || "test-cluster"
+          .namespace = .kubernetes.pod_namespace || "default"
+          .application = .kubernetes.pod_labels.app || "unknown"
+          .pod_name = .kubernetes.pod_name || "unknown"
+
+          # Keep timestamp
+          if !exists(.timestamp) {
+            .timestamp = now()
+          }
+
+      parse_json_logs:
+        type: "remap"
+        inputs: ["enrich_metadata"]
+        source: |
+          # Attempt to parse the message field as JSON
+          parsed, err = parse_json(.message)
+          if err == null && is_object(parsed) {
+            . = merge!(., parsed)
+          }
+
+    # Sinks
+    sinks:
+      s3_logs:
+        type: "aws_s3"
+        inputs: ["parse_json_logs"]
+
+        # LocalStack S3 configuration
+        # Note: Bucket name will be dynamically set via environment variable S3_BUCKET_NAME
+        bucket: "${S3_BUCKET_NAME:-multi-tenant-logging-int-central-local}"
+        region: "us-east-1"
+        # host.docker.internal allows minikube to reach LocalStack on host
+        endpoint: "http://host.docker.internal:4566"
+
+        # Dynamic key prefix based on cluster/namespace/app/pod structure
+        key_prefix: "{{ cluster_id }}/{{ namespace }}/{{ application }}/{{ pod_name }}/"
+
+        # Batch settings - smaller for testing
+        batch:
+          max_bytes: 10240       # 10KB
+          timeout_secs: 5        # 5 seconds
+
+        # Request settings
+        request:
+          retry_attempts: 3
+          retry_initial_backoff_secs: 1
+          retry_max_duration_secs: 30
+          timeout_secs: 30
+
+        # Compression
+        compression: "gzip"
+
+        # File format
+        encoding:
+          codec: "json"
+          framing:
+            method: "newline_delimited"
+
+        # Buffer configuration - minimum size for testing
+        buffer:
+          type: "disk"
+          max_size: 268435488  # 256MB (minimum allowed)
+          when_full: "block"
+
+        # Authentication via LocalStack credentials
+        auth:
+          access_key_id: "${AWS_ACCESS_KEY_ID}"
+          secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+
+        # Add timestamp to filename
+        filename_append_uuid: true
+        filename_time_format: "%Y%m%d-%H%M%S"
+        filename_extension: "json.gz"

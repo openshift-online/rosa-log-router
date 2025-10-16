@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-logs
+  namespace: logging
+spec:
+  template:
+    spec:
+      containers:
+      - name: vector
+        env:
+        # Cluster ID for S3 path structure
+        - name: CLUSTER_ID
+          value: "test-cluster"
+        # S3 bucket name from LocalStack terraform output
+        # This will be set dynamically in the GitHub Actions workflow
+        - name: S3_BUCKET_NAME
+          value: "multi-tenant-logging-int-central-local"
+        # LocalStack credentials from secret
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: localstack-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: localstack-credentials
+              key: AWS_SECRET_ACCESS_KEY
