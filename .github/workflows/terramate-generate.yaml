@@ -5,6 +5,10 @@ on:
     branches: [ main ]
     paths:
       - 'terraform/**'
+  pull_request_target:
+    branches: [ main ]
+    paths:
+      - 'terraform/**'
   workflow_dispatch:
 
 jobs:
@@ -50,8 +54,40 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Comment diff on PR
+        if: ${{ github.event_name == 'pull_request_target'&& steps.verify-changed-files.outputs.changed == 'true' }}
+      uses: actions/github-script@v8
+      run: |
+        const diffContent = $(git --no-pager diff)
+        const commentMarker = '<!-- terramate-generate-diff -->';
+
+        // Find and delete existing comments from this workflow
+        const comments = await github.rest.issues.listComments({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+        });
+
+        for (const comment of comments.data) {
+          if (comment.body.includes(commentMarker)) {
+            await github.rest.issues.deleteComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+            });
+          }
+        }
+
+        // Add new comment
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: commentMarker + '\n' + diffContent
+        });
+
       - name: Commit and push changes
-        if: steps.verify-changed-files.outputs.changed == 'true'
+        if: ${{ github.event_name == 'push'&& steps.verify-changed-files.outputs.changed == 'true' }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
