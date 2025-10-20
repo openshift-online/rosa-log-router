@@ -51,16 +51,29 @@ jobs:
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
+            # Generate diff content
+            diff_output=$(git --no-pager diff)
+            {
+              echo "diff_content<<EOF"
+              echo "## Terramate Generate Changes"
+              echo ""
+              echo "The following files were updated by \`terramate generate\`:"
+              echo ""
+              echo '```diff'
+              echo "$diff_output"
+              echo '```'
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Comment diff on PR
-        if: ${{ github.event_name == 'pull_request_target'&& steps.verify-changed-files.outputs.changed == 'true' }}
+        if: ${{ github.event_name == 'pull_request_target' && steps.verify-changed-files.outputs.changed == 'true' }}
         uses: actions/github-script@v8
         with:
           script: |
-            const diffContent = $(git --no-pager diff)
+            const diffContent = process.env.DIFF_CONTENT;
             const commentMarker = '<!-- terramate-generate-diff -->';
 
             // Find and delete existing comments from this workflow
@@ -87,9 +100,11 @@ jobs:
               repo: context.repo.repo,
               body: commentMarker + '\n' + diffContent
             });
+        env:
+          DIFF_CONTENT: ${{ steps.verify-changed-files.outputs.diff_content }}
 
       - name: Commit and push changes
-        if: ${{ github.event_name == 'push'&& steps.verify-changed-files.outputs.changed == 'true' }}
+        if: ${{ github.event_name == 'push' && steps.verify-changed-files.outputs.changed == 'true' }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
