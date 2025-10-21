@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../api/src'))
 # Import the modules we're testing
 from src.handlers.authorizer import lambda_handler, generate_policy
 from src.utils.auth import (
-    get_psk_from_ssm,
+    get_psk_from_secrets_manager,
     generate_signature,
     validate_timestamp,
     validate_request_signature,
@@ -88,82 +88,81 @@ class TestGeneratePolicy:
         assert "context" not in policy
 
 
-class TestGetPskFromSsm:
-    """Test cases for PSK retrieval from SSM"""
+class TestGetPskFromSecretsManager:
+    """Test cases for PSK retrieval from Secrets Manager"""
     
     @patch('src.utils.auth.boto3.client')
     def test_get_psk_success(self, mock_boto3):
         """Test successful PSK retrieval"""
-        mock_ssm = Mock()
-        mock_boto3.return_value = mock_ssm
-        mock_ssm.get_parameter.return_value = {
-            'Parameter': {'Value': 'test-secret-key'}
+        mock_secrets = Mock()
+        mock_boto3.return_value = mock_secrets
+        mock_secrets.get_secret_value.return_value = {
+            'SecretString': 'test-secret-key'
         }
         
-        psk = get_psk_from_ssm('/test/parameter', 'us-east-1')
+        psk = get_psk_from_secrets_manager('/test/parameter', 'us-east-1')
         
         assert psk == 'test-secret-key'
-        mock_boto3.assert_called_once_with('ssm', region_name='us-east-1')
-        mock_ssm.get_parameter.assert_called_once_with(
-            Name='/test/parameter',
-            WithDecryption=True
+        mock_boto3.assert_called_once_with('secretsmanager', region_name='us-east-1')
+        mock_secrets.get_secret_value.assert_called_once_with(
+            SecretId='/test/parameter'
         )
     
     @patch('src.utils.auth.boto3.client')
     @patch('src.utils.auth._psk_cache', {})  # Clear cache for this test
     def test_get_psk_caching(self, mock_boto3):
         """Test PSK caching functionality"""
-        mock_ssm = Mock()
-        mock_boto3.return_value = mock_ssm
-        mock_ssm.get_parameter.return_value = {
-            'Parameter': {'Value': 'test-secret-key'}
+        mock_secrets = Mock()
+        mock_boto3.return_value = mock_secrets
+        mock_secrets.get_secret_value.return_value = {
+            'SecretString': 'test-secret-key'
         }
         
-        # First call should hit SSM
-        psk1 = get_psk_from_ssm('/test/parameter', 'us-east-1')
+        # First call should hit Secrets Manager
+        psk1 = get_psk_from_secrets_manager('/test/parameter', 'us-east-1')
         
         # Second call should use cache
-        psk2 = get_psk_from_ssm('/test/parameter', 'us-east-1')
+        psk2 = get_psk_from_secrets_manager('/test/parameter', 'us-east-1')
         
         assert psk1 == psk2 == 'test-secret-key'
-        # Should only call SSM once due to caching
-        assert mock_ssm.get_parameter.call_count == 1
+        # Should only call Secrets Manager once due to caching
+        assert mock_secrets.get_secret_value.call_count == 1
     
     @patch('src.utils.auth.boto3.client')
     @patch('src.utils.auth.time.time')
     @patch('src.utils.auth._psk_cache', {})  # Clear cache for this test
     def test_get_psk_cache_expiry(self, mock_time, mock_boto3):
         """Test PSK cache expiry"""
-        mock_ssm = Mock()
-        mock_boto3.return_value = mock_ssm
-        mock_ssm.get_parameter.return_value = {
-            'Parameter': {'Value': 'test-secret-key'}
+        mock_secrets = Mock()
+        mock_boto3.return_value = mock_secrets
+        mock_secrets.get_secret_value.return_value = {
+            'SecretString': 'test-secret-key'
         }
         
         # First call at time 0
         mock_time.return_value = 0
-        psk1 = get_psk_from_ssm('/test/parameter', 'us-east-1')
+        psk1 = get_psk_from_secrets_manager('/test/parameter', 'us-east-1')
         
         # Second call after cache expiry (301 seconds)
         mock_time.return_value = 301
-        psk2 = get_psk_from_ssm('/test/parameter', 'us-east-1')
+        psk2 = get_psk_from_secrets_manager('/test/parameter', 'us-east-1')
         
         assert psk1 == psk2 == 'test-secret-key'
-        # Should call SSM twice due to cache expiry
-        assert mock_ssm.get_parameter.call_count == 2
+        # Should call Secrets Manager twice due to cache expiry
+        assert mock_secrets.get_secret_value.call_count == 2
     
     @patch('src.utils.auth.boto3.client')
-    def test_get_psk_ssm_error(self, mock_boto3):
-        """Test PSK retrieval when SSM fails"""
-        mock_ssm = Mock()
-        mock_boto3.return_value = mock_ssm
-        mock_ssm.get_parameter.side_effect = ClientError(
-            error_response={'Error': {'Code': 'ParameterNotFound'}},
-            operation_name='GetParameter'
+    def test_get_psk_secrets_error(self, mock_boto3):
+        """Test PSK retrieval when Secrets Manager fails"""
+        mock_secrets = Mock()
+        mock_boto3.return_value = mock_secrets
+        mock_secrets.get_secret_value.side_effect = ClientError(
+            error_response={'Error': {'Code': 'ResourceNotFoundException'}},
+            operation_name='GetSecretValue'
         )
         
         with pytest.raises(AuthenticationError, match="Failed to retrieve authentication key"):
-            get_psk_from_ssm('/nonexistent/parameter', 'us-east-1')
+            get_psk_from_secrets_manager('/nonexistent/parameter', 'us-east-1')
 
 
 class TestGenerateSignature:
@@ -439,7 +438,7 @@ class TestExtractAuthHeaders:
 class TestAuthenticateRequest:
     """Test cases for complete authentication workflow"""
     
-    @patch('src.utils.auth.get_psk_from_ssm')
+    @patch('src.utils.auth.get_psk_from_secrets_manager')
     @patch('src.utils.auth.validate_timestamp')
     @patch('src.utils.auth.validate_request_signature')
     def test_authenticate_request_success(self, mock_validate_sig, mock_validate_ts, mock_get_psk):
@@ -458,7 +457,7 @@ class TestAuthenticateRequest:
             method="GET",
             uri="/api/v1/health",
             body="",
-            psk_parameter_name="/test/psk",
+            psk_secret_name="/test/psk",
             region="us-east-1"
         )
         
@@ -478,13 +477,13 @@ class TestAuthenticateRequest:
             method="GET",
             uri="/api/v1/health",
             body="",
-            psk_parameter_name="/test/psk",
+            psk_secret_name="/test/psk",
             region="us-east-1"
         )
         
         assert result is False
     
-    @patch('src.utils.auth.get_psk_from_ssm')
+    @patch('src.utils.auth.get_psk_from_secrets_manager')
     @patch('src.utils.auth.validate_timestamp')
     def test_authenticate_request_invalid_timestamp(self, mock_validate_ts, mock_get_psk):
         """Test authentication with invalid timestamp"""
@@ -500,7 +499,7 @@ class TestAuthenticateRequest:
             method="GET",
             uri="/api/v1/health",
             body="",
-            psk_parameter_name="/test/psk",
+            psk_secret_name="/test/psk",
             region="us-east-1"
         )
         
@@ -508,7 +507,7 @@ class TestAuthenticateRequest:
         # Should not call get_psk if timestamp is invalid
         mock_get_psk.assert_not_called()
     
-    @patch('src.utils.auth.get_psk_from_ssm')
+    @patch('src.utils.auth.get_psk_from_secrets_manager')
     @patch('src.utils.auth.validate_timestamp')
     @patch('src.utils.auth.validate_request_signature')
     def test_authenticate_request_invalid_signature(self, mock_validate_sig, mock_validate_ts, mock_get_psk):
@@ -527,13 +526,13 @@ class TestAuthenticateRequest:
             method="GET",
             uri="/api/v1/health",
             body="",
-            psk_parameter_name="/test/psk",
+            psk_secret_name="/test/psk",
             region="us-east-1"
         )
         
         assert result is False
     
-    @patch('src.utils.auth.get_psk_from_ssm')
+    @patch('src.utils.auth.get_psk_from_secrets_manager')
     @patch('src.utils.auth.validate_timestamp')
     def test_authenticate_request_psk_error(self, mock_validate_ts, mock_get_psk):
         """Test authentication when PSK retrieval fails"""
@@ -551,7 +550,7 @@ class TestAuthenticateRequest:
                 method="GET",
                 uri="/api/v1/health",
                 body="",
-                psk_parameter_name="/test/psk",
+                psk_secret_name="/test/psk",
                 region="us-east-1"
             )
 
@@ -620,7 +619,7 @@ class TestLambdaHandler:
     @patch('src.handlers.authorizer.authenticate_request')
     def test_lambda_handler_auth_error(self, mock_authenticate):
         """Test authorization with authentication system error"""
-        mock_authenticate.side_effect = Exception("SSM connection failed")
+        mock_authenticate.side_effect = Exception("SM connection failed")
         
         event = {
             "type": "REQUEST",
@@ -843,7 +842,7 @@ class TestEdgeCases:
             method="GET",
             uri="/api/v1/health",
             body="",
-            psk_parameter_name="/test/psk",
+            psk_secret_name="/test/psk",
             region="us-east-1"
         )
         

@@ -11,6 +11,8 @@ globals "aws" {
     "us-east-2",
     "us-west-2"
   ]
+  # In case of resources detection, terraform still need to have the provider.
+  delete_regions = []
 }
 
 generate_hcl "main.tf" {
@@ -27,10 +29,12 @@ generate_hcl "main.tf" {
     module "global" {
       source = "../../modules/global"
 
-      project_name           = var.project_name
-      environment            = var.environment
-      org_id                 = var.org_id
-      api_auth_ssm_parameter = var.api_auth_ssm_parameter
+      project_name       = var.project_name
+      environment        = var.environment
+      org_id             = var.org_id
+      api_auth_psk_value = var.api_auth_psk_value
+      region             = var.region
+      regions            = global.aws.regions
     }
 
     tm_dynamic "module" {
@@ -53,7 +57,7 @@ generate_hcl "main.tf" {
         enable_s3_encryption              = var.enable_s3_encryption
         central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
         lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-        api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+        api_auth_secret_name              = module.global.api_auth_secret_name
         authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
         authorizer_image                  = var.authorizer_image
         api_execution_role_arn            = module.global.api_execution_role_arn
@@ -93,7 +97,7 @@ generate_hcl "config.tf" {
     }
 
     tm_dynamic "provider" {
-      for_each = global.aws.regions
+      for_each = tm_concat(global.aws.regions, global.aws.delete_regions)
       iterator = region
       labels   = ["aws"]
       attributes = {
@@ -132,6 +136,15 @@ generate_hcl "outputs.tf" {
       labels   = ["central_logging_bucket_name_${region.value}"]
       attributes = {
         value = tm_hcl_expression("module.regional-resource-${region.value}.central_logging_bucket_name")
+      }
+    }
+
+    tm_dynamic "output" {
+      for_each = global.aws.regions
+      iterator = region
+      labels   = ["api_endpoint_${region.value}"]
+      attributes = {
+        value = tm_hcl_expression("module.regional-resource-${region.value}.api_endpoint")
       }
     }
   }

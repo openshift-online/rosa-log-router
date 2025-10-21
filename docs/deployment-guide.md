@@ -120,13 +120,12 @@ podman push "$ECR_IMAGE_URI"
 
 Deploy REST API for tenant configuration management:
 
-#### Step 1: Create Authentication Parameter
+#### Step 1: Create Authentication Secret
 ```bash
-# Create SSM parameter for API authentication
-aws ssm put-parameter \
-  --name "/logging/api/psk" \
-  --value "your-256-bit-base64-encoded-key" \
-  --type "SecureString" \
+# Create Secrets Manager secret for API authentication
+aws secretsmanager create-secret \
+  --name "logging/api/psk" \
+  --secret-string "your-256-bit-base64-encoded-key" \
   --description "PSK for tenant management API authentication"
 ```
 
@@ -154,7 +153,7 @@ podman push "$ECR_API_URI"
   -b "$TEMPLATE_BUCKET" \
   --central-role-arn "$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
   --include-api \
-  --api-auth-ssm-parameter "/logging/api/psk" \
+  --api-auth-secret-name "logging/api/psk" \
   --authorizer-image-uri "$ECR_AUTH_URI" \
   --api-image-uri "$ECR_API_URI"
 ```

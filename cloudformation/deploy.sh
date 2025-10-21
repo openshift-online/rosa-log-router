@@ -20,7 +20,7 @@ INCLUDE_LAMBDA=false
 ECR_IMAGE_URI=""
 CENTRAL_ROLE_ARN=""
 INCLUDE_API=false
-API_AUTH_SSM_PARAMETER=""
+API_AUTH_SECRET_NAME=""
 AUTHORIZER_IMAGE_URI=""
 API_IMAGE_URI=""
 CLUSTER_NAME=""
@@ -78,7 +78,7 @@ OPTIONS:
     --include-lambda            Include Lambda stack for container-based processing (regional only)
     --ecr-image-uri URI         ECR container image URI (required if --include-lambda)
     --include-api               Include API stack for tenant management (regional only)
-    --api-auth-ssm-parameter    SSM parameter name for API PSK (required if --include-api)
+    --api-auth-secret-name      Secrets Manager secret name for API PSK (required if --include-api)
     --authorizer-image-uri URI  ECR URI for API authorizer container (required if --include-api)
     --api-image-uri URI         ECR URI for API service container (required if --include-api)
     --dry-run                   Show what would be deployed without actually deploying
@@ -96,7 +96,7 @@ EXAMPLES:
     $0 -t regional -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --include-sqs --include-lambda --ecr-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/log-processor:latest
 
     # Deploy regional with API management
-    $0 -t regional -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --include-api --api-auth-ssm-parameter /logging/api/psk --authorizer-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-authorizer:latest --api-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-api:latest
+    $0 -t regional -b my-templates-bucket --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 --include-api --api-auth-secret-name logging/api/psk --authorizer-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-authorizer:latest --api-image-uri 123456789012.dkr.ecr.us-east-2.amazonaws.com/logging-api:latest
 
     # Deploy customer role
     $0 -t customer --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234
@@ -183,8 +183,8 @@ while [[ $# -gt 0 ]]; do
             INCLUDE_API=true
             shift
             ;;
-        --api-auth-ssm-parameter)
-            API_AUTH_SSM_PARAMETER="$2"
+        --api-auth-secret-name)
+            API_AUTH_SECRET_NAME="$2"
             shift 2
             ;;
         --authorizer-image-uri)
@@ -292,8 +292,8 @@ case "$DEPLOYMENT_TYPE" in
         
         # Validate API requirements
         if [[ "$INCLUDE_API" == true ]]; then
-            if [[ -z "$API_AUTH_SSM_PARAMETER" ]]; then
-                print_error "API auth SSM parameter is required when --include-api is specified. Use --api-auth-ssm-parameter option."
+            if [[ -z "$API_AUTH_SECRET_NAME" ]]; then
+                print_error "API auth secret name is required when --include-api is specified. Use --api-auth-secret-name option."
                 exit 1
             fi
             if [[ -z "$AUTHORIZER_IMAGE_URI" ]]; then
@@ -898,7 +898,7 @@ deploy_stack() {
                 
                 # Add API parameters if API is enabled
                 if [[ "$INCLUDE_API" == true ]]; then
-                    parameters+=("APIAuthSSMParameter=$API_AUTH_SSM_PARAMETER")
+                    parameters+=("APIAuthSecretName=$API_AUTH_SECRET_NAME")
                     parameters+=("AuthorizerImageUri=$AUTHORIZER_IMAGE_URI")
                     parameters+=("APIImageUri=$API_IMAGE_URI")
                 fi
@@ -1022,7 +1022,7 @@ Configuration:
 - Include Lambda Stack: $INCLUDE_LAMBDA
 - Include API Stack: $INCLUDE_API
 $(if [[ -n "$ECR_IMAGE_URI" ]]; then echo "- ECR Image URI: $ECR_IMAGE_URI"; fi)
-$(if [[ -n "$API_AUTH_SSM_PARAMETER" ]]; then echo "- API Auth SSM Parameter: $API_AUTH_SSM_PARAMETER"; fi)
+$(if [[ -n "$API_AUTH_SECRET_NAME" ]]; then echo "- API Auth Secret Name: $API_AUTH_SECRET_NAME"; fi)
 $(if [[ -n "$AUTHORIZER_IMAGE_URI" ]]; then echo "- Authorizer Image URI: $AUTHORIZER_IMAGE_URI"; fi)
 $(if [[ -n "$API_IMAGE_URI" ]]; then echo "- API Image URI: $API_IMAGE_URI"; fi)
 

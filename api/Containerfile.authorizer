@@ -1,5 +1,5 @@
 # Lambda Authorizer Container for API Gateway
-# This container provides HMAC-SHA256 signature validation using PSK from SSM
+# This container provides HMAC-SHA256 signature validation using PSK from Secrets Manager
 
 FROM registry.access.redhat.com/ubi9
 

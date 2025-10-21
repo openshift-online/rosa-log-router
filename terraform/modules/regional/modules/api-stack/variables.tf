@@ -14,8 +14,8 @@ variable "project_name" {
   default     = "hcp-log"
 }
 
-variable "api_auth_ssm_parameter" {
-  description = "SSM parameter name containing the PSK for API authentication"
+variable "api_auth_secret_name" {
+  description = "Secrets Manager secret name containing the PSK for API authentication"
   type        = string
 }
 

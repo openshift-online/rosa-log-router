@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Environment variables
-PSK_PARAMETER_NAME = os.environ.get('PSK_PARAMETER_NAME', '/logging/api/psk')
+PSK_SECRET_NAME = os.environ.get('PSK_SECRET_NAME', 'logging/api/psk')
 AWS_REGION = os.environ.get('AWS_REGION')
 
 def generate_policy(principal_id: str, effect: str, resource: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -110,7 +110,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 method=final_method,
                 uri=uri,
                 body=body,
-                psk_parameter_name=PSK_PARAMETER_NAME,
+                psk_secret_name=PSK_SECRET_NAME,
                 region=AWS_REGION
             )
             

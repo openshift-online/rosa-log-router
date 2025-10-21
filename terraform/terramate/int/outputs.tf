@@ -31,3 +31,18 @@ output "central_logging_bucket_name_us-east-2" {
 output "central_logging_bucket_name_us-west-2" {
   value = module.regional-resource-us-west-2.central_logging_bucket_name
 }
+output "api_endpoint_ap-northeast-2" {
+  value = module.regional-resource-ap-northeast-2.api_endpoint
+}
+output "api_endpoint_ap-southeast-1" {
+  value = module.regional-resource-ap-southeast-1.api_endpoint
+}
+output "api_endpoint_us-east-1" {
+  value = module.regional-resource-us-east-1.api_endpoint
+}
+output "api_endpoint_us-east-2" {
+  value = module.regional-resource-us-east-2.api_endpoint
+}
+output "api_endpoint_us-west-2" {
+  value = module.regional-resource-us-west-2.api_endpoint
+}

@@ -20,9 +20,18 @@ variable "org_id" {
   default     = ""
 }
 
-variable "api_auth_ssm_parameter" {
-  description = "SSM parameter name containing the PSK for API authentication"
+variable "api_auth_psk_value" {
+  description = "The PSK value for API authentication"
   type        = string
+  sensitive   = true
+}
+
+variable "region" {
+}
+
+variable "regions" {
+  description = "List of AWS regions where the secret should be applied"
+  type        = list(string)
 }
 
 variable "tags" {

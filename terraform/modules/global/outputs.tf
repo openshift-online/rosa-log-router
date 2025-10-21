@@ -57,3 +57,13 @@ output "api_gateway_authorizer_name" {
   description = "Name of the API Gateway authorizer role"
   value       = aws_iam_role.api_gateway_authorizer_role.name
 }
+
+output "api_auth_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing API authentication PSK"
+  value       = aws_secretsmanager_secret.api_auth_psk.arn
+}
+
+output "api_auth_secret_name" {
+  description = "Name of the Secrets Manager secret containing API authentication PSK"
+  value       = aws_secretsmanager_secret.api_auth_psk.name
+}
