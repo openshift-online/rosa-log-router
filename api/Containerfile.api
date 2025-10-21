@@ -24,5 +24,5 @@ RUN uv sync --frozen --no-dev
 # Copy API source code
 COPY src/ ./src/
 
-# Set the Lambda handler using AWS Lambda Runtime Interface Client
-CMD ["python3", "-m", "awslambdaric", "src.app.lambda_handler"]
+# Set the Lambda handler using AWS Lambda Runtime Interface Client with uv run
+CMD ["uv", "run", "python", "-m", "awslambdaric", "src.handlers.authorizer.lambda_handler"]
