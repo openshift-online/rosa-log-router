@@ -70,6 +70,7 @@ variable "enable_s3_encryption" {
 variable "api_auth_psk_value" {
   description = "The PSK value for API authentication"
   type        = string
+  sensitive   = true
 }
 
 variable "authorizer_image" {
