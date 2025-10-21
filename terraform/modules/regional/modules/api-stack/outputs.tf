@@ -1,6 +1,6 @@
 output "api_endpoint" {
   description = "API Gateway endpoint URL"
-  value       = "https://${aws_api_gateway_rest_api.tenant_management_api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${var.environment}"
+  value       = "https://${aws_api_gateway_rest_api.tenant_management_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}"
 }
 
 output "api_id" {
