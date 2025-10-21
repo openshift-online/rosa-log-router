@@ -291,7 +291,8 @@ def sample_integration_cloudwatch_config() -> Dict[str, Any]:
         "log_group_name": "/aws/logs/integration-test-tenant",
         "target_region": "us-east-1",
         "enabled": True,
-        "desired_logs": ["test-app", "integration-service"]
+        "desired_logs": ["test-app", "integration-service"],
+        "groups": ["test-group", "integration-group"]
     }
 
 
@@ -305,7 +306,8 @@ def sample_integration_s3_config() -> Dict[str, Any]:
         "bucket_prefix": "cluster-logs/",
         "target_region": "us-east-1",
         "enabled": True,
-        "desired_logs": ["test-app", "integration-service"]
+        "desired_logs": ["test-app", "integration-service"],
+        "groups": ["test-group", "integration-group"]
     }
 
 
@@ -320,7 +322,8 @@ def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
             "log_distribution_role_arn": "arn:aws:iam::123456789012:role/Role1",
             "log_group_name": "/aws/logs/integration-tenant-1",
             "target_region": "us-east-1",
-            "enabled": True
+            "enabled": True,
+            "groups": ["frontend-group", "api-group"]
         },
         # Tenant 1 - S3 configuration
         {
@@ -329,7 +332,8 @@ def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
             "bucket_name": "integration-tenant-1-logs",
             "bucket_prefix": "logs/",
             "target_region": "us-east-1",
-            "enabled": True
+            "enabled": True,
+            "groups": ["frontend-group", "api-group"]
         },
         # Tenant 2 - CloudWatch configuration
         {
@@ -339,7 +343,8 @@ def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
             "log_group_name": "/aws/logs/integration-tenant-2",
             "target_region": "us-west-2",
             "enabled": False,
-            "desired_logs": ["payment-service"]
+            "desired_logs": ["payment-service"],
+            "groups": ["payment-group"]
         },
         # Tenant 2 - S3 configuration
         {
@@ -349,7 +354,8 @@ def multiple_integration_delivery_configs() -> list[Dict[str, Any]]:
             "bucket_prefix": "logs/",
             "target_region": "us-west-2",
             "enabled": True,
-            "desired_logs": ["payment-service"]
+            "desired_logs": ["payment-service"],
+            "groups": ["payment-group"]
         }
     ]
 

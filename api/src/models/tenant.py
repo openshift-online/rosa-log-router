@@ -43,6 +43,15 @@ def validate_desired_logs_list(logs: Optional[List[str]]) -> Optional[List[str]]
                 raise ValueError('All items in desired_logs must be non-empty strings')
     return logs
 
+def validate_groups_list(groups: Optional[List[str]]) -> Optional[List[str]]:
+    """Validate groups list"""
+    if groups is not None:
+        if not isinstance(groups, list):
+            raise ValueError('groups must be a list')
+        for app in groups:
+            if not isinstance(app, str) or len(app.strip()) == 0:
+                raise ValueError('All items in groups must be non-empty strings')
+    return groups
 
 def validate_delivery_type_fields(type_value: str, **fields) -> None:
     """Shared validator for type-specific required fields"""
@@ -62,6 +71,7 @@ class TenantDeliveryConfigBase(BaseModel):
     type: Literal["cloudwatch", "s3"] = Field(..., description="Delivery configuration type")
     enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration (defaults to True)")
     desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process (defaults to all applications)")
+    groups: Optional[List[str]] = Field(default=None, description="List of application groups to process")
     target_region: Optional[str] = Field(default=None, description="AWS region for delivery (defaults to processor region)")
     ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
     created_at: Optional[datetime] = Field(default=None, description="Configuration creation timestamp")
@@ -91,12 +101,25 @@ class TenantDeliveryConfigBase(BaseModel):
             if not isinstance(v, list):
                 raise ValueError('desired_logs must be a list')
             if len(v) == 0:
-                raise ValueError('desired_logs cannot be an empty list (use null to allow all applications)')
+                raise ValueError('desired_logs cannot be an empty list')
             for app in v:
                 if not isinstance(app, str) or len(app.strip()) == 0:
                     raise ValueError('All items in desired_logs must be non-empty strings')
         return v
 
+    @field_validator('groups')
+    @classmethod
+    def validate_groups(cls, v):
+        """Validate groups list"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('groups must be a list')
+            if len(v) == 0:
+                raise ValueError('groups cannot be an empty list')
+            for app in v:
+                if not isinstance(app, str) or len(app.strip()) == 0:
+                    raise ValueError('All items in groups must be non-empty strings')
+        return v
 
 class CloudWatchDeliveryConfig(TenantDeliveryConfigBase):
     """Model for CloudWatch delivery configuration"""
@@ -142,6 +165,7 @@ class TenantDeliveryConfigCreateRequest(BaseModel):
     type: Literal["cloudwatch", "s3"] = Field(..., description="Delivery configuration type")
     enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
     desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
+    groups: Optional[List[str]] = Field(default=None, description="List of application groups to process")
     target_region: Optional[str] = Field(default=None, description="AWS region for delivery")
     ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
     
@@ -185,10 +209,24 @@ class TenantDeliveryConfigCreateRequest(BaseModel):
             if not isinstance(v, list):
                 raise ValueError('desired_logs must be a list')
             if len(v) == 0:
-                raise ValueError('desired_logs cannot be an empty list (use null to allow all applications)')
+                raise ValueError('desired_logs cannot be an empty list')
             for app in v:
                 if not isinstance(app, str) or len(app.strip()) == 0:
                     raise ValueError('All items in desired_logs must be non-empty strings')
+        return v
+
+    @field_validator('groups')
+    @classmethod
+    def validate_groups(cls, v):
+        """Validate groups list"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('groups must be a list')
+            if len(v) == 0:
+                raise ValueError('groups cannot be an empty list')
+            for app in v:
+                if not isinstance(app, str) or len(app.strip()) == 0:
+                    raise ValueError('All items in groups must be non-empty strings')
         return v
     
     def model_post_init(self, __context) -> None:
@@ -205,6 +243,7 @@ class TenantDeliveryConfigUpdateRequest(BaseModel):
     """Model for updating tenant delivery configurations"""
     enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
     desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
+    groups: Optional[List[str]] = Field(default=None, description="List of application groups to process")
     target_region: Optional[str] = Field(default=None, description="AWS region for delivery")
     ttl: Optional[int] = Field(default=None, description="Unix timestamp for DynamoDB TTL expiration")
     
@@ -231,7 +270,7 @@ class TenantDeliveryConfigUpdateRequest(BaseModel):
         if v is not None and not v.replace('-', '').isalnum():
             raise ValueError('target_region must be a valid AWS region')
         return v
-    
+
     @field_validator('desired_logs')
     @classmethod
     def validate_desired_logs(cls, v):
@@ -240,18 +279,32 @@ class TenantDeliveryConfigUpdateRequest(BaseModel):
             if not isinstance(v, list):
                 raise ValueError('desired_logs must be a list')
             if len(v) == 0:
-                raise ValueError('desired_logs cannot be an empty list (use null to allow all applications)')
+                raise ValueError('desired_logs cannot be an empty list')
             for app in v:
                 if not isinstance(app, str) or len(app.strip()) == 0:
                     raise ValueError('All items in desired_logs must be non-empty strings')
         return v
 
+    @field_validator('groups')
+    @classmethod
+    def validate_groups(cls, v):
+        """Validate groups list"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('groups must be a list')
+            if len(v) == 0:
+                raise ValueError('groups cannot be an empty list')
+            for app in v:
+                if not isinstance(app, str) or len(app.strip()) == 0:
+                    raise ValueError('All items in groups must be non-empty strings')
+        return v
 
 class TenantDeliveryConfigPatchRequest(BaseModel):
     """Model for partial updates to tenant delivery configurations"""
     enabled: Optional[bool] = Field(default=None, description="Enable/disable this delivery configuration")
     desired_logs: Optional[List[str]] = Field(default=None, description="List of application names to process")
-    
+    groups: Optional[List[str]] = Field(default=None, description="List of application groups to process")
+
     @field_validator('desired_logs')
     @classmethod
     def validate_desired_logs(cls, v):
@@ -260,12 +313,25 @@ class TenantDeliveryConfigPatchRequest(BaseModel):
             if not isinstance(v, list):
                 raise ValueError('desired_logs must be a list')
             if len(v) == 0:
-                raise ValueError('desired_logs cannot be an empty list (use null to allow all applications)')
+                raise ValueError('desired_logs cannot be an empty list')
             for app in v:
                 if not isinstance(app, str) or len(app.strip()) == 0:
                     raise ValueError('All items in desired_logs must be non-empty strings')
         return v
 
+    @field_validator('groups')
+    @classmethod
+    def validate_groups(cls, v):
+        """Validate groups list"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('groups must be a list')
+            if len(v) == 0:
+                raise ValueError('groups cannot be an empty list')
+            for app in v:
+                if not isinstance(app, str) or len(app.strip()) == 0:
+                    raise ValueError('All items in groups must be non-empty strings')
+        return v
 
 # Union type for responses
 TenantDeliveryConfigResponse = Union[CloudWatchDeliveryConfig, S3DeliveryConfig]

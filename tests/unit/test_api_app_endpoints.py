@@ -461,3 +461,58 @@ class TestErrorHandling:
         data = response.json()
         error_details = str(data["detail"])
         assert "desired_logs" in error_details
+    
+    def test_invalid_groups_format(self, client):
+        """Test validation of invalid groups format"""
+        invalid_data = {
+            "tenant_id": "test-tenant",
+            "type": "cloudwatch",
+            "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole",
+            "log_group_name": "/aws/logs/test-tenant",
+            "target_region": "us-east-1",
+            "groups": [""]  # Empty string in list is invalid
+        }
+        
+        response = client.post("/api/v1/tenants/test-tenant/delivery-configs", json=invalid_data)
+        
+        assert response.status_code == 422
+        data = response.json()
+        error_details = str(data["detail"])
+        assert "groups" in error_details
+    
+    def test_valid_groups_field(self, client):
+        """Test validation of valid groups field"""
+        # Test with groups field included
+        valid_data = {
+            "tenant_id": "test-tenant",
+            "type": "cloudwatch",
+            "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole",
+            "log_group_name": "/aws/logs/test-tenant",
+            "target_region": "us-east-1",
+            "groups": ["frontend-group", "api-group"]
+        }
+        
+        with patch('src.app.delivery_config_service') as mock_service:
+            mock_service.create_tenant_config.return_value = valid_data
+            response = client.post("/api/v1/tenants/test-tenant/delivery-configs", json=valid_data)
+        
+        assert response.status_code == 201
+        data = response.json()
+        assert data["data"]["groups"] == ["frontend-group", "api-group"]
+    
+    def test_groups_field_optional(self, client):
+        """Test that groups field is optional"""
+        # Test without groups field
+        valid_data = {
+            "tenant_id": "test-tenant",
+            "type": "cloudwatch",
+            "log_distribution_role_arn": "arn:aws:iam::123456789012:role/TestRole",
+            "log_group_name": "/aws/logs/test-tenant",
+            "target_region": "us-east-1"
+        }
+        
+        with patch('src.app.delivery_config_service') as mock_service:
+            mock_service.create_tenant_config.return_value = valid_data
+            response = client.post("/api/v1/tenants/test-tenant/delivery-configs", json=valid_data)
+        
+        assert response.status_code == 201
