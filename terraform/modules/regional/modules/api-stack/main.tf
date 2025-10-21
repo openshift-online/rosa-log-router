@@ -305,3 +305,19 @@ resource "aws_cloudwatch_log_group" "api_gateway_log_group" {
   name              = "/aws/apigateway/${var.project_name}-${var.environment}-tenant-api"
   retention_in_days = 14
 }
+
+# CloudWatch Log Group for Lambda functions
+resource "aws_cloudwatch_log_group" "api_service_log_group" {
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-api-service"
+  retention_in_days = 14
+
+  tags = local.common_tags
+}
+
+# CloudWatch Log Group for Lambda functions
+resource "aws_cloudwatch_log_group" "api_authorizer_log_group" {
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-api-authorizer"
+  retention_in_days = 14
+
+  tags = local.common_tags
+}
