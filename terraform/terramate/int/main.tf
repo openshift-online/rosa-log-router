@@ -7,11 +7,19 @@ locals {
   random_suffix = random_id.suffix.hex
 }
 module "global" {
-  api_auth_ssm_parameter = var.api_auth_ssm_parameter
-  environment            = var.environment
-  org_id                 = var.org_id
-  project_name           = var.project_name
-  source                 = "../../modules/global"
+  api_auth_psk_value = var.api_auth_psk_value
+  environment        = var.environment
+  org_id             = var.org_id
+  project_name       = var.project_name
+  region             = var.region
+  regions = [
+    "ap-northeast-2",
+    "ap-southeast-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-2",
+  ]
+  source = "../../modules/global"
 }
 module "regional-resource-ap-northeast-2" {
   source = "../../modules/regional"
@@ -28,7 +36,7 @@ module "regional-resource-ap-northeast-2" {
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  api_auth_secret_name              = module.global.api_auth_secret_name
   authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
   authorizer_image                  = var.authorizer_image
   api_execution_role_arn            = module.global.api_execution_role_arn
@@ -50,7 +58,7 @@ module "regional-resource-ap-southeast-1" {
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  api_auth_secret_name              = module.global.api_auth_secret_name
   authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
   authorizer_image                  = var.authorizer_image
   api_execution_role_arn            = module.global.api_execution_role_arn
@@ -72,7 +80,7 @@ module "regional-resource-us-east-1" {
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  api_auth_secret_name              = module.global.api_auth_secret_name
   authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
   authorizer_image                  = var.authorizer_image
   api_execution_role_arn            = module.global.api_execution_role_arn
@@ -94,7 +102,7 @@ module "regional-resource-us-east-2" {
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  api_auth_secret_name              = module.global.api_auth_secret_name
   authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
   authorizer_image                  = var.authorizer_image
   api_execution_role_arn            = module.global.api_execution_role_arn
@@ -116,7 +124,7 @@ module "regional-resource-us-west-2" {
   enable_s3_encryption              = var.enable_s3_encryption
   central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
   lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_ssm_parameter            = var.api_auth_ssm_parameter
+  api_auth_secret_name              = module.global.api_auth_secret_name
   authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
   authorizer_image                  = var.authorizer_image
   api_execution_role_arn            = module.global.api_execution_role_arn

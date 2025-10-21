@@ -39,10 +39,10 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: Whether to deploy the API stack for tenant management
     
-  APIAuthSSMParameter:
+  APIAuthSecretName:
     Type: String
     Default: ""
-    Description: SSM parameter name containing the PSK for API authentication (required if IncludeAPIStack is true)
+    Description: Secrets Manager secret name containing the PSK for API authentication (required if IncludeAPIStack is true)
     
   AuthorizerImageUri:
     Type: String
@@ -83,7 +83,7 @@ Conditions:
   ShouldIncludeLambdaStack: !Equals [!Ref IncludeLambdaStack, "true"]
   HasECRImageUri: !Not [!Equals [!Ref ECRImageUri, ""]]
   ShouldIncludeAPIStack: !Equals [!Ref IncludeAPIStack, "true"]
-  HasAPIAuthSSMParameter: !Not [!Equals [!Ref APIAuthSSMParameter, ""]]
+  HasAPIAuthSecretName: !Not [!Equals [!Ref APIAuthSecretName, ""]]
   HasAuthorizerImageUri: !Not [!Equals [!Ref AuthorizerImageUri, ""]]
   HasAPIImageUri: !Not [!Equals [!Ref APIImageUri, ""]]
 
@@ -167,7 +167,7 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         ProjectName: !Ref ProjectName
-        APIAuthSSMParameter: !Ref APIAuthSSMParameter
+        APIAuthSecretName: !Ref APIAuthSecretName
         TenantConfigTableName: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableName
         TenantConfigTableArn: !GetAtt CoreInfrastructureStack.Outputs.TenantConfigTableArn
         AuthorizerImageUri: !Ref AuthorizerImageUri

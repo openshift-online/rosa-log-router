@@ -90,7 +90,7 @@ terraform apply \
 - `ecr_image_uri` - ECR container image URI (required if include_lambda_stack=true)
 - `api_image` - ECR container image URI for API service (required if include_api_stack=true)
 - `authorizer_image` - ECR container image URI for API authorizer (required if include_api_stack=true)
-- `api_auth_ssm_parameter` - SSM parameter name containing PSK for API authentication (required if include_api_stack=true)
+- `api_auth_secret_name` - Secrets Manager secret name containing PSK for API authentication (required if include_api_stack=true)
 - `authorizer_execution_role_arn` - ARN of global Lambda authorizer execution role (required if include_api_stack=true)
 - `api_execution_role_arn` - ARN of global Lambda API execution role (required if include_api_stack=true)
 - `api_gateway_authorizer_role_arn` - ARN of global API Gateway authorizer role (required if include_api_stack=true)
@@ -138,7 +138,7 @@ module "regional_stage" {
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/api-service:stage"
   authorizer_image    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/api-authorizer:stage"
   
-  api_auth_ssm_parameter          = "/hcp-log/stage/api-auth-psk"
+  api_auth_secret_name          = "/hcp-log/stage/api-auth-psk"
   authorizer_execution_role_arn   = var.global_authorizer_role_arn
   api_execution_role_arn          = var.global_api_role_arn
   api_gateway_authorizer_role_arn = var.global_api_gateway_role_arn
@@ -167,7 +167,7 @@ module "regional_prod" {
   api_image           = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/api-service:v1.2.3"
   authorizer_image    = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/api-authorizer:v1.2.3"
   
-  api_auth_ssm_parameter          = "/hcp-log/prod/api-auth-psk"
+  api_auth_secret_name          = "/hcp-log/prod/api-auth-psk"
   authorizer_execution_role_arn   = var.global_authorizer_role_arn
   api_execution_role_arn          = var.global_api_role_arn
   api_gateway_authorizer_role_arn = var.global_api_gateway_role_arn
@@ -213,7 +213,7 @@ module "regional_us_east_1" {
   api_image           = var.api_image_uri
   authorizer_image    = var.authorizer_image_uri
   
-  api_auth_ssm_parameter          = var.api_auth_ssm_parameter
+  api_auth_secret_name          = var.api_auth_secret_name
   authorizer_execution_role_arn   = module.global_iam.authorizer_execution_role_arn
   api_execution_role_arn          = module.global_iam.api_execution_role_arn
   api_gateway_authorizer_role_arn = module.global_iam.api_gateway_authorizer_role_arn
@@ -263,7 +263,7 @@ terraform apply \
   -var="ecr_image_uri=YOUR_ECR_URI" \
   -var="api_image=YOUR_API_ECR_URI" \
   -var="authorizer_image=YOUR_AUTHORIZER_ECR_URI" \
-  -var="api_auth_ssm_parameter=/hcp-log/prod/api-auth-psk" \
+  -var="api_auth_secret_name=/hcp-log/prod/api-auth-psk" \
   -var="central_log_distribution_role_arn=YOUR_ROLE_ARN" \
   -var="lambda_execution_role_arn=YOUR_LAMBDA_ROLE_ARN" \
   -var="authorizer_execution_role_arn=YOUR_AUTHORIZER_ROLE_ARN" \
@@ -286,7 +286,7 @@ The API uses HMAC (Hash-based Message Authentication Code) for request authentic
 
 - **Authorization Header**: Contains the HMAC signature
 - **X-API-Timestamp Header**: Contains the request timestamp
-- **Pre-shared Key**: Stored in SSM Parameter Store
+- **Pre-shared Key**: Stored in AWS Secrets Manager
 
 ### API Stack Requirements
 
@@ -302,7 +302,7 @@ When deploying the API stack (`include_api_stack=true`), you must provide:
    - `api_gateway_authorizer_role_arn`: API Gateway authorizer role
 
 3. **Authentication Configuration**:
-   - `api_auth_ssm_parameter`: SSM parameter containing the PSK
+   - `api_auth_secret_name`: Secrets Manager secret containing the PSK
 
 ### Example API Stack Deployment
 
@@ -314,7 +314,7 @@ terraform apply \
   -var="include_api_stack=true" \
   -var="api_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api-service:latest" \
   -var="authorizer_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api-authorizer:latest" \
-  -var="api_auth_ssm_parameter=/hcp-log/prod/api-auth-psk" \
+  -var="api_auth_secret_name=/hcp-log/prod/api-auth-psk" \
   -var="authorizer_execution_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-authorizer-role" \
   -var="api_execution_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-service-role" \
   -var="api_gateway_authorizer_role_arn=arn:aws:iam::123456789012:role/hcp-log-api-gateway-authorizer-role"

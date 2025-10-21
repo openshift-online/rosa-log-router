@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Cache for SSM parameter values to reduce API calls
+# Cache for psk values to reduce API calls
 _psk_cache = {}
 _cache_ttl = 300  # 5 minutes
 
@@ -22,21 +22,21 @@ class AuthenticationError(Exception):
     pass
 
 
-def get_psk_from_ssm(parameter_name: str, region: str) -> str:
+def get_psk_from_secrets_manager(secret_name: str, region: str) -> str:
     """
-    Retrieve PSK from SSM Parameter Store with caching
+    Retrieve PSK from AWS Secrets Manager with caching
     
     Args:
-        parameter_name: Name of the SSM parameter containing the PSK
-        region: AWS region for SSM client
+        secret_name: Name of the secret containing the PSK
+        region: AWS region for Secrets Manager client
         
     Returns:
         The PSK value as a string
         
     Raises:
-        AuthenticationError: If parameter cannot be retrieved
+        AuthenticationError: If secret cannot be retrieved
     """
-    cache_key = f"{region}:{parameter_name}"
+    cache_key = f"{region}:{secret_name}"
     current_time = time.time()
     
     # Check cache first
@@ -46,12 +46,9 @@ def get_psk_from_ssm(parameter_name: str, region: str) -> str:
             return cached_value
     
     try:
-        ssm_client = boto3.client('ssm', region_name=region)
-        response = ssm_client.get_parameter(
-            Name=parameter_name,
-            WithDecryption=True
-        )
-        psk = response['Parameter']['Value']
+        secrets_client = boto3.client('secretsmanager', region_name=region)
+        response = secrets_client.get_secret_value(SecretId=secret_name)
+        psk = response['SecretString']
         
         # Cache the value
         _psk_cache[cache_key] = (psk, current_time)
@@ -59,7 +56,7 @@ def get_psk_from_ssm(parameter_name: str, region: str) -> str:
         return psk
         
     except Exception as e:
-        logger.error(f"Failed to retrieve PSK from SSM parameter {parameter_name}: {str(e)}")
+        logger.error(f"Failed to retrieve PSK from Secrets Manager secret {secret_name}: {str(e)}")
         raise AuthenticationError(f"Failed to retrieve authentication key")
 
 
@@ -221,7 +218,7 @@ def authenticate_request(
     method: str,
     uri: str,
     body: str,
-    psk_parameter_name: str,
+    psk_secret_name: str,
     region: str
 ) -> bool:
     """
@@ -232,7 +229,7 @@ def authenticate_request(
         method: HTTP method
         uri: Request URI
         body: Request body
-        psk_parameter_name: SSM parameter name for PSK
+        psk_secret_name: Secrets Manager secret name for PSK
         region: AWS region
         
     Returns:
@@ -253,8 +250,8 @@ def authenticate_request(
         logger.warning(f"Invalid or expired timestamp: {timestamp}")
         return False
     
-    # Get PSK from SSM
-    psk = get_psk_from_ssm(psk_parameter_name, region)
+    # Get PSK from Secrets Manager
+    psk = get_psk_from_secrets_manager(psk_secret_name, region)
     
     # Validate signature (exclude body for API Gateway authorizers)
     if not validate_request_signature(psk, method, uri, timestamp, signature, body, include_body=False):

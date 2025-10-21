@@ -13,9 +13,9 @@ Parameters:
     Default: multi-tenant-logging
     Description: Name of the project for resource naming
     
-  APIAuthSSMParameter:
+  APIAuthSecretName:
     Type: String
-    Description: SSM parameter name containing the PSK for API authentication
+    Description: Secrets Manager secret name containing the PSK for API authentication
     
   TenantConfigTableName:
     Type: String
@@ -47,7 +47,7 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          PSK_PARAMETER_NAME: !Ref APIAuthSSMParameter
+          PSK_SECRET_NAME: !Ref APIAuthSecretName
           LOG_LEVEL: INFO
       Tags:
         - Key: Project
@@ -72,14 +72,14 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: SSMParameterAccess
+        - PolicyName: SecretsManagerAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${APIAuthSSMParameter}'
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${APIAuthSecretName}*'
       Tags:
         - Key: Project
           Value: !Ref ProjectName

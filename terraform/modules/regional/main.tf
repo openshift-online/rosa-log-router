@@ -51,7 +51,7 @@ module "api_stack" {
 
   environment                     = var.environment
   project_name                    = var.project_name
-  api_auth_ssm_parameter          = var.api_auth_ssm_parameter
+  api_auth_secret_name            = var.api_auth_secret_name
   tenant_config_table_name        = module.core_infrastructure.tenant_config_table_name
   authorizer_execution_role_arn   = var.authorizer_execution_role_arn
   authorizer_image                = var.authorizer_image

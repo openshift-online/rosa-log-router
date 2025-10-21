@@ -18,7 +18,7 @@ locals {
 # Lambda Authorizer Function
 resource "aws_lambda_function" "authorizer_function" {
   function_name = "${var.project_name}-${var.environment}-api-authorizer"
-  image_uri     = var.authorizer_image
+  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/${var.authorizer_image}"
   package_type  = "Image"
   role          = var.authorizer_execution_role_arn
   timeout       = 30
@@ -26,8 +26,8 @@ resource "aws_lambda_function" "authorizer_function" {
 
   environment {
     variables = {
-      PSK_PARAMETER_NAME = var.api_auth_ssm_parameter
-      LOG_LEVEL          = "INFO"
+      PSK_SECRET_NAME = var.api_auth_secret_name
+      LOG_LEVEL       = "INFO"
     }
   }
 
@@ -38,7 +38,7 @@ resource "aws_lambda_function" "authorizer_function" {
 # Main API Lambda Function
 resource "aws_lambda_function" "api_function" {
   function_name = "${var.project_name}-${var.environment}-api-service"
-  image_uri     = var.api_image
+  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/${var.api_image}"
   package_type  = "Image"
   role          = var.api_execution_role_arn
   timeout       = 30

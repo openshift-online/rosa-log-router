@@ -4,12 +4,12 @@ REST API service for managing multi-tenant logging delivery configurations in Dy
 
 ## Overview
 
-The Tenant Management API provides a secure, REST-based interface for managing tenant delivery configurations in the multi-tenant logging system. Each tenant can have multiple delivery configurations (CloudWatch Logs and S3) with independent settings and filtering. The API uses HMAC-SHA256 signature authentication with a pre-shared key (PSK) stored in AWS SSM Parameter Store.
+The Tenant Management API provides a secure, REST-based interface for managing tenant delivery configurations in the multi-tenant logging system. Each tenant can have multiple delivery configurations (CloudWatch Logs and S3) with independent settings and filtering. The API uses HMAC-SHA256 signature authentication with a pre-shared key (PSK) stored in AWS Secrets Manager.
 
 ## Architecture
 
 - **API Gateway**: REST API with custom Lambda authorizer
-- **Lambda Authorizer**: HMAC-SHA256 signature validation using PSK from SSM
+- **Lambda Authorizer**: HMAC-SHA256 signature validation using PSK from Secrets Manager
 - **API Service**: FastAPI-based Lambda function for CRUD operations
 - **Authentication**: PSK-based request signing (no API keys required)
 - **Storage**: DynamoDB with composite key structure (`tenant_id` + `type`)
@@ -689,7 +689,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 export TENANT_CONFIG_TABLE="multi-tenant-logging-development-tenant-configs"
 export AWS_REGION="us-east-1"
 export LOG_LEVEL="INFO"
-export PSK_PARAMETER_NAME="/logging/api/psk"  # For authorizer only
+export PSK_SECRET_NAME="logging/api/psk"  # For authorizer only
 ```
 
 ## Container Development
@@ -706,7 +706,7 @@ podman build -f Containerfile.api -t logging-api:latest .
 ### Test Containers Locally
 ```bash
 # Test authorizer
-podman run --rm -e PSK_PARAMETER_NAME="/test/psk" logging-authorizer:latest
+podman run --rm -e PSK_SECRET_NAME="test/psk" logging-authorizer:latest
 
 # Test API service
 podman run --rm -p 8080:8080 \
@@ -732,12 +732,11 @@ podman push 123456789012.dkr.ecr.us-east-1.amazonaws.com/logging-api:latest
 ## Deployment
 
 ### Prerequisites
-1. **Create SSM Parameter**:
+1. **Create Secrets Manager Secret**:
    ```bash
-   aws ssm put-parameter \
-     --name "/logging/api/psk" \
-     --value "your-256-bit-base64-encoded-key" \
-     --type "SecureString" \
+   aws secretsmanager create-secret \
+     --name "logging/api/psk" \
+     --secret-string "your-256-bit-base64-encoded-key" \
      --description "PSK for tenant management API authentication"
    ```
 
@@ -749,7 +748,7 @@ cd cloudformation/
 ./deploy.sh -t regional -b your-templates-bucket \
   --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abc123 \
   --include-api \
-  --api-auth-ssm-parameter "/logging/api/psk" \
+  --api-auth-secret-name "logging/api/psk" \
   --authorizer-image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/logging-authorizer:latest \
   --api-image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/logging-api:latest
 ```
@@ -819,7 +818,7 @@ curl -X PATCH "https://api.example.com/api/v1/tenants/acme-corp/delivery-configs
 
 ## Security Considerations
 
-1. **PSK Management**: Store PSK in SSM Parameter Store as SecureString
+1. **PSK Management**: Store PSK in AWS Secrets Manager with automatic encryption
 2. **Timestamp Validation**: Requests older than 5 minutes are rejected
 3. **Signature Validation**: Constant-time comparison prevents timing attacks
 4. **Least Privilege**: IAM roles have minimal required permissions
@@ -849,7 +848,7 @@ curl -X PATCH "https://api.example.com/api/v1/tenants/acme-corp/delivery-configs
 ## Troubleshooting
 
 ### Authentication Failures
-1. Verify PSK in SSM Parameter Store
+1. Verify PSK in AWS Secrets Manager
 2. Check timestamp format (ISO 8601 with Z suffix)
 3. Ensure signature calculation matches specification
 4. Verify request path and method case sensitivity

@@ -67,9 +67,10 @@ variable "enable_s3_encryption" {
   default     = true
 }
 
-variable "api_auth_ssm_parameter" {
-  description = "SSM parameter name containing the PSK for API authentication"
+variable "api_auth_psk_value" {
+  description = "The PSK value for API authentication"
   type        = string
+  sensitive   = true
 }
 
 variable "authorizer_image" {

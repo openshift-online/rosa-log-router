@@ -285,9 +285,9 @@ resource "aws_iam_role_policy_attachment" "authorizer_execution_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# IAM Policy for SSM Parameter Access
-resource "aws_iam_role_policy" "authorizer_ssm_access" {
-  name = "SSMParameterAccess"
+# IAM Policy for Secrets Manager Access
+resource "aws_iam_role_policy" "authorizer_sm_access" {
+  name = "SecretsManagerAccess"
   role = aws_iam_role.authorizer_execution_role.id
 
   policy = jsonencode({
@@ -296,12 +296,30 @@ resource "aws_iam_role_policy" "authorizer_ssm_access" {
       {
         Effect = "Allow"
         Action = [
-          "ssm:GetParameter"
+          "secretsmanager:GetSecretValue"
         ]
-        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter${var.api_auth_ssm_parameter}"
+        Resource = "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project_name}-${var.environment}-psk"
       }
     ]
   })
+}
+
+# Secrets Manager Secret for API Authentication
+resource "aws_secretsmanager_secret" "api_auth_psk" {
+  name        = "${var.project_name}-${var.environment}-psk"
+  description = "PSK for tenant management API authentication"
+  dynamic "replica" {
+    for_each = [for r in var.regions : r if r != var.region]
+    content {
+      region = replica.value
+    }
+  }
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "api_auth_psk" {
+  secret_id     = aws_secretsmanager_secret.api_auth_psk.id
+  secret_string = var.api_auth_psk_value
 }
 
 # API Lambda Execution Role
