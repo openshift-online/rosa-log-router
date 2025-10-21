@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # LocalStack - emulates ALL AWS services
+  localstack:
+    image: localstack/localstack:latest
+    container_name: rosa-localstack
+    ports:
+      - "4566:4566"  # LocalStack gateway
+      - "4510-4559:4510-4559"  # External service port range
+    environment:
+      - SERVICES=s3,sqs,sns,dynamodb,sts,cloudwatch,lambda,logs,iam,kms,ec2
+      - DEBUG=1
+      - PERSISTENCE=0
+      - AWS_DEFAULT_REGION=us-east-1
+      - LAMBDA_EXECUTOR=docker-reuse
+      - LAMBDA_DOCKER_NETWORK=rosa-log-router_rosa-network
+      - LAMBDA_REMOVE_CONTAINERS=true
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - DISABLE_CORS_CHECKS=1
+      - EAGER_SERVICE_LOADING=1
+    volumes:
+      # Mount Docker/Podman socket so LocalStack can run Lambda containers
+      # Default: Podman socket for local development (/run/user/1000/podman/podman.sock)
+      # CI: Set DOCKER_SOCK=/var/run/docker.sock to use Docker socket
+      # Note: Update UID (1000) if your user ID is different (run: id -u)
+      - ${DOCKER_SOCK:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock:Z
+      # Share AWS credentials (for tflocal)
+      - ./local-aws:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rosa-network
+    # Run as root to access Podman socket
+    user: "0"
+    privileged: true
+
+networks:
+  rosa-network:
+    name: rosa-log-router_rosa-network
+    driver: bridge
