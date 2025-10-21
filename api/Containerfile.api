@@ -9,8 +9,8 @@ LABEL konflux.additional-tags=1.0.0
 RUN dnf install -y python3 python3-pip && \
     dnf clean all
 
-# Set working directory
-WORKDIR /var/task
+# Set working directory to writable location in Lambda
+WORKDIR /tmp
 
 # Install uv for fast Python package management
 RUN pip3 install --no-cache-dir uv
