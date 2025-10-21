@@ -9,8 +9,8 @@ LABEL konflux.additional-tags=1.0.0
 RUN dnf install -y python3 python3-pip && \
     dnf clean all
 
-# Set working directory to writable location in Lambda
-WORKDIR /tmp
+# Set working directory
+WORKDIR /var/task
 
 # Install uv for fast Python package management
 RUN pip3 install --no-cache-dir uv
@@ -19,12 +19,10 @@ RUN pip3 install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md ./
 
 # Install Python dependencies using uv with frozen lockfile for reproducible builds
-# Set UV_CACHE_DIR to a writable location for Lambda
-ENV UV_CACHE_DIR=/tmp/.uv-cache
 RUN uv sync --frozen --no-dev
 
 # Copy API source code
 COPY src/ ./src/
 
-# Set the Lambda handler using AWS Lambda Runtime Interface Client with uv run
-CMD ["uv", "run", "python", "-m", "awslambdaric", "src.handlers.authorizer.lambda_handler"]
+# Set the Lambda handler using AWS Lambda Runtime Interface Client
+CMD ["/var/task/.venv/bin/python", "-m", "awslambdaric", "src.handlers.authorizer.lambda_handler"]
