@@ -10,6 +10,7 @@ output "environment" {
 }
 output "api_auth_psk_value" {
   description = "The PSK value for API authentication"
+  sensitive   = true
   value       = var.api_auth_psk_value
 }
 output "central_log_distribution_role_arn" {

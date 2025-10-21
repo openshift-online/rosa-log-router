@@ -124,6 +124,7 @@ generate_hcl "outputs.tf" {
     output "api_auth_psk_value" {
       description = "The PSK value for API authentication"
       value       = var.api_auth_psk_value
+      sensitive   = true
     }
 
     output "central_log_distribution_role_arn" {
