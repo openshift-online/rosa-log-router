@@ -86,7 +86,7 @@ resource "aws_sns_topic" "log_delivery_topic" {
 
 # Central S3 Bucket for log storage
 resource "aws_s3_bucket" "central_logging_bucket" {
-  bucket = "${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-${data.aws_region.current.name}-${var.random_suffix}"
+  bucket = "${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-${data.aws_region.current.id}-${var.random_suffix}"
   tags   = local.common_tags
 }
 
