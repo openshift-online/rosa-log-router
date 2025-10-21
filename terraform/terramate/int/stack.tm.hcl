@@ -121,6 +121,11 @@ generate_hcl "outputs.tf" {
       value       = var.environment
     }
 
+    output "api_auth_psk_value" {
+      description = "The PSK value for API authentication"
+      value       = var.api_auth_psk_value
+    }
+
     output "central_log_distribution_role_arn" {
       description = "ARN of the central log distribution role for cross-account access"
       value       = module.global.central_log_distribution_role_arn
