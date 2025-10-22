@@ -222,6 +222,8 @@ resource "aws_api_gateway_integration_response" "health_options_integration_resp
     "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
+
+  depends_on = [aws_api_gateway_integration.health_options_integration]
 }
 
 resource "aws_api_gateway_method_response" "health_options_response" {
@@ -267,6 +269,8 @@ resource "aws_api_gateway_integration_response" "proxy_options_integration_respo
     "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
+
+  depends_on = [aws_api_gateway_integration.proxy_options_integration]
 }
 
 resource "aws_api_gateway_method_response" "proxy_options_response" {
@@ -311,6 +315,10 @@ resource "aws_api_gateway_deployment" "api_deployment" {
       aws_api_gateway_integration_response.health_options_integration_response.id,
       aws_api_gateway_integration_response.proxy_options_integration_response.id,
     ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   depends_on = [
