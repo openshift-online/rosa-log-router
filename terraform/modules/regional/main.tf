@@ -58,4 +58,5 @@ module "api_stack" {
   api_execution_role_arn          = var.api_execution_role_arn
   api_image                       = var.api_image
   api_gateway_authorizer_role_arn = var.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn = var.api_gateway_cloudwatch_role_arn
 }

@@ -338,11 +338,57 @@ resource "aws_api_gateway_stage" "api_stage" {
   stage_name    = var.environment
   rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
   deployment_id = aws_api_gateway_deployment.api_deployment.id
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway_log_group.arn
+    format = jsonencode({
+      requestTime     = "$context.requestTime"
+      requestId       = "$context.requestId"
+      ip              = "$context.identity.sourceIp"
+      caller          = "$context.identity.caller"
+      user            = "$context.identity.user"
+      userAgent       = "$context.identity.userAgent"
+      httpMethod      = "$context.httpMethod"
+      path            = "$context.path"
+      resourcePath    = "$context.resourcePath"
+      status          = "$context.status"
+      protocol        = "$context.protocol"
+      responseLatency = "$context.responseLatency"
+      responseLength  = "$context.responseLength"
+    })
+  }
+}
+
+
+resource "aws_api_gateway_account" "main" {
+  cloudwatch_role_arn = var.api_gateway_cloudwatch_role_arn
+}
+
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  stage_name  = aws_api_gateway_stage.api_stage.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled    = true
+    logging_level      = "INFO"
+    data_trace_enabled = true
+  }
+}
+
+resource "aws_cloudwatch_log_group" "api_gateway_ecexution_log" {
+  name              = "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.tenant_management_api.id}/${var.environment}"
+  retention_in_days = 14
+  tags              = local.common_tags
 }
 
 # CloudWatch Log Group for API Gateway
 resource "aws_cloudwatch_log_group" "api_gateway_log_group" {
   name              = "/aws/apigateway/${var.project_name}-${var.environment}-tenant-api"
+  retention_in_days = 14
+}
+
+resource "aws_cloudwatch_log_group" "api_gateway_log_welcome" {
+  name              = "/aws/apigateway/welcome"
   retention_in_days = 14
 }
 

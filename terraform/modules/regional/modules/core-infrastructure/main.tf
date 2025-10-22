@@ -167,13 +167,6 @@ resource "aws_s3_bucket_notification" "central_logging_bucket_notification" {
   depends_on = [aws_sns_topic_policy.log_delivery_topic_policy]
 }
 
-# S3 Access Log Group
-resource "aws_cloudwatch_log_group" "s3_access_log_group" {
-  name              = "/aws/s3/${var.project_name}-${var.environment}-access"
-  retention_in_days = 30
-  tags              = local.common_tags
-}
-
 # DynamoDB Table for tenant configurations
 resource "aws_dynamodb_table" "tenant_config_table" {
   name         = "${var.project_name}-${var.environment}-tenant-configs"

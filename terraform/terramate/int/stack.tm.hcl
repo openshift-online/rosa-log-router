@@ -63,6 +63,7 @@ generate_hcl "main.tf" {
         api_execution_role_arn            = module.global.api_execution_role_arn
         api_image                         = var.api_image
         api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+        api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
       }
     }
   }
