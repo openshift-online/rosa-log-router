@@ -42,6 +42,7 @@ module "regional-resource-ap-northeast-2" {
   api_execution_role_arn            = module.global.api_execution_role_arn
   api_image                         = var.api_image
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
 }
 module "regional-resource-ap-southeast-1" {
   source = "../../modules/regional"
@@ -64,6 +65,7 @@ module "regional-resource-ap-southeast-1" {
   api_execution_role_arn            = module.global.api_execution_role_arn
   api_image                         = var.api_image
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
 }
 module "regional-resource-us-east-1" {
   source = "../../modules/regional"
@@ -86,6 +88,7 @@ module "regional-resource-us-east-1" {
   api_execution_role_arn            = module.global.api_execution_role_arn
   api_image                         = var.api_image
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
 }
 module "regional-resource-us-east-2" {
   source = "../../modules/regional"
@@ -108,6 +111,7 @@ module "regional-resource-us-east-2" {
   api_execution_role_arn            = module.global.api_execution_role_arn
   api_image                         = var.api_image
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
 }
 module "regional-resource-us-west-2" {
   source = "../../modules/regional"
@@ -130,4 +134,5 @@ module "regional-resource-us-west-2" {
   api_execution_role_arn            = module.global.api_execution_role_arn
   api_image                         = var.api_image
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
 }

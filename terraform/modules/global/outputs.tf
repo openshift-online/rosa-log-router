@@ -58,6 +58,16 @@ output "api_gateway_authorizer_name" {
   value       = aws_iam_role.api_gateway_authorizer_role.name
 }
 
+output "api_gateway_cloudwatch_role" {
+  description = "ARN of the API Gateway cloudwatch role"
+  value       = aws_iam_role.api_gateway_cloudwatch_role.arn
+}
+
+output "api_gateway_authorizer_name" {
+  description = "Name of the API Gateway cloudwatch role"
+  value       = aws_iam_role.api_gateway_cloudwatch_role.name
+}
+
 output "api_auth_secret_arn" {
   description = "ARN of the Secrets Manager secret containing API authentication PSK"
   value       = aws_secretsmanager_secret.api_auth_psk.arn

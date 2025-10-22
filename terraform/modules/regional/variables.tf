@@ -115,3 +115,12 @@ variable "api_gateway_authorizer_role_arn" {
     error_message = "Must be a valid IAM role ARN for API Gateway."
   }
 }
+
+variable "api_gateway_cloudwatch_role_arn" {
+  description = "ARN of the global API Gateway cloudwatch execution role"
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*api-gateway-cloudwatch-role", var.api_gateway_cloudwatch_role_arn))
+    error_message = "Must be a valid IAM role ARN for API Gateway."
+  }
+}

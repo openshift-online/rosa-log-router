@@ -49,6 +49,11 @@ variable "api_gateway_authorizer_role_arn" {
   type        = string
 }
 
+variable "api_gateway_cloudwatch_role_arn" {
+  description = "ARN of the global API Gateway cloudwatch execution role"
+  type        = string
+}
+
 variable "tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)
