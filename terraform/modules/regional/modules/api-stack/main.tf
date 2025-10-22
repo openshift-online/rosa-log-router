@@ -121,6 +121,18 @@ resource "aws_api_gateway_resource" "health_resource" {
   path_part   = "health"
 }
 
+resource "aws_api_gateway_resource" "docs_resource" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  parent_id   = aws_api_gateway_resource.api_version_resource.id
+  path_part   = "docs"
+}
+
+resource "aws_api_gateway_resource" "redoc_resource" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  parent_id   = aws_api_gateway_resource.api_version_resource.id
+  path_part   = "redoc"
+}
+
 resource "aws_api_gateway_resource" "proxy_resource" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   parent_id   = aws_api_gateway_resource.api_version_resource.id
@@ -135,6 +147,22 @@ resource "aws_api_gateway_method" "health_method" {
   authorization = "NONE"
 }
 
+# Docs method (no authorization)
+resource "aws_api_gateway_method" "docs_method" {
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id   = aws_api_gateway_resource.docs_resource.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+# Redoc method (no authorization)
+resource "aws_api_gateway_method" "redoc_method" {
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id   = aws_api_gateway_resource.redoc_resource.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
 resource "aws_api_gateway_integration" "health_integration" {
   rest_api_id             = aws_api_gateway_rest_api.tenant_management_api.id
   resource_id             = aws_api_gateway_resource.health_resource.id
@@ -144,10 +172,58 @@ resource "aws_api_gateway_integration" "health_integration" {
   uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
 }
 
+resource "aws_api_gateway_integration" "docs_integration" {
+  rest_api_id             = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id             = aws_api_gateway_resource.docs_resource.id
+  http_method             = aws_api_gateway_method.docs_method.http_method
+  type                    = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+}
+
+resource "aws_api_gateway_integration" "redoc_integration" {
+  rest_api_id             = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id             = aws_api_gateway_resource.redoc_resource.id
+  http_method             = aws_api_gateway_method.redoc_method.http_method
+  type                    = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+}
+
 resource "aws_api_gateway_method_response" "health_response" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_method.http_method
+  status_code = "200"
+
+  response_models = {
+    "application/json" = "Empty"
+  }
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "docs_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.docs_resource.id
+  http_method = aws_api_gateway_method.docs_method.http_method
+  status_code = "200"
+
+  response_models = {
+    "application/json" = "Empty"
+  }
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "redoc_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.redoc_resource.id
+  http_method = aws_api_gateway_method.redoc_method.http_method
   status_code = "200"
 
   response_models = {
@@ -200,10 +276,48 @@ resource "aws_api_gateway_method" "health_options_method" {
   authorization = "NONE"
 }
 
+# CORS Options method for docs endpoint
+resource "aws_api_gateway_method" "docs_options_method" {
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id   = aws_api_gateway_resource.docs_resource.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# CORS Options method for redoc endpoint
+resource "aws_api_gateway_method" "redoc_options_method" {
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id   = aws_api_gateway_resource.redoc_resource.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
 resource "aws_api_gateway_integration" "health_options_integration" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_options_method.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_integration" "docs_options_integration" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.docs_resource.id
+  http_method = aws_api_gateway_method.docs_options_method.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_integration" "redoc_options_integration" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.redoc_resource.id
+  http_method = aws_api_gateway_method.redoc_options_method.http_method
   type        = "MOCK"
 
   request_templates = {
@@ -226,10 +340,66 @@ resource "aws_api_gateway_integration_response" "health_options_integration_resp
   depends_on = [aws_api_gateway_integration.health_options_integration]
 }
 
+resource "aws_api_gateway_integration_response" "docs_options_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.docs_resource.id
+  http_method = aws_api_gateway_method.docs_options_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-API-Timestamp'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+
+  depends_on = [aws_api_gateway_integration.docs_options_integration]
+}
+
+resource "aws_api_gateway_integration_response" "redoc_options_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.redoc_resource.id
+  http_method = aws_api_gateway_method.redoc_options_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-API-Timestamp'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+
+  depends_on = [aws_api_gateway_integration.redoc_options_integration]
+}
+
 resource "aws_api_gateway_method_response" "health_options_response" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_options_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "docs_options_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.docs_resource.id
+  http_method = aws_api_gateway_method.docs_options_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "redoc_options_response" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  resource_id = aws_api_gateway_resource.redoc_resource.id
+  http_method = aws_api_gateway_method.redoc_options_method.http_method
   status_code = "200"
 
   response_parameters = {
@@ -299,20 +469,36 @@ resource "aws_api_gateway_deployment" "api_deployment" {
       aws_api_gateway_resource.api_resource.id,
       aws_api_gateway_resource.api_version_resource.id,
       aws_api_gateway_resource.health_resource.id,
+      aws_api_gateway_resource.docs_resource.id,
+      aws_api_gateway_resource.redoc_resource.id,
       aws_api_gateway_resource.proxy_resource.id,
       aws_api_gateway_method.health_method.id,
+      aws_api_gateway_method.docs_method.id,
+      aws_api_gateway_method.redoc_method.id,
       aws_api_gateway_method.proxy_method.id,
       aws_api_gateway_method.health_options_method.id,
+      aws_api_gateway_method.docs_options_method.id,
+      aws_api_gateway_method.redoc_options_method.id,
       aws_api_gateway_method.proxy_options_method.id,
       aws_api_gateway_integration.health_integration.id,
+      aws_api_gateway_integration.docs_integration.id,
+      aws_api_gateway_integration.redoc_integration.id,
       aws_api_gateway_integration.proxy_integration.id,
       aws_api_gateway_integration.health_options_integration.id,
+      aws_api_gateway_integration.docs_options_integration.id,
+      aws_api_gateway_integration.redoc_options_integration.id,
       aws_api_gateway_integration.proxy_options_integration.id,
       aws_api_gateway_method_response.health_response.id,
+      aws_api_gateway_method_response.docs_response.id,
+      aws_api_gateway_method_response.redoc_response.id,
       aws_api_gateway_method_response.proxy_response.id,
       aws_api_gateway_method_response.health_options_response.id,
+      aws_api_gateway_method_response.docs_options_response.id,
+      aws_api_gateway_method_response.redoc_options_response.id,
       aws_api_gateway_method_response.proxy_options_response.id,
       aws_api_gateway_integration_response.health_options_integration_response.id,
+      aws_api_gateway_integration_response.docs_options_integration_response.id,
+      aws_api_gateway_integration_response.redoc_options_integration_response.id,
       aws_api_gateway_integration_response.proxy_options_integration_response.id,
     ]))
   }
@@ -323,12 +509,20 @@ resource "aws_api_gateway_deployment" "api_deployment" {
 
   depends_on = [
     aws_api_gateway_method.health_method,
+    aws_api_gateway_method.docs_method,
+    aws_api_gateway_method.redoc_method,
     aws_api_gateway_method.proxy_method,
     aws_api_gateway_method.health_options_method,
+    aws_api_gateway_method.docs_options_method,
+    aws_api_gateway_method.redoc_options_method,
     aws_api_gateway_method.proxy_options_method,
     aws_api_gateway_integration.health_integration,
+    aws_api_gateway_integration.docs_integration,
+    aws_api_gateway_integration.redoc_integration,
     aws_api_gateway_integration.proxy_integration,
     aws_api_gateway_integration.health_options_integration,
+    aws_api_gateway_integration.docs_options_integration,
+    aws_api_gateway_integration.redoc_options_integration,
     aws_api_gateway_integration.proxy_options_integration
   ]
 }
