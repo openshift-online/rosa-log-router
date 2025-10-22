@@ -115,6 +115,12 @@ resource "aws_api_gateway_resource" "api_version_resource" {
   path_part   = "v1"
 }
 
+resource "aws_api_gateway_resource" "health_resource" {
+  rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
+  parent_id   = aws_api_gateway_resource.api_version_resource.id
+  path_part   = "health"
+}
+
 resource "aws_api_gateway_resource" "proxy_resource" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   parent_id   = aws_api_gateway_resource.api_version_resource.id
@@ -124,14 +130,14 @@ resource "aws_api_gateway_resource" "proxy_resource" {
 # Health check method (no authorization)
 resource "aws_api_gateway_method" "health_method" {
   rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id   = aws_api_gateway_resource.api_version_resource.id
+  resource_id   = aws_api_gateway_resource.health_resource.id
   http_method   = "GET"
   authorization = "NONE"
 }
 
 resource "aws_api_gateway_integration" "health_integration" {
   rest_api_id             = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id             = aws_api_gateway_resource.api_version_resource.id
+  resource_id             = aws_api_gateway_resource.health_resource.id
   http_method             = aws_api_gateway_method.health_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
@@ -140,7 +146,7 @@ resource "aws_api_gateway_integration" "health_integration" {
 
 resource "aws_api_gateway_method_response" "health_response" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id = aws_api_gateway_resource.api_version_resource.id
+  resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_method.http_method
   status_code = "200"
 
@@ -189,14 +195,14 @@ resource "aws_api_gateway_method_response" "proxy_response" {
 # CORS Options method for health endpoint
 resource "aws_api_gateway_method" "health_options_method" {
   rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id   = aws_api_gateway_resource.api_version_resource.id
+  resource_id   = aws_api_gateway_resource.health_resource.id
   http_method   = "OPTIONS"
   authorization = "NONE"
 }
 
 resource "aws_api_gateway_integration" "health_options_integration" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id = aws_api_gateway_resource.api_version_resource.id
+  resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_options_method.http_method
   type        = "MOCK"
 
@@ -207,7 +213,7 @@ resource "aws_api_gateway_integration" "health_options_integration" {
 
 resource "aws_api_gateway_integration_response" "health_options_integration_response" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id = aws_api_gateway_resource.api_version_resource.id
+  resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_options_method.http_method
   status_code = "200"
 
@@ -220,7 +226,7 @@ resource "aws_api_gateway_integration_response" "health_options_integration_resp
 
 resource "aws_api_gateway_method_response" "health_options_response" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
-  resource_id = aws_api_gateway_resource.api_version_resource.id
+  resource_id = aws_api_gateway_resource.health_resource.id
   http_method = aws_api_gateway_method.health_options_method.http_method
   status_code = "200"
 
