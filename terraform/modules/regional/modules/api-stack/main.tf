@@ -287,6 +287,32 @@ resource "aws_api_gateway_deployment" "api_deployment" {
   rest_api_id = aws_api_gateway_rest_api.tenant_management_api.id
   description = "${var.environment} stage for tenant management API"
 
+  # Force redeployment when any API Gateway resources change
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_rest_api.tenant_management_api.id,
+      aws_api_gateway_authorizer.api_authorizer.id,
+      aws_api_gateway_resource.api_resource.id,
+      aws_api_gateway_resource.api_version_resource.id,
+      aws_api_gateway_resource.health_resource.id,
+      aws_api_gateway_resource.proxy_resource.id,
+      aws_api_gateway_method.health_method.id,
+      aws_api_gateway_method.proxy_method.id,
+      aws_api_gateway_method.health_options_method.id,
+      aws_api_gateway_method.proxy_options_method.id,
+      aws_api_gateway_integration.health_integration.id,
+      aws_api_gateway_integration.proxy_integration.id,
+      aws_api_gateway_integration.health_options_integration.id,
+      aws_api_gateway_integration.proxy_options_integration.id,
+      aws_api_gateway_method_response.health_response.id,
+      aws_api_gateway_method_response.proxy_response.id,
+      aws_api_gateway_method_response.health_options_response.id,
+      aws_api_gateway_method_response.proxy_options_response.id,
+      aws_api_gateway_integration_response.health_options_integration_response.id,
+      aws_api_gateway_integration_response.proxy_options_integration_response.id,
+    ]))
+  }
+
   depends_on = [
     aws_api_gateway_method.health_method,
     aws_api_gateway_method.proxy_method,
