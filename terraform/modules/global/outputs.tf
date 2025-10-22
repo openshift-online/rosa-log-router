@@ -63,7 +63,7 @@ output "api_gateway_cloudwatch_role" {
   value       = aws_iam_role.api_gateway_cloudwatch_role.arn
 }
 
-output "api_gateway_authorizer_name" {
+output "api_gateway_cloudwatch_name" {
   description = "Name of the API Gateway cloudwatch role"
   value       = aws_iam_role.api_gateway_cloudwatch_role.name
 }
