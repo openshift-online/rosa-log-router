@@ -356,6 +356,8 @@ resource "aws_api_gateway_stage" "api_stage" {
       responseLength  = "$context.responseLength"
     })
   }
+
+  depends_on = [aws_api_gateway_account.main]
 }
 
 
