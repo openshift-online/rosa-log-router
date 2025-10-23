@@ -23,12 +23,15 @@ from src.models.tenant import (
 logger = setup_logging()
 
 # Create FastAPI app
+ROOT_PATH = os.environ.get('ROOT_PATH', '')
+
 app = FastAPI(
     title="Multi-Tenant Logging Configuration API",
     description="REST API for managing multi-tenant logging delivery configurations (CloudWatch and S3)",
     version="2.0.0",
     docs_url="/api/v1/docs",
-    redoc_url="/api/v1/redoc"
+    redoc_url="/api/v1/redoc",
+    root_path=ROOT_PATH
 )
 
 # CORS middleware removed - API does not require browser access

@@ -48,6 +48,7 @@ resource "aws_lambda_function" "api_function" {
     variables = {
       TENANT_CONFIG_TABLE = var.tenant_config_table_name
       LOG_LEVEL           = "INFO"
+      ROOT_PATH           = "/${var.environment}"
     }
   }
 
