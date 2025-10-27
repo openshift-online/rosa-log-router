@@ -20,7 +20,7 @@ spec:
       serviceAccountName: vector-logs
       containers:
       - name: vector
-        image: public.ecr.aws/d1w4s4o1/rosa-logrouter/collector:main
+        image: quay.io/openshift-logging/vector:v0.47.0
         command: ["vector"]
         env:
         - name: VECTOR_CONFIG_YAML
