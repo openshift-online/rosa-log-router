@@ -1,6 +1,6 @@
 # Makefile for local development with LocalStack
 
-.PHONY: help start stop logs build deploy test clean validate-vector-flow
+.PHONY: help start stop logs build build-go build-zip init plan deploy deploy-go outputs destroy test-e2e-go test-e2e-go-quick validate-vector-flow clean reset run-go-scan
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -73,209 +73,15 @@ destroy: ## Destroy Terraform infrastructure
 	@echo "Destroying infrastructure..."
 	cd terraform/local && terraform destroy -auto-approve
 
-test-upload-customer-1: ## Upload a test log file for Customer 1 (ACME Corp)
-	@echo "Creating test log file for Customer 1 (ACME Corp)..."
-	@TIMESTAMP=$$(date +%s); \
-	echo '{"timestamp":"'$$(date -Iseconds)'","message":"Test from Makefile","level":"INFO","service":"payment-service","customer":"acme-corp"}' | gzip > /tmp/test-acme-$$TIMESTAMP.json.gz; \
-	echo "Uploading to central bucket..."; \
-	SOURCE_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
-	aws --endpoint-url=http://localhost:4566 s3 cp /tmp/test-acme-$$TIMESTAMP.json.gz \
-		s3://$$SOURCE_BUCKET/test-cluster/acme-corp/payment-service/pod-123/test-$$TIMESTAMP.json.gz; \
-	rm -f /tmp/test-acme-$$TIMESTAMP.json.gz
-	@echo "✅ Log uploaded for Customer 1 (should trigger S3 → SNS → SQS → Lambda)"
-
-test-upload-customer-2: ## Upload a test log file for Customer 2 (Globex Industries)
-	@echo "Creating test log file for Customer 2 (Globex Industries)..."
-	@TIMESTAMP=$$(date +%s); \
-	echo '{"timestamp":"'$$(date -Iseconds)'","message":"Test from Makefile","level":"INFO","service":"platform-api","customer":"globex-industries"}' | gzip > /tmp/test-globex-$$TIMESTAMP.json.gz; \
-	echo "Uploading to central bucket..."; \
-	SOURCE_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
-	aws --endpoint-url=http://localhost:4566 s3 cp /tmp/test-globex-$$TIMESTAMP.json.gz \
-		s3://$$SOURCE_BUCKET/test-cluster/globex-industries/platform-api/pod-456/test-$$TIMESTAMP.json.gz; \
-	rm -f /tmp/test-globex-$$TIMESTAMP.json.gz
-	@echo "✅ Log uploaded for Customer 2 (should trigger S3 → SNS → SQS → Lambda)"
-
-test-upload: test-upload-customer-1 test-upload-customer-2 ## Upload test logs for both customers
-
-test-logs: ## Show Lambda logs
-	@echo "Lambda logs (last 5 minutes):"
-	@LAMBDA=$$(cd terraform/local && terraform output -raw central_lambda_function 2>/dev/null); \
-	aws --endpoint-url=http://localhost:4566 logs tail \
-		/aws/lambda/$$LAMBDA --since 5m || echo "No logs yet"
-
-test-check-central: ## Check resources in central account
-	@echo "Central Account (111111111111) Resources:"
-	@echo ""
-	@echo "S3 Buckets:"
-	@AWS_ACCESS_KEY_ID=111111111111 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 s3 ls
-	@echo ""
-	@echo "DynamoDB Tables:"
-	@AWS_ACCESS_KEY_ID=111111111111 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 dynamodb list-tables
-	@echo ""
-	@echo "Tenant Configs:"
-	@TABLE=$$(cd terraform/local && terraform output -raw central_dynamodb_table 2>/dev/null); \
-	AWS_ACCESS_KEY_ID=111111111111 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		dynamodb scan --table-name $$TABLE --output table
-
-test-check-customer1: ## Check Customer 1 (ACME Corp) resources
-	@echo "Customer 1 - ACME Corp (222222222222) Resources:"
-	@echo ""
-	@echo "S3 Buckets:"
-	@AWS_ACCESS_KEY_ID=222222222222 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 s3 ls
-	@echo ""
-	@BUCKET=$$(cd terraform/local && terraform output -raw customer1_bucket 2>/dev/null); \
-	echo "Logs in bucket:"; \
-	AWS_ACCESS_KEY_ID=222222222222 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		s3 ls s3://$$BUCKET/logs/ --recursive || echo "(empty)"
-
-test-check-customer2: ## Check Customer 2 (Globex) resources
-	@echo "Customer 2 - Globex Industries (333333333333) Resources:"
-	@echo ""
-	@echo "S3 Buckets:"
-	@AWS_ACCESS_KEY_ID=333333333333 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 s3 ls
-	@echo ""
-	@BUCKET=$$(cd terraform/local && terraform output -raw customer2_bucket 2>/dev/null); \
-	echo "Logs in bucket:"; \
-	AWS_ACCESS_KEY_ID=333333333333 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		s3 ls s3://$$BUCKET/platform-logs/ --recursive || echo "(empty)"
-
-test-assume-role: ## Test cross-account AssumeRole
-	@echo "Testing AssumeRole from central account to customer account..."
-	@ROLE_ARN=$$(cd terraform/local && terraform output -raw customer1_role_arn 2>/dev/null); \
-	CENTRAL_ID=$$(cd terraform/local && terraform output -raw central_account_id 2>/dev/null); \
-	echo "Assuming role: $$ROLE_ARN"; \
-	AWS_ACCESS_KEY_ID=$$CENTRAL_ID AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		sts assume-role \
-		--role-arn $$ROLE_ARN \
-		--role-session-name test-session \
-		--external-id $$CENTRAL_ID
-
-test-customer-1: test-upload-customer-1 ## Upload and check Customer 1 (ACME Corp)
-	@echo ""
-	@echo "Waiting 5 seconds for processing..."
-	@sleep 5
-	@echo ""
-	@make test-check-customer1
-
-test-customer-2: test-upload-customer-2 ## Upload and check Customer 2 (Globex)
-	@echo ""
-	@echo "Waiting 5 seconds for processing..."
-	@sleep 5
-	@echo ""
-	@make test-check-customer2
-
-test-all: test-upload ## Run full test workflow for both customers
-	@echo ""
-	@echo "Waiting 10 seconds for processing..."
-	@sleep 10
-	@echo ""
-	@make test-logs
-	@echo ""
-	@make test-check-customer1
-	@echo ""
-	@make test-check-customer2
-
-test-e2e-s3: ## End-to-end test for S3 delivery (ACME Corp)
-	@echo "🧪 Running end-to-end test for S3 delivery (ACME Corp)..."
-	@echo ""
-	@# Generate unique test ID
-	@TEST_ID=$$(uuidgen); \
-	TIMESTAMP=$$(date +%s); \
-	echo "Test ID: $$TEST_ID"; \
-	echo ""; \
-	echo "📝 Creating structured log with unique trace ID..."; \
-	python3 test_container/generate_e2e_s3_log.py "$$TEST_ID" | gzip > /tmp/test-e2e-$$TIMESTAMP.json.gz; \
-	echo ""; \
-	echo "⬆️  Uploading to central bucket..."; \
-	SOURCE_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
-	aws --endpoint-url=http://localhost:4566 s3 cp /tmp/test-e2e-$$TIMESTAMP.json.gz \
-		s3://$$SOURCE_BUCKET/test-cluster/acme-corp/payment-service/pod-e2e/test-e2e-$$TIMESTAMP.json.gz; \
-	rm -f /tmp/test-e2e-$$TIMESTAMP.json.gz; \
-	echo ""; \
-	echo "⏳ Waiting 15 seconds for processing (scan interval is 10s)..."; \
-	sleep 15; \
-	echo ""; \
-	echo "🔍 Verifying S3 delivery..."; \
-	CUSTOMER_BUCKET=$$(cd terraform/local && terraform output -raw customer1_bucket 2>/dev/null); \
-	DELIVERED_FILE=$$(AWS_ACCESS_KEY_ID=222222222222 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		s3 ls s3://$$CUSTOMER_BUCKET/logs/acme-corp/payment-service/pod-e2e/ --recursive | grep test-e2e | tail -1 | awk '{print $$4}'); \
-	if [ -z "$$DELIVERED_FILE" ]; then \
-		echo "❌ FAILED: No file delivered to S3"; \
-		exit 1; \
-	fi; \
-	echo "Found delivered file: $$DELIVERED_FILE"; \
-	echo "Downloading and checking content..."; \
-	AWS_ACCESS_KEY_ID=222222222222 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		s3 cp s3://$$CUSTOMER_BUCKET/$$DELIVERED_FILE /tmp/delivered-$$TIMESTAMP.json.gz; \
-	zcat /tmp/delivered-$$TIMESTAMP.json.gz | grep -q "$$TEST_ID"; \
-	if [ $$? -eq 0 ]; then \
-		echo "✅ S3 delivery verified - UUID found in delivered file"; \
-	else \
-		echo "❌ FAILED: UUID not found in S3 file"; \
-		rm -f /tmp/delivered-$$TIMESTAMP.json.gz; \
-		exit 1; \
-	fi; \
-	rm -f /tmp/delivered-$$TIMESTAMP.json.gz; \
-	echo ""; \
-	echo "✅ End-to-end test completed successfully!"
-
-test-e2e-cw: ## End-to-end test for CloudWatch delivery (Globex Industries)
-	@echo "🧪 Running end-to-end test for CloudWatch delivery (Globex Industries)..."
-	@echo ""
-	@# Generate unique test ID
-	@TEST_ID=$$(uuidgen); \
-	TIMESTAMP=$$(date +%s); \
-	echo "Test ID: $$TEST_ID"; \
-	echo ""; \
-	echo "📝 Creating structured log with unique trace ID..."; \
-	python3 test_container/generate_e2e_log.py "$$TEST_ID" | gzip > /tmp/test-e2e-cw-$$TIMESTAMP.json.gz; \
-	echo ""; \
-	echo "⬆️  Uploading to central bucket..."; \
-	SOURCE_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
-	aws --endpoint-url=http://localhost:4566 s3 cp /tmp/test-e2e-cw-$$TIMESTAMP.json.gz \
-		s3://$$SOURCE_BUCKET/test-cluster/globex-industries/platform-api/pod-e2e-cw/test-e2e-cw-$$TIMESTAMP.json.gz; \
-	rm -f /tmp/test-e2e-cw-$$TIMESTAMP.json.gz; \
-	echo ""; \
-	echo "⏳ Waiting 15 seconds for processing (scan interval is 10s)..."; \
-	sleep 15; \
-	echo ""; \
-	echo "🔍 Verifying CloudWatch Logs delivery..."; \
-	LOG_GROUP=$$(cd terraform/local && terraform output -raw customer2_log_group 2>/dev/null); \
-	echo "Querying log group: $$LOG_GROUP"; \
-	echo "Looking for log stream: pod-e2e-cw"; \
-	CW_EVENTS=$$(AWS_ACCESS_KEY_ID=333333333333 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-		logs get-log-events \
-		--log-group-name "$$LOG_GROUP" \
-		--log-stream-name "pod-e2e-cw" \
-		--limit 10 \
-		--output json 2>/dev/null || echo '{"events":[]}'); \
-	echo "CloudWatch events:"; \
-	echo "$$CW_EVENTS" | jq -r '.events[].message' 2>/dev/null || echo "No events or jq not available"; \
-	if echo "$$CW_EVENTS" | grep -q "$$TEST_ID"; then \
-		echo ""; \
-		echo "✅ CloudWatch delivery verified - UUID found in logs"; \
-		echo "✅ End-to-end CloudWatch test completed successfully!"; \
-	else \
-		echo ""; \
-		echo "❌ FAILED: UUID not found in CloudWatch logs"; \
-		echo ""; \
-		echo "Available log streams:"; \
-		AWS_ACCESS_KEY_ID=333333333333 AWS_SECRET_ACCESS_KEY=test aws --endpoint-url=http://localhost:4566 \
-			logs describe-log-streams --log-group-name "$$LOG_GROUP" --order-by LastEventTime --descending --max-items 5 2>/dev/null || echo "Could not list log streams"; \
-		exit 1; \
-	fi
-
-test-e2e: test-e2e-s3 test-e2e-cw ## Run end-to-end tests for both delivery types
-	@echo ""
-	@echo "🎉 All end-to-end tests passed!"
-
-test-e2e-go: ## Run Go integration tests (requires Go container running)
+test-e2e-go: ## Run Go integration tests (with prerequisite check)
 	@echo "🧪 Running Go integration tests..."
 	@echo ""
 	@echo "Prerequisites:"
 	@echo "  1. LocalStack running (make start)"
-	@echo "  2. Infrastructure deployed (make deploy-go)"
-	@echo "  3. Go container running in scan mode (make run-go-scan)"
+	@echo "  2. Infrastructure deployed:"
+	@echo "     - For Python Lambda: make deploy"
+	@echo "     - For Go rewrite (scan mode): make deploy-go + make run-go-scan"
+	@echo "        Note: Go container mode requires LocalStack Pro (Lambda containers)"
 	@echo ""
 	@read -p "Press Enter to continue if prerequisites are met (Ctrl+C to cancel)..."
 	@echo ""
