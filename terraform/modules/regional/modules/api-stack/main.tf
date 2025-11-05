@@ -88,6 +88,23 @@ resource "aws_api_gateway_authorizer" "api_authorizer" {
   identity_source                  = "method.request.header.Authorization,method.request.header.X-API-Timestamp"
 }
 
+# Custom Gateway Response for Access Denied
+resource "aws_api_gateway_gateway_response" "access_denied" {
+  rest_api_id   = aws_api_gateway_rest_api.tenant_management_api.id
+  response_type = "ACCESS_DENIED"
+  status_code   = "403"
+
+  response_templates = {
+    "application/json" = jsonencode({
+      message = "Authentication failed"
+    })
+  }
+
+  response_parameters = {
+    "gatewayresponse.header.Content-Type" = "'application/json'"
+  }
+}
+
 # Lambda permissions for API Gateway
 resource "aws_lambda_permission" "authorizer_invoke_permission" {
   function_name = aws_lambda_function.authorizer_function.arn
@@ -552,6 +569,7 @@ resource "aws_api_gateway_deployment" "api_deployment" {
     redeployment = sha1(jsonencode([
       aws_api_gateway_rest_api.tenant_management_api.id,
       aws_api_gateway_authorizer.api_authorizer.id,
+      aws_api_gateway_gateway_response.access_denied.id,
       aws_api_gateway_resource.api_resource.id,
       aws_api_gateway_resource.api_version_resource.id,
       aws_api_gateway_resource.health_resource.id,
