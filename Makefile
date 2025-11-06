@@ -22,9 +22,9 @@ start: ## Start LocalStack
 	@echo "Starting LocalStack..."
 	docker compose up -d
 	@echo "Waiting for LocalStack to be ready..."
-	@sleep 10
+	@timeout 120 bash -c 'until curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; do echo "  Waiting for LocalStack health check..."; sleep 5; done' || { echo "❌ LocalStack failed to become healthy"; docker compose logs localstack | tail -50; exit 1; }
+	@echo "✅ LocalStack is healthy and ready"
 	@docker compose logs localstack | tail -20
-	@echo "✅ LocalStack is running at http://localhost:4566"
 
 stop: ## Stop LocalStack
 	@echo "Stopping LocalStack..."
