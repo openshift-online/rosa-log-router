@@ -17,9 +17,19 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Detect if docker is really Docker or Podman
+# Podman changes its --version output based on how it's called, so check docker info instead
+IS_PODMAN=false
+if docker info 2>&1 | grep -qi podman; then
+  IS_PODMAN=true
+  echo -e "${BLUE}Detected Podman (via docker alias/symlink)${NC}"
+else
+  echo -e "${BLUE}Detected Docker${NC}"
+fi
+
 # Verify local image exists
 echo -e "${BLUE}Checking for local image log-processor:${TAG}...${NC}"
-if ! podman image exists log-processor:${TAG}; then
+if ! docker image inspect log-processor:${TAG} &> /dev/null; then
   echo "Error: Image log-processor:${TAG} not found locally."
   echo "Build it first with: make build-lambda-image"
   exit 1
@@ -53,15 +63,20 @@ echo -e "${GREEN}✓ Repository URL: ${REPO_URI}${NC}"
 
 # Tag the image for ECR
 echo -e "${BLUE}Tagging image for ECR...${NC}"
-podman tag log-processor:${TAG} ${REPO_URI}:${TAG}
+docker tag log-processor:${TAG} ${REPO_URI}:${TAG}
 
 # LocalStack doesn't require authentication for ECR in local mode
 echo -e "${BLUE}Pushing image to LocalStack ECR...${NC}"
-# Push with Docker manifest format (LocalStack ECR has issues with OCI format)
-podman push ${REPO_URI}:${TAG} \
-  --format docker \
-  --tls-verify=false \
-  --remove-signatures
+if [ "$IS_PODMAN" = true ]; then
+  # Podman-specific flags for LocalStack compatibility
+  docker push ${REPO_URI}:${TAG} \
+    --format docker \
+    --tls-verify=false \
+    --remove-signatures
+else
+  # Standard Docker push
+  docker push ${REPO_URI}:${TAG}
+fi
 
 echo -e "${GREEN}✓ Image pushed successfully${NC}"
 echo ""
