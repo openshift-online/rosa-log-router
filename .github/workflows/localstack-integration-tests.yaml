@@ -55,14 +55,15 @@ jobs:
     - name: Start LocalStack
       env:
         DOCKER_SOCK: /var/run/docker.sock
+        LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
       run: |
         make start
         echo "✅ LocalStack started"
 
     - name: Deploy infrastructure to LocalStack
       run: |
-        make deploy
-        echo "✅ Infrastructure deployed"
+        make deploy-container
+        echo "✅ Infrastructure deployed (container mode)"
 
     - name: Get LocalStack bucket name
       id: localstack-config
@@ -169,8 +170,8 @@ jobs:
 
     - name: Run Go integration tests (e2e)
       run: |
-        echo "🧪 Running Go integration tests..."
-        make test-e2e-go-quick
+        echo "🧪 Running Go integration tests with Lambda warmup..."
+        make test-e2e-go-with-warmup
         echo "✅ Go integration tests passed"
 
     - name: Show test summary

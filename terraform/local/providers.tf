@@ -52,6 +52,7 @@ provider "aws" {
     cloudwatch = local.localstack_endpoint
     logs       = local.localstack_endpoint
     kms        = local.localstack_endpoint
+    ecr        = local.localstack_endpoint
   }
 }
 
@@ -85,6 +86,7 @@ provider "aws" {
     cloudwatch = local.localstack_endpoint
     logs       = local.localstack_endpoint
     kms        = local.localstack_endpoint
+    ecr        = local.localstack_endpoint
   }
 }
 
@@ -118,6 +120,7 @@ provider "aws" {
     cloudwatch = local.localstack_endpoint
     logs       = local.localstack_endpoint
     kms        = local.localstack_endpoint
+    ecr        = local.localstack_endpoint
   }
 }
 
@@ -147,5 +150,6 @@ provider "aws" {
     cloudwatch = local.localstack_endpoint
     logs       = local.localstack_endpoint
     kms        = local.localstack_endpoint
+    ecr        = local.localstack_endpoint
   }
 }
