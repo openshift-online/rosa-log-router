@@ -1,6 +1,12 @@
 # Makefile for local development with LocalStack
 
-.PHONY: help start stop logs build build-go build-zip init plan deploy deploy-go outputs destroy test-e2e-go test-e2e-go-quick validate-vector-flow clean reset run-go-scan
+# Configuration
+# Set to 'true' to use container image instead of zip (requires LocalStack Pro)
+USE_CONTAINER ?= false
+# Tag for Lambda container image
+LAMBDA_IMAGE_TAG ?= latest
+
+.PHONY: help start stop logs build build-go build-zip build-lambda-image push-lambda-image init plan deploy deploy-go deploy-container outputs destroy test-e2e-go test-e2e-go-quick warmup-lambda test-e2e-go-with-warmup validate-vector-flow clean reset run-go-scan
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -16,9 +22,9 @@ start: ## Start LocalStack
 	@echo "Starting LocalStack..."
 	docker compose up -d
 	@echo "Waiting for LocalStack to be ready..."
-	@sleep 10
+	@timeout 120 bash -c 'until curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; do echo "  Waiting for LocalStack health check..."; sleep 5; done' || { echo "❌ LocalStack failed to become healthy"; docker compose logs localstack | tail -50; exit 1; }
+	@echo "✅ LocalStack is healthy and ready"
 	@docker compose logs localstack | tail -20
-	@echo "✅ LocalStack is running at http://localhost:4566"
 
 stop: ## Stop LocalStack
 	@echo "Stopping LocalStack..."
@@ -42,6 +48,15 @@ build-zip: ## Build Python Lambda zip file for local testing
 	@bash terraform/modules/regional/modules/lambda-stack/build_zip.sh terraform/local/log-processor.zip
 	@echo "✅ Lambda zip built: terraform/local/log-processor.zip"
 
+build-lambda-image: ## Build Lambda container image locally (doesn't push)
+	@echo "Building Lambda container image..."
+	cd container && docker build -f Containerfile.processor -t log-processor:$(LAMBDA_IMAGE_TAG) .
+	@echo "✅ Container image built: log-processor:$(LAMBDA_IMAGE_TAG)"
+
+push-lambda-image: ## Push Lambda container to LocalStack ECR (run after terraform apply)
+	@echo "Pushing Lambda container to LocalStack ECR..."
+	@bash scripts/build-and-push-lambda.sh $(LAMBDA_IMAGE_TAG)
+
 init: ## Initialize Terraform
 	@echo "Initializing Terraform..."
 	cd terraform/local && terraform init
@@ -50,13 +65,29 @@ plan: init ## Plan Terraform deployment
 	@echo "Planning Terraform deployment..."
 	cd terraform/local && terraform plan
 
-deploy: build-zip init ## Deploy full infrastructure with Lambda (Python)
-	@echo "Deploying to LocalStack with Lambda..."
+deploy: init ## Deploy full infrastructure with Lambda (Python zip or container)
+ifeq ($(USE_CONTAINER),true)
+	@echo "Deploying to LocalStack with Lambda (container image)..."
+	@echo "Step 1: Building container image..."
+	@$(MAKE) build-lambda-image
+	@echo "Step 2: Creating ECR repository..."
+	cd terraform/local && terraform apply -auto-approve -target=aws_ecr_repository.lambda_processor
+	@echo "Step 3: Pushing container image to ECR..."
+	@$(MAKE) push-lambda-image
+	@echo "Step 4: Deploying full infrastructure..."
+	cd terraform/local && terraform apply -auto-approve -var="use_container_image=true" -var="lambda_image_tag=$(LAMBDA_IMAGE_TAG)"
+else
+	@echo "Deploying to LocalStack with Lambda (zip)..."
+	@$(MAKE) build-zip
 	cd terraform/local && terraform apply -auto-approve
+endif
 	@echo ""
 	@echo "✅ Infrastructure deployed with Lambda!"
 	@echo ""
 	@cd terraform/local && terraform output test_commands
+
+deploy-container: ## Deploy with container image (shortcut for USE_CONTAINER=true)
+	@$(MAKE) deploy USE_CONTAINER=true
 
 deploy-go: build-go init ## Deploy infrastructure without Lambda (for Go scan mode)
 	@echo "Deploying to LocalStack without Lambda (for Go scan mode)..."
@@ -90,6 +121,19 @@ test-e2e-go: ## Run Go integration tests (with prerequisite check)
 test-e2e-go-quick: ## Run Go integration tests without prerequisite check
 	@echo "🧪 Running Go integration tests..."
 	cd container && go test -count=1 -tags=integration ./integration -v -timeout 5m
+
+warmup-lambda: ## Warm up Lambda container (addresses LocalStack+Podman cold start issue)
+	@echo "🔥 Warming up Lambda container..."
+	@bash scripts/warmup-lambda.sh
+
+test-e2e-go-with-warmup: ## Run Go integration tests with Lambda warmup
+	@echo "🧪 Running Go integration tests with Lambda warmup..."
+	@echo ""
+	@$(MAKE) warmup-lambda
+	@echo ""
+	@echo "✅ Lambda warmed up, running full test suite..."
+	@echo ""
+	@$(MAKE) test-e2e-go-quick
 
 validate-vector-flow: ## Validate Vector is routing logs to customer buckets correctly
 	@bash scripts/validate-vector-flow.sh

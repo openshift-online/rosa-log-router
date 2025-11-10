@@ -16,6 +16,18 @@ locals {
 # CENTRAL ACCOUNT - Uses existing modules!
 ##############################################################################
 
+# ECR repository for Lambda container images
+resource "aws_ecr_repository" "lambda_processor" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-log-processor"
+
+  image_scanning_configuration {
+    scan_on_push = false  # Disable for LocalStack
+  }
+
+  tags = local.common_tags
+}
+
 # Central account role for cross-account access (create this first, needed by core-infrastructure)
 resource "aws_iam_role" "central_log_distribution_role" {
   provider = aws.central
@@ -182,8 +194,8 @@ resource "aws_iam_role_policy" "central_lambda_log_processor_policy" {
   })
 }
 
-# Lambda function using Python zip file (LocalStack Community doesn't support container images)
-# Optional - can be disabled to run Go container in scan mode instead
+# Lambda function - supports both zip file and container image
+# Container images require LocalStack Pro
 resource "aws_lambda_function" "central_log_distributor" {
   count    = var.deploy_lambda ? 1 : 0
   provider = aws.central
@@ -191,12 +203,17 @@ resource "aws_lambda_function" "central_log_distributor" {
   function_name = "${local.project_name}-${local.environment}-log-distributor"
   role          = aws_iam_role.central_lambda_execution_role.arn
 
-  # Use existing Python Lambda zip file
-  package_type     = "Zip"
-  filename         = var.lambda_zip_path
-  source_code_hash = filebase64sha256(var.lambda_zip_path)
-  handler          = "log_processor.lambda_handler"
-  runtime          = "python3.13"
+  # Conditional: use container image or zip file
+  package_type = var.use_container_image ? "Image" : "Zip"
+
+  # For zip deployment
+  filename         = var.use_container_image ? null : var.lambda_zip_path
+  source_code_hash = var.use_container_image ? null : filebase64sha256(var.lambda_zip_path)
+  handler          = var.use_container_image ? null : "log_processor.lambda_handler"
+  runtime          = var.use_container_image ? null : "python3.13"
+
+  # For container image deployment
+  image_uri = var.use_container_image ? "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}" : null
 
   timeout     = 300
   memory_size = 512

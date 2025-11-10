@@ -3,13 +3,13 @@ version: '3.8'
 services:
   # LocalStack - emulates ALL AWS services
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack-pro:latest
     container_name: rosa-localstack
     ports:
       - "4566:4566"  # LocalStack gateway
       - "4510-4559:4510-4559"  # External service port range
     environment:
-      - SERVICES=s3,sqs,sns,dynamodb,sts,cloudwatch,lambda,logs,iam,kms,ec2
+      - SERVICES=s3,sqs,sns,dynamodb,sts,cloudwatch,lambda,logs,iam,kms,ec2,ecr
       - DEBUG=1
       - PERSISTENCE=0
       - AWS_DEFAULT_REGION=us-east-1
@@ -19,6 +19,7 @@ services:
       - DOCKER_HOST=unix:///var/run/docker.sock
       - DISABLE_CORS_CHECKS=1
       - EAGER_SERVICE_LOADING=1
+      - LOCALSTACK_AUTH_TOKEN=$LOCALSTACK_AUTH_TOKEN
     volumes:
       # Mount Docker/Podman socket so LocalStack can run Lambda containers
       # Default: Podman socket for local development (/run/user/1000/podman/podman.sock)

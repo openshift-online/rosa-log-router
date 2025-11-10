@@ -39,6 +39,11 @@ output "central_log_distribution_role_arn" {
   value       = aws_iam_role.central_log_distribution_role.arn
 }
 
+output "ecr_repository_url" {
+  description = "ECR repository URL for Lambda container images"
+  value       = aws_ecr_repository.lambda_processor.repository_url
+}
+
 ##############################################################################
 # Customer Account Outputs
 ##############################################################################
