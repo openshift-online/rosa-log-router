@@ -753,8 +753,8 @@ resource "aws_acm_certificate_validation" "cert" {
 }
 
 resource "aws_api_gateway_domain_name" "domain" {
-  certificate_arn = aws_acm_certificate_validation.cert.certificate_arn
-  domain_name     = local.domain_name
+  domain_name              = local.domain_name
+  regional_certificate_arn = aws_acm_certificate_validation.cert.certificate_arn
 
   endpoint_configuration {
     types = ["REGIONAL"]
