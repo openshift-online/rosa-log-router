@@ -57,6 +57,7 @@ generate_hcl "main.tf" {
         s3_delete_after_days              = var.s3_delete_after_days
         enable_s3_encryption              = var.enable_s3_encryption
         central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
+        processor_image                   = var.processor_image
         lambda_execution_role_arn         = module.global.lambda_execution_role_arn
         api_auth_secret_name              = module.global.api_auth_secret_name
         authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn

@@ -43,6 +43,7 @@ module "lambda_stack" {
   sqs_queue_arn                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_arn : ""
   sqs_queue_url                     = var.include_sqs_stack ? module.sqs_stack[0].log_delivery_queue_url : ""
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
+  processor_image                   = var.processor_image
   lambda_execution_role_arn         = var.lambda_execution_role_arn
   tags                              = var.tags
 }

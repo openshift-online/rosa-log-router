@@ -34,12 +34,10 @@ resource "aws_cloudwatch_log_group" "log_distributor_log_group" {
 
 # Container-based Lambda function for log distribution
 resource "aws_lambda_function" "log_distributor_function" {
-  function_name    = "${var.project_name}-${var.environment}-log-distributor"
-  role             = var.lambda_execution_role_arn
-  filename         = "../../modules/regional/modules/lambda-stack/log-processor.zip"
-  handler          = "log_processor.lambda_handler"
-  runtime          = "python3.11"
-  source_code_hash = filebase64sha256("../../modules/regional/modules/lambda-stack/log-processor.zip")
+  function_name = "${var.project_name}-${var.environment}-log-distributor"
+  role          = var.lambda_execution_role_arn
+  package_type  = "Image"
+  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.id}.amazonaws.com/${var.processor_image}"
 
   environment {
     variables = {

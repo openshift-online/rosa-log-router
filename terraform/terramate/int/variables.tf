@@ -67,6 +67,11 @@ variable "enable_s3_encryption" {
   default     = true
 }
 
+variable "processor_image" {
+  description = "ECR image for the log processor container image"
+  type        = string
+}
+
 variable "api_auth_psk_value" {
   description = "The PSK value for API authentication"
   type        = string

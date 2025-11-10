@@ -65,6 +65,11 @@ variable "central_log_distribution_role_arn" {
   }
 }
 
+variable "processor_image" {
+  description = "ECR image for the log processor container image"
+  type        = string
+}
+
 variable "lambda_execution_role_arn" {
   description = "ARN of the global Lambda execution role"
   type        = string
