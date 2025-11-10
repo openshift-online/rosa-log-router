@@ -6,7 +6,7 @@ USE_CONTAINER ?= false
 # Tag for Lambda container image
 LAMBDA_IMAGE_TAG ?= latest
 
-.PHONY: help start stop logs build build-go build-zip build-lambda-image push-lambda-image init plan deploy deploy-go deploy-container outputs destroy test-e2e-go test-e2e-go-quick warmup-lambda test-e2e-go-with-warmup validate-vector-flow clean reset run-go-scan
+.PHONY: help start stop logs build build-py build-go build-zip build-lambda-image push-lambda-image init plan deploy deploy-pyzip deploy-py deploy-go deploy-go-wo-lambda deploy-container outputs destroy test-e2e-go test-e2e-go-quick warmup-lambda test-e2e-go-with-warmup validate-vector-flow clean reset run-go-scan run-go-scan-background
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -33,15 +33,17 @@ stop: ## Stop LocalStack
 logs: ## Show LocalStack logs
 	docker compose logs -f localstack
 
-build: ## Build Python container image
+build: build-py ## Build Python container image (default)
+
+build-py: ## Build Python container image
 	@echo "Building Python log processor container..."
-	cd container && docker build -f Containerfile.processor -t log-processor:local .
-	@echo "✅ Container image built: log-processor:local"
+	cd container && docker build -f Containerfile.processor -t log-processor:local-py .
+	@echo "✅ Container image built: log-processor:local-py"
 
 build-go: ## Build Go container image
 	@echo "Building Go log processor container..."
-	cd container && docker build -f Containerfile.processor_go -t log-processor-go:local .
-	@echo "✅ Go container image built: log-processor-go:local"
+	cd container && docker build -f Containerfile.processor_go -t log-processor:local-go .
+	@echo "✅ Go container image built: log-processor:local-go"
 
 build-zip: ## Build Python Lambda zip file for local testing
 	@echo "Building Lambda deployment package..."
@@ -82,14 +84,40 @@ else
 	cd terraform/local && terraform apply -auto-approve
 endif
 	@echo ""
-	@echo "✅ Infrastructure deployed with Lambda!"
+	@echo "✅ Infrastructure deployed!"
 	@echo ""
 	@cd terraform/local && terraform output test_commands
 
 deploy-container: ## Deploy with container image (shortcut for USE_CONTAINER=true)
 	@$(MAKE) deploy USE_CONTAINER=true
 
-deploy-go: build-go init ## Deploy infrastructure without Lambda (for Go scan mode)
+deploy-pyzip: build-zip init ## Deploy full infrastructure with Python Lambda zip file
+	@echo "Deploying to LocalStack with Python Lambda zip file..."
+	cd terraform/local && terraform apply -auto-approve
+	@echo ""
+	@echo "✅ Infrastructure deployed with Python Lambda zip!"
+	@echo ""
+	@cd terraform/local && terraform output test_commands
+
+deploy-py: build-py init ## Deploy full infrastructure with Python Lambda container
+	@echo "Deploying to LocalStack with Python Lambda container..."
+	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
+	cd terraform/local && terraform apply -auto-approve -var='use_container=py'
+	@echo ""
+	@echo "✅ Infrastructure deployed with Python Lambda container!"
+	@echo ""
+	@cd terraform/local && terraform output test_commands
+
+deploy-go: build-go init ## Deploy infrastructure with Go Lambda container
+	@echo "Deploying to LocalStack with Go Lambda container..."
+	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
+	cd terraform/local && terraform apply -auto-approve -var='use_container=go'
+	@echo ""
+	@echo "✅ Infrastructure deployed with Go Lambda container!"
+	@echo ""
+	@cd terraform/local && terraform output test_commands
+
+deploy-go-wo-lambda: build-go init ## Deploy infrastructure without Lambda (for Go scan mode)
 	@echo "Deploying to LocalStack without Lambda (for Go scan mode)..."
 	cd terraform/local && terraform apply -auto-approve -var="deploy_lambda=false"
 	@echo ""
@@ -152,7 +180,7 @@ clean: stop ## Stop LocalStack and clean up all local state
 reset: clean start deploy ## Full reset: clean, start, and deploy
 	@echo "✅ Environment reset complete"
 
-run-go-scan: ## Run Go container in scan mode (requires deploy-go first)
+run-go-scan: ## Run Go container in scan mode (requires deploy-go-wo-lambda first)
 	@echo "Starting Go log processor in scan mode..."
 	@S3_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
 	DYNAMODB_TABLE=$$(cd terraform/local && terraform output -raw central_dynamodb_table 2>/dev/null); \
@@ -174,7 +202,32 @@ run-go-scan: ## Run Go container in scan mode (requires deploy-go first)
 		-e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=$$ROLE_ARN \
 		-e SCAN_INTERVAL=10 \
 		-e LOG_LEVEL=DEBUG \
-		log-processor-go:local \
+		log-processor:local-go \
 		--mode scan
+
+run-go-scan-background: ## Run Go container in scan mode in background
+	@echo "Starting Go log processor in scan mode (background)..."
+	@S3_BUCKET=$$(cd terraform/local && terraform output -raw central_source_bucket 2>/dev/null); \
+	DYNAMODB_TABLE=$$(cd terraform/local && terraform output -raw central_dynamodb_table 2>/dev/null); \
+	ROLE_ARN=$$(cd terraform/local && terraform output -raw central_log_distribution_role_arn 2>/dev/null); \
+	echo "Configuration:"; \
+	echo "  S3 Bucket: $$S3_BUCKET"; \
+	echo "  DynamoDB Table: $$DYNAMODB_TABLE"; \
+	echo "  Role ARN: $$ROLE_ARN"; \
+	echo ""; \
+	docker run --rm -d --name rosa-go-processor --network rosa-log-router_rosa-network \
+		-e AWS_ACCESS_KEY_ID=111111111111 \
+		-e AWS_SECRET_ACCESS_KEY=test \
+		-e AWS_REGION=us-east-1 \
+		-e AWS_ENDPOINT_URL=http://localstack:4566 \
+		-e AWS_S3_USE_PATH_STYLE=true \
+		-e SOURCE_BUCKET=$$S3_BUCKET \
+		-e TENANT_CONFIG_TABLE=$$DYNAMODB_TABLE \
+		-e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=$$ROLE_ARN \
+		-e SCAN_INTERVAL=10 \
+		-e LOG_LEVEL=DEBUG \
+		log-processor:local-go \
+		--mode scan
+	@echo "✅ Go processor running in background (container: rosa-go-processor)"
 
 .DEFAULT_GOAL := help

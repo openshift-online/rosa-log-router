@@ -9,6 +9,25 @@ on:
 jobs:
   localstack-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        implementation: [pyzip, py, go]
+        include:
+          - implementation: pyzip
+            deploy_target: deploy-pyzip
+            description: "Python Lambda zip file"
+            requires_pro: false
+          - implementation: py
+            deploy_target: deploy-py
+            description: "Python Lambda container"
+            requires_pro: true
+          - implementation: go
+            deploy_target: deploy-go
+            description: "Go Lambda container"
+            requires_pro: true
+
+    name: LocalStack Integration (${{ matrix.description }})
 
     steps:
     - name: Checkout repository
@@ -60,10 +79,10 @@ jobs:
         make start
         echo "✅ LocalStack started"
 
-    - name: Deploy infrastructure to LocalStack
+    - name: Deploy infrastructure to LocalStack (${{ matrix.description }})
       run: |
-        make deploy-container
-        echo "✅ Infrastructure deployed (container mode)"
+        make ${{ matrix.deploy_target }}
+        echo "✅ Infrastructure deployed with ${{ matrix.description }}"
 
     - name: Get LocalStack bucket name
       id: localstack-config
@@ -176,9 +195,10 @@ jobs:
 
     - name: Show test summary
       run: |
-        echo "=== LocalStack Integration Test Summary ==="
+        echo "=== LocalStack Integration Test Summary (${{ matrix.description }}) ==="
         echo "✅ LocalStack deployment: OK"
         echo "✅ Terraform infrastructure: OK"
+        echo "✅ ${{ matrix.description }}: OK"
         echo "✅ Minikube cluster: OK"
         echo "✅ Customer namespaces: OK"
         echo "✅ Fake log generators: OK"
@@ -186,7 +206,7 @@ jobs:
         echo "✅ Vector flow validation: OK"
         echo "✅ Go e2e tests: OK"
         echo ""
-        echo "🎉 All LocalStack integration tests passed!"
+        echo "🎉 All ${{ matrix.description }} integration tests passed!"
 
     - name: Cleanup and debug (if test fails)
       if: failure()

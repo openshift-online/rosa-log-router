@@ -12,10 +12,21 @@ variable "use_container_image" {
   default     = false
 }
 
-variable "lambda_zip_path" {
-  description = "Path to the Lambda function zip file (used when use_container_image = false)"
+variable "use_container" {
+  description = "Which implementation to use: 'pyzip' for Python zip, 'py' for Python container, or 'go' for Go container"
   type        = string
-  default     = "log-processor.zip"  # Default to local e2e testing zip
+  default     = "pyzip"
+
+  validation {
+    condition     = contains(["pyzip", "py", "go"], var.use_container)
+    error_message = "use_container must be one of: 'pyzip', 'py', or 'go'"
+  }
+}
+
+variable "lambda_zip_path" {
+  description = "Path to the Lambda function zip file"
+  type        = string
+  default     = "log-processor.zip"
 }
 
 variable "lambda_image_tag" {
