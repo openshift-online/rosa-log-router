@@ -1,7 +1,7 @@
 # Multi-stage build for Go log processor
 # Stage 1: Build the Go binary
 FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS builder
-
+USER 0
 # Set working directory
 WORKDIR /opt/app-root/src
 
@@ -16,7 +16,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 
 # Fix permissions for copied files
-USER 0
+
 RUN chmod -R 755 cmd/ internal/
 USER 1001
 
@@ -40,7 +40,7 @@ USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/log-processor"]
 
 # Default to Lambda mode (can be overridden with --mode flag)
-CMD []
+CMD [""]
 
 # Labels
 LABEL name="rosa-log-router-processor" \

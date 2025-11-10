@@ -102,7 +102,14 @@ deploy-pyzip: build-zip init ## Deploy full infrastructure with Python Lambda zi
 deploy-py: build-py init ## Deploy full infrastructure with Python Lambda container
 	@echo "Deploying to LocalStack with Python Lambda container..."
 	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
-	cd terraform/local && terraform apply -auto-approve -var='use_container=py'
+	@echo "Step 1: Creating ECR repository..."
+	cd terraform/local && terraform apply -auto-approve -target=aws_ecr_repository.lambda_processor
+	@echo "Step 2: Tagging and pushing Python container to ECR..."
+	@ECR_URL=$$(cd terraform/local && terraform output -raw ecr_repository_url 2>/dev/null); \
+	docker tag log-processor:local-py $$ECR_URL:py && \
+	docker push $$ECR_URL:py
+	@echo "Step 3: Deploying infrastructure..."
+	cd terraform/local && terraform apply -auto-approve -var="use_container_image=true" -var="lambda_image_tag=py"
 	@echo ""
 	@echo "✅ Infrastructure deployed with Python Lambda container!"
 	@echo ""
@@ -111,7 +118,14 @@ deploy-py: build-py init ## Deploy full infrastructure with Python Lambda contai
 deploy-go: build-go init ## Deploy infrastructure with Go Lambda container
 	@echo "Deploying to LocalStack with Go Lambda container..."
 	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
-	cd terraform/local && terraform apply -auto-approve -var='use_container=go'
+	@echo "Step 1: Creating ECR repository..."
+	cd terraform/local && terraform apply -auto-approve -target=aws_ecr_repository.lambda_processor
+	@echo "Step 2: Tagging and pushing Go container to ECR..."
+	@ECR_URL=$$(cd terraform/local && terraform output -raw ecr_repository_url 2>/dev/null); \
+	docker tag log-processor:local-go $$ECR_URL:go && \
+	docker push $$ECR_URL:go
+	@echo "Step 3: Deploying infrastructure..."
+	cd terraform/local && terraform apply -auto-approve -var="use_container_image=true" -var="lambda_image_tag=go"
 	@echo ""
 	@echo "✅ Infrastructure deployed with Go Lambda container!"
 	@echo ""
