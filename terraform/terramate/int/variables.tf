@@ -82,3 +82,8 @@ variable "api_image" {
   description = "ECR image for the API service container image"
   type        = string
 }
+
+variable "route53_zone_id" {
+  description = "Zone id of the customer domain"
+  type        = string
+}
