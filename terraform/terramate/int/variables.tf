@@ -96,5 +96,10 @@ variable "route53_zone_id" {
 variable "tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)
-  default     = {}
+  default     = {
+    "app-code"               = "OSD-002"
+    "cost-center"            = "148"
+    "service-phase"          = "dev"
+    "managed_by_integration" = "terraform-repo"
+  }
 }
