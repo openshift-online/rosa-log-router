@@ -46,7 +46,7 @@ func createTestProcessor() *Processor {
 	var stsClient *sts.Client
 	var cwClient *cloudwatch.Client
 
-	return NewProcessor(s3Client, mockDynamo, sqsClient, stsClient, cwClient, config, logger)
+	return NewProcessor(s3Client, mockDynamo, sqsClient, stsClient, cwClient, "", config, logger)
 }
 
 // Helper to create SQS event

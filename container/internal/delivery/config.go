@@ -19,9 +19,15 @@ func buildConfigWithEndpoint(ctx context.Context, region string, creds aws.Crede
 	}
 
 	// Add endpoint resolver if endpoint URL is configured (for LocalStack)
+	// Note: Using deprecated endpoint resolver API for backward compatibility with LocalStack.
+	// The modern per-service endpoint configuration would require refactoring the service client creation.
+	// This approach works consistently across all AWS services (S3, CloudWatch, STS, etc.).
 	if endpointURL != "" {
+		//nolint:staticcheck // SA1019: Using deprecated endpoint resolver for LocalStack compatibility
 		configOptions = append(configOptions, config.WithEndpointResolverWithOptions(
+			//nolint:staticcheck // SA1019: Using deprecated endpoint resolver for LocalStack compatibility
 			aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+				//nolint:staticcheck // SA1019: Using deprecated endpoint resolver for LocalStack compatibility
 				return aws.Endpoint{
 					URL:               endpointURL,
 					HostnameImmutable: true,
