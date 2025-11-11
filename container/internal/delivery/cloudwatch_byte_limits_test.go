@@ -412,8 +412,8 @@ func TestOverheadCalculationAccuracy(t *testing.T) {
 		{Timestamp: aws.Int64(1640995200002), Message: aws.String("ccc")}, // 3 bytes + 26 overhead = 29 bytes
 	}
 
-	expectedMessageBytes := int64(1 + 2 + 3)    // 6 bytes total
-	expectedOverheadBytes := int64(3 * 26)      // 78 bytes total
+	expectedMessageBytes := int64(1 + 2 + 3)                           // 6 bytes total
+	expectedOverheadBytes := int64(3 * 26)                             // 78 bytes total
 	expectedTotalBytes := expectedMessageBytes + expectedOverheadBytes // 84 bytes
 
 	actualSize := calculateBatchSize(events)
