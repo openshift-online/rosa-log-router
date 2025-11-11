@@ -75,7 +75,7 @@ type SNSMessage struct {
 	Message string `json:"Message"`
 }
 
-// Vector metadata fields that should be excluded when creating fallback messages
+// VectorMetadataFields are Vector metadata fields that should be excluded when creating fallback messages.
 var VectorMetadataFields = map[string]bool{
 	"cluster_id":       true,
 	"namespace":        true,
@@ -86,7 +86,7 @@ var VectorMetadataFields = map[string]bool{
 	"kubernetes":       true,
 }
 
-// Application group definitions for filtering
+// ApplicationGroups defines application group definitions for filtering.
 var ApplicationGroups = map[string][]string{
 	"API": {
 		"kube-apiserver",

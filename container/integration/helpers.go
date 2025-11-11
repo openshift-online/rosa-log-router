@@ -47,9 +47,9 @@ type E2ETestHelper struct {
 	localstackURL string
 
 	// Terraform outputs (fetched dynamically)
-	centralBucket    string
-	customer1Bucket  string
-	customer2Bucket  string
+	centralBucket     string
+	customer1Bucket   string
+	customer2Bucket   string
 	customer2LogGroup string
 }
 

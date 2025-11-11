@@ -1,3 +1,4 @@
+// Package processor implements the core log processing logic for SQS, Lambda, and S3 scan modes.
 package processor
 
 import (

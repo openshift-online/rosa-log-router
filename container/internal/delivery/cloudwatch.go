@@ -1,3 +1,4 @@
+// Package delivery handles log delivery to various destinations (CloudWatch Logs, S3).
 package delivery
 
 import (
