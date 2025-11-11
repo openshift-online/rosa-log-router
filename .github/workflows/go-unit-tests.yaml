@@ -1,0 +1,145 @@
+name: Go Unit Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    strategy:
+      matrix:
+        go-version: ['1.23', '1.24']
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go ${{ matrix.go-version }}
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('container/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      working-directory: ./container
+      run: go mod download
+
+    - name: Verify dependencies
+      working-directory: ./container
+      run: go mod verify
+
+    - name: Run Go unit tests
+      working-directory: ./container
+      run: |
+        go test ./internal/... -v -race -coverprofile=coverage.out -covermode=atomic
+
+    - name: Generate coverage report
+      working-directory: ./container
+      run: |
+        go tool cover -func=coverage.out
+        go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./container/coverage.out
+        flags: go-unittests
+        name: go-coverage
+        fail_ci_if_error: false
+
+    - name: Upload coverage HTML report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: go-coverage-report-${{ matrix.go-version }}
+        path: ./container/coverage.html
+        retention-days: 30
+
+    - name: Check test coverage threshold
+      working-directory: ./container
+      run: |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        echo "Total coverage: ${COVERAGE}%"
+        THRESHOLD=70
+        if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+          echo "❌ Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+          exit 1
+        else
+          echo "✅ Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
+        fi
+
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        working-directory: ./container
+        args: --timeout=5m
+
+    - name: Run go vet
+      working-directory: ./container
+      run: go vet ./...
+
+    - name: Run go fmt check
+      working-directory: ./container
+      run: |
+        if [ -n "$(gofmt -l .)" ]; then
+          echo "Go code is not formatted:"
+          gofmt -d .
+          exit 1
+        fi
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install staticcheck
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Run staticcheck
+      working-directory: ./container
+      run: staticcheck ./...
