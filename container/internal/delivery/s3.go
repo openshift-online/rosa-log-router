@@ -107,12 +107,12 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 
 	// Step 5: Additional metadata for traceability
 	metadata := map[string]string{
-		"source-bucket":        sourceBucket,
-		"source-key":           sourceKey,
-		"tenant-id":            tenantInfo.TenantID,
-		"application":          tenantInfo.Application,
-		"pod-name":             tenantInfo.PodName,
-		"delivery-timestamp":   fmt.Sprintf("%d", time.Now().Unix()),
+		"source-bucket":      sourceBucket,
+		"source-key":         sourceKey,
+		"tenant-id":          tenantInfo.TenantID,
+		"application":        tenantInfo.Application,
+		"pod-name":           tenantInfo.PodName,
+		"delivery-timestamp": fmt.Sprintf("%d", time.Now().Unix()),
 	}
 
 	// Step 6: Perform S3-to-S3 copy with bucket-owner-full-control ACL

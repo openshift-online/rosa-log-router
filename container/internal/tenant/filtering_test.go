@@ -204,9 +204,9 @@ func TestShouldProcessApplicationGroupsWithInvalidGroupNames(t *testing.T) {
 	}
 
 	// Should still work with valid groups, ignoring invalid ones
-	assert.True(t, ShouldProcessApplication(config, "kube-apiserver", logger))       // from API
-	assert.True(t, ShouldProcessApplication(config, "oauth-openshift", logger))      // from Authentication
-	assert.False(t, ShouldProcessApplication(config, "kube-scheduler", logger))      // not in any valid group
+	assert.True(t, ShouldProcessApplication(config, "kube-apiserver", logger))  // from API
+	assert.True(t, ShouldProcessApplication(config, "oauth-openshift", logger)) // from Authentication
+	assert.False(t, ShouldProcessApplication(config, "kube-scheduler", logger)) // not in any valid group
 }
 
 func TestShouldProcessDeliveryConfigEnabled(t *testing.T) {
@@ -234,8 +234,8 @@ func TestAllApplicationGroups(t *testing.T) {
 
 	// Test all defined groups to ensure they're properly configured
 	testCases := []struct {
-		group         string
-		expectedApps  []string
+		group        string
+		expectedApps []string
 	}{
 		{
 			group:        "API",

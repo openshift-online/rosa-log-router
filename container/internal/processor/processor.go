@@ -20,14 +20,14 @@ import (
 
 // Processor handles log processing and delivery
 type Processor struct {
-	s3Client          *s3.Client
-	sqsClient         *sqs.Client
-	tenantConfig      *tenant.ConfigManager
-	cwDeliverer       *delivery.CloudWatchDeliverer
-	s3Deliverer       *delivery.S3Deliverer
-	metricsPublisher  *awsmetrics.MetricsPublisher
-	config            *models.Config
-	logger            *slog.Logger
+	s3Client         *s3.Client
+	sqsClient        *sqs.Client
+	tenantConfig     *tenant.ConfigManager
+	cwDeliverer      *delivery.CloudWatchDeliverer
+	s3Deliverer      *delivery.S3Deliverer
+	metricsPublisher *awsmetrics.MetricsPublisher
+	config           *models.Config
+	logger           *slog.Logger
 }
 
 // NewProcessor creates a new log processor

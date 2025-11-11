@@ -1,0 +1,26 @@
+linters-settings:
+  staticcheck:
+    checks: ["all", "-SA1019"]  # Disable deprecated API warnings for LocalStack compatibility
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - staticcheck
+    - errcheck
+    - gosimple
+    - ineffassign
+    - unused
+
+issues:
+  exclude-rules:
+    # Allow deprecated AWS SDK endpoint resolver for LocalStack compatibility
+    - path: internal/delivery/config.go
+      linters:
+        - staticcheck
+      text: "SA1019"
+
+run:
+  timeout: 5m
+  skip-dirs:
+    - vendor

@@ -271,22 +271,22 @@ func TestProcessSQSRecordErrorClassification(t *testing.T) {
 	proc := createTestProcessor()
 
 	testCases := []struct {
-		name              string
-		messageBody       string
+		name                 string
+		messageBody          string
 		expectNonRecoverable bool
-		errorContains     string
+		errorContains        string
 	}{
 		{
-			name:              "invalid JSON is non-recoverable",
-			messageBody:       "invalid json",
+			name:                 "invalid JSON is non-recoverable",
+			messageBody:          "invalid json",
 			expectNonRecoverable: true,
-			errorContains:     "invalid SQS message format",
+			errorContains:        "invalid SQS message format",
 		},
 		{
-			name:              "invalid S3 event is non-recoverable",
-			messageBody:       `{"Message": "invalid"}`,
+			name:                 "invalid S3 event is non-recoverable",
+			messageBody:          `{"Message": "invalid"}`,
 			expectNonRecoverable: true,
-			errorContains:     "invalid S3 event format",
+			errorContains:        "invalid S3 event format",
 		},
 		// Note: invalid object key path test removed - non-recoverable S3 processing errors
 		// are logged and swallowed, so no error is returned to test
