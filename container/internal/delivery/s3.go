@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/google/uuid"
 	"github.com/openshift/rosa-log-router/internal/models"
 )
 
@@ -44,7 +45,7 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 	// Step 1: Assume the central log distribution role
 	// For S3 delivery, we use single-hop: central role writes directly to customer bucket
 	// (Customer bucket policy grants central role PutObject permissions)
-	sessionName := fmt.Sprintf("S3LogDelivery-%d", time.Now().UnixNano())
+	sessionName := fmt.Sprintf("S3LogDelivery-%s", uuid.New().String())
 	centralRoleResp, err := d.stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
 		RoleArn:         aws.String(d.centralRoleArn),
 		RoleSessionName: aws.String(sessionName),
@@ -150,10 +151,7 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 
 // normalizeBucketPrefix ensures bucket prefix ends with a slash
 func normalizeBucketPrefix(prefix string) string {
-	if prefix == "" {
-		return prefix
-	}
-	if !strings.HasSuffix(prefix, "/") {
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		return prefix + "/"
 	}
 	return prefix

@@ -98,13 +98,14 @@ func TestGetTenantDeliveryConfigsNotFound(t *testing.T) {
 func TestGetTenantDeliveryConfigsMissingRequiredFields(t *testing.T) {
 	mockClient := &mockDynamoDBClient{
 		queryFunc: func(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-			// Return config missing required fields
+			// Return config missing required fields (but enabled so validation runs)
 			return &dynamodb.QueryOutput{
 				Items: []map[string]types.AttributeValue{
 					{
 						"tenant_id":                 &types.AttributeValueMemberS{Value: "missing-fields"},
 						"type":                      &types.AttributeValueMemberS{Value: "cloudwatch"},
 						"log_distribution_role_arn": &types.AttributeValueMemberS{Value: "arn:aws:iam::987654321098:role/LogRole"},
+						"enabled":                   &types.AttributeValueMemberBOOL{Value: true},
 						// Missing log_group_name and target_region
 					},
 				},
@@ -247,16 +248,16 @@ func TestGetTenantDeliveryConfigsMultipleConfigs(t *testing.T) {
 func TestGetTenantDeliveryConfigsDefaultEnabled(t *testing.T) {
 	mockClient := &mockDynamoDBClient{
 		queryFunc: func(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-			// Return config without enabled field (should default to true)
+			// Return config without enabled field (should default to false)
 			return &dynamodb.QueryOutput{
 				Items: []map[string]types.AttributeValue{
 					{
-						"tenant_id":                 &types.AttributeValueMemberS{Value: "default-enabled"},
+						"tenant_id":                 &types.AttributeValueMemberS{Value: "default-disabled"},
 						"type":                      &types.AttributeValueMemberS{Value: "cloudwatch"},
 						"log_distribution_role_arn": &types.AttributeValueMemberS{Value: "arn:aws:iam::987654321098:role/LogRole"},
-						"log_group_name":            &types.AttributeValueMemberS{Value: "/aws/logs/default-enabled"},
+						"log_group_name":            &types.AttributeValueMemberS{Value: "/aws/logs/default-disabled"},
 						"target_region":             &types.AttributeValueMemberS{Value: "us-east-1"},
-						// enabled field not present - should default to true
+						// enabled field not present - should default to false (safe default)
 					},
 				},
 			}, nil
@@ -271,9 +272,10 @@ func TestGetTenantDeliveryConfigsDefaultEnabled(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	configs, err := manager.GetTenantDeliveryConfigs(ctx, "default-enabled")
+	_, err := manager.GetTenantDeliveryConfigs(ctx, "default-disabled")
 
-	require.NoError(t, err)
-	assert.Len(t, configs, 1)
-	assert.True(t, configs[0].Enabled, "Config should default to enabled=true when field is missing")
+	// Should return error because config defaults to disabled
+	require.Error(t, err)
+	assert.IsType(t, &models.TenantNotFoundError{}, err)
+	assert.Contains(t, err.Error(), "no enabled delivery configurations found for tenant")
 }

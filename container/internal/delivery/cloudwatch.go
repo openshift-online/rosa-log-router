@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	stypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/google/uuid"
 	"github.com/openshift/rosa-log-router/internal/models"
 )
 
@@ -60,7 +61,7 @@ func (d *CloudWatchDeliverer) DeliverLogs(ctx context.Context, logEvents []*mode
 		"log_group", deliveryConfig.LogGroupName)
 
 	// Step 1: Assume the central log distribution role
-	sessionName := fmt.Sprintf("CentralLogDistribution-%d", time.Now().UnixNano())
+	sessionName := fmt.Sprintf("CentralLogDistribution-%s", uuid.New().String())
 	centralRoleResp, err := d.stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
 		RoleArn:         aws.String(d.centralRoleArn),
 		RoleSessionName: aws.String(sessionName),
@@ -118,7 +119,7 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 	d.logger.Info("assuming customer role", "role_arn", customerRoleArn)
 	customerRoleResp, err := centralSTS.AssumeRole(ctx, &sts.AssumeRoleInput{
 		RoleArn:         aws.String(customerRoleArn),
-		RoleSessionName: aws.String(fmt.Sprintf("CloudWatchLogDelivery-%d", time.Now().UnixNano())),
+		RoleSessionName: aws.String(fmt.Sprintf("CloudWatchLogDelivery-%s", uuid.New().String())),
 		ExternalId:      aws.String(externalID),
 	})
 	if err != nil {
@@ -143,12 +144,13 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 	processedEvents := make([]types.InputLogEvent, 0, len(logEvents))
 	for _, event := range logEvents {
 		timestamp := event.Timestamp
-		if timestamp == 0 {
+		// Use S3 timestamp if event timestamp is missing or zero
+		if timestamp == nil || isZeroTimestamp(timestamp) {
 			timestamp = s3Timestamp
 		}
 
 		// Process timestamp like Vector does
-		processedTimestamp := processTimestampLikeVector(timestamp)
+		processedTimestamp := models.ProcessTimestampLikeVector(timestamp, d.logger)
 
 		// Convert message to string
 		var messageStr string
@@ -200,14 +202,20 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 	return stats, nil
 }
 
-// processTimestampLikeVector processes timestamp exactly like Vector's extract_timestamp transform
-func processTimestampLikeVector(timestamp int64) int64 {
-	// If timestamp is in seconds (< 1000000000000), convert to milliseconds
-	if timestamp < 1000000000000 {
-		return timestamp * 1000
+// isZeroTimestamp checks if a timestamp interface{} is zero or empty.
+func isZeroTimestamp(timestamp interface{}) bool {
+	switch ts := timestamp.(type) {
+	case string:
+		return ts == ""
+	case float64:
+		return ts == 0
+	case int64:
+		return ts == 0
+	case int:
+		return ts == 0
+	default:
+		return false
 	}
-	// Already in milliseconds
-	return timestamp
 }
 
 // ensureLogGroupAndStreamExist ensures log group and log stream exist
@@ -310,7 +318,21 @@ func deliverEventsInBatches(ctx context.Context, client CloudWatchLogsAPI, logGr
 			return
 		}
 
-		logger.Info("sending batch to CloudWatch", "batch_size", len(currentBatch))
+		// Calculate actual batch payload size for verification
+		actualBatchSize := currentBatchSize
+		overheadBytes := int64(len(currentBatch)) * 26
+		messageBytes := actualBatchSize - overheadBytes
+		var overheadPercentage float64
+		if actualBatchSize > 0 {
+			overheadPercentage = (float64(overheadBytes) / float64(actualBatchSize)) * 100
+		}
+
+		logger.Info("sending batch to CloudWatch",
+			"event_count", len(currentBatch),
+			"total_bytes", actualBatchSize,
+			"message_bytes", messageBytes,
+			"overhead_bytes", overheadBytes,
+			"overhead_percent", fmt.Sprintf("%.1f%%", overheadPercentage))
 
 		// Retry logic matching Vector: 3 attempts
 		maxRetries := 3
@@ -374,19 +396,38 @@ func deliverEventsInBatches(ctx context.Context, client CloudWatchLogsAPI, logGr
 
 	for _, event := range events {
 		// Calculate event size (approximate)
-		eventSize := int64(len(*event.Message)) + 26 // 26 bytes overhead per event
+		messageBytes := int64(len(*event.Message))
+		overheadBytes := int64(26) // 26 bytes overhead per event
+		eventSize := messageBytes + overheadBytes
 
-		// Add event to current batch
-		currentBatch = append(currentBatch, event)
-		currentBatchSize += eventSize
-		stats.TotalProcessed++
+		logger.Debug("processing event",
+			"message_bytes", messageBytes,
+			"overhead_bytes", overheadBytes,
+			"total_bytes", eventSize)
 
-		// Check if we need to send current batch
-		shouldSend := len(currentBatch) >= maxEventsPerBatch ||
-			currentBatchSize > maxBytesPerBatch ||
-			time.Since(batchStartTime) >= time.Duration(timeoutSeconds)*time.Second
+		// Check if adding this event would exceed limits BEFORE adding it
+		wouldExceedSize := (currentBatchSize + eventSize) > maxBytesPerBatch
+		wouldExceedCount := (len(currentBatch) + 1) > maxEventsPerBatch
+		timeoutReached := time.Since(batchStartTime) >= time.Duration(timeoutSeconds)*time.Second
 
-		if shouldSend {
+		// Send current batch if adding this event would exceed limits
+		if len(currentBatch) > 0 && (wouldExceedSize || wouldExceedCount || timeoutReached) {
+			sendReasons := []string{}
+			if wouldExceedSize {
+				sendReasons = append(sendReasons, fmt.Sprintf("would_exceed_size: %d+%d>%d", currentBatchSize, eventSize, maxBytesPerBatch))
+			}
+			if wouldExceedCount {
+				sendReasons = append(sendReasons, fmt.Sprintf("would_exceed_count: %d+1>%d", len(currentBatch), maxEventsPerBatch))
+			}
+			if timeoutReached {
+				sendReasons = append(sendReasons, fmt.Sprintf("timeout: %v>=%ds", time.Since(batchStartTime), timeoutSeconds))
+			}
+
+			logger.Debug("sending batch before adding event",
+				"batch_size", len(currentBatch),
+				"batch_bytes", currentBatchSize,
+				"trigger", sendReasons)
+
 			sendBatch()
 			if lastError != nil {
 				return stats, lastError
@@ -395,6 +436,11 @@ func deliverEventsInBatches(ctx context.Context, client CloudWatchLogsAPI, logGr
 			currentBatchSize = 0
 			batchStartTime = time.Now()
 		}
+
+		// Now add the event to the (possibly new) batch
+		currentBatch = append(currentBatch, event)
+		currentBatchSize += eventSize
+		stats.TotalProcessed++
 	}
 
 	// Send final batch

@@ -83,9 +83,9 @@ func (cm *ConfigManager) GetTenantDeliveryConfigs(ctx context.Context, tenantID 
 			continue
 		}
 
-		// Set enabled to true if not present (backward compatibility)
+		// Set enabled to false if not present (safe default - requires explicit opt-in)
 		if item["enabled"] == nil {
-			config.Enabled = true
+			config.Enabled = false
 		}
 
 		configs = append(configs, &config)
@@ -119,11 +119,10 @@ func (cm *ConfigManager) GetTenantDeliveryConfigs(ctx context.Context, tenantID 
 		"types", configTypes)
 
 	for _, config := range enabledConfigs {
-		if len(config.DesiredLogs) > 0 || len(config.Groups) > 0 {
+		if len(config.DesiredLogs) > 0 {
 			cm.logger.Info("delivery config with filtering",
 				"type", config.Type,
-				"desired_logs", config.DesiredLogs,
-				"groups", config.Groups)
+				"desired_logs", config.DesiredLogs)
 		} else {
 			cm.logger.Info("delivery config without filtering (all applications will be processed)",
 				"type", config.Type)
