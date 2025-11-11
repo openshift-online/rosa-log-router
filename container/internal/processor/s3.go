@@ -240,7 +240,7 @@ func ConvertLogRecordToEvent(logRecord interface{}, logger *slog.Logger) *models
 	// Use the actual log timestamp for CloudWatch delivery
 	var timestampMS int64
 	if ts, ok := record["timestamp"]; ok {
-		timestampMS = parseTimestamp(ts, logger)
+		timestampMS = models.ProcessTimestampLikeVector(ts, logger)
 	} else {
 		timestampMS = time.Now().UnixMilli()
 	}
@@ -263,34 +263,6 @@ func ConvertLogRecordToEvent(logRecord interface{}, logger *slog.Logger) *models
 	return &models.LogEvent{
 		Timestamp: timestampMS,
 		Message:   message,
-	}
-}
-
-// parseTimestamp parses various timestamp formats
-func parseTimestamp(ts interface{}, logger *slog.Logger) int64 {
-	switch v := ts.(type) {
-	case string:
-		// Handle ISO format timestamps
-		t, err := time.Parse(time.RFC3339, strings.Replace(v, "Z", "+00:00", 1))
-		if err != nil {
-			logger.Warn("failed to parse timestamp string", "timestamp", v, "error", err)
-			return time.Now().UnixMilli()
-		}
-		return t.UnixMilli()
-	case float64:
-		// Check if it's already in milliseconds
-		if v > 1000000000000.0 {
-			return int64(v)
-		}
-		return int64(v * 1000)
-	case int64:
-		if v > 1000000000000 {
-			return v
-		}
-		return v * 1000
-	default:
-		logger.Warn("unknown timestamp type", "type", fmt.Sprintf("%T", ts), "value", ts)
-		return time.Now().UnixMilli()
 	}
 }
 

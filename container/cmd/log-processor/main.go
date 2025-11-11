@@ -236,6 +236,7 @@ func manualInputMode(ctx context.Context, proc *processor.Processor, logger *slo
 	}
 
 	// Process as SQS record
+	// TODO: Need to check on sending data as python has different
 	deliveryStats, err := proc.ProcessSQSRecord(ctx, string(inputData), "manual-input", "manual")
 	if err != nil {
 		return fmt.Errorf("failed to process manual input: %w", err)
@@ -288,20 +289,9 @@ func scanMode(ctx context.Context, proc *processor.Processor, s3Client *s3.Clien
 			s3Event := models.S3Event{
 				Records: []models.S3EventRecord{
 					{
-						S3: struct {
-							Bucket struct {
-								Name string `json:"name"`
-							} `json:"bucket"`
-							Object struct {
-								Key string `json:"key"`
-							} `json:"object"`
-						}{
-							Bucket: struct {
-								Name string `json:"name"`
-							}{Name: cfg.SourceBucket},
-							Object: struct {
-								Key string `json:"key"`
-							}{Key: objectKey},
+						S3: models.S3Info{
+							Bucket: models.S3BucketInfo{Name: cfg.SourceBucket},
+							Object: models.S3ObjectInfo{Key: objectKey},
 						},
 					},
 				},

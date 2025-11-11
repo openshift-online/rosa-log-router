@@ -34,7 +34,7 @@ container/
 │   │   └── s3.go                  # S3-to-S3 delivery
 │   ├── tenant/
 │   │   ├── config.go              # DynamoDB tenant config retrieval
-│   │   ├── filtering.go           # Application filtering (desired_logs + groups)
+│   │   ├── filtering.go           # Application filtering (desired_logs)
 │   │   └── validation.go          # Config validation
 │   └── aws/
 │       └── metrics.go             # CloudWatch metrics publishing
@@ -79,8 +79,7 @@ container/
 
 #### 6. **Tenant Configuration** (`internal/tenant/`)
 - DynamoDB query for tenant delivery configs
-- Application filtering via `desired_logs` and `groups`
-- Group expansion: `API` → `[kube-apiserver, openshift-apiserver]`
+- Application filtering via `desired_logs`
 - Configuration validation per delivery type
 
 ## Building
@@ -237,7 +236,7 @@ docker-compose -f tests/docker-compose.yml down
 - [x] Scan mode (S3 bucket scanning)
 - [x] S3 event parsing (SNS → S3)
 - [x] Tenant config retrieval (DynamoDB)
-- [x] Application filtering (desired_logs + groups)
+- [x] Application filtering (desired_logs)
 - [x] CloudWatch delivery (native batching)
 - [x] S3 delivery (cross-region copy)
 - [x] STS role assumption (double-hop)

@@ -67,20 +67,9 @@ func createSNSMessageWithS3Event(bucketName, objectKey string) string {
 	s3Event := models.S3Event{
 		Records: []models.S3EventRecord{
 			{
-				S3: struct {
-					Bucket struct {
-						Name string `json:"name"`
-					} `json:"bucket"`
-					Object struct {
-						Key string `json:"key"`
-					} `json:"object"`
-				}{
-					Bucket: struct {
-						Name string `json:"name"`
-					}{Name: bucketName},
-					Object: struct {
-						Key string `json:"key"`
-					}{Key: objectKey},
+				S3: models.S3Info{
+					Bucket: models.S3BucketInfo{Name: bucketName},
+					Object: models.S3ObjectInfo{Key: objectKey},
 				},
 			},
 		},
@@ -216,37 +205,15 @@ func TestProcessSQSRecord(t *testing.T) {
 		s3Event := models.S3Event{
 			Records: []models.S3EventRecord{
 				{
-					S3: struct {
-						Bucket struct {
-							Name string `json:"name"`
-						} `json:"bucket"`
-						Object struct {
-							Key string `json:"key"`
-						} `json:"object"`
-					}{
-						Bucket: struct {
-							Name string `json:"name"`
-						}{Name: "bucket1"},
-						Object: struct {
-							Key string `json:"key"`
-						}{Key: "cluster/ns/app/pod/file1.json.gz"},
+					S3: models.S3Info{
+						Bucket: models.S3BucketInfo{Name: "bucket1"},
+						Object: models.S3ObjectInfo{Key: "cluster/ns/app/pod/file1.json.gz"},
 					},
 				},
 				{
-					S3: struct {
-						Bucket struct {
-							Name string `json:"name"`
-						} `json:"bucket"`
-						Object struct {
-							Key string `json:"key"`
-						} `json:"object"`
-					}{
-						Bucket: struct {
-							Name string `json:"name"`
-						}{Name: "bucket2"},
-						Object: struct {
-							Key string `json:"key"`
-						}{Key: "cluster/ns/app/pod/file2.json.gz"},
+					S3: models.S3Info{
+						Bucket: models.S3BucketInfo{Name: "bucket2"},
+						Object: models.S3ObjectInfo{Key: "cluster/ns/app/pod/file2.json.gz"},
 					},
 				},
 			},
@@ -401,20 +368,9 @@ func TestS3EventParsing(t *testing.T) {
 		s3Event := models.S3Event{
 			Records: []models.S3EventRecord{
 				{
-					S3: struct {
-						Bucket struct {
-							Name string `json:"name"`
-						} `json:"bucket"`
-						Object struct {
-							Key string `json:"key"`
-						} `json:"object"`
-					}{
-						Bucket: struct {
-							Name string `json:"name"`
-						}{Name: "test-bucket"},
-						Object: struct {
-							Key string `json:"key"`
-						}{Key: "test/key.json.gz"},
+					S3: models.S3Info{
+						Bucket: models.S3BucketInfo{Name: "test-bucket"},
+						Object: models.S3ObjectInfo{Key: "test/key.json.gz"},
 					},
 				},
 			},

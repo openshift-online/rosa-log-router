@@ -21,37 +21,19 @@ type SQSClientAPI interface {
 
 // ExtractProcessingMetadata extracts processing metadata from SQS record
 func ExtractProcessingMetadata(sqsRecordBody string) (*models.ProcessingMetadata, error) {
-	var messageBody map[string]interface{}
-	if err := json.Unmarshal([]byte(sqsRecordBody), &messageBody); err != nil {
+	var message struct {
+		ProcessingMetadata *models.ProcessingMetadata `json:"processing_metadata"`
+	}
+
+	if err := json.Unmarshal([]byte(sqsRecordBody), &message); err != nil {
 		return &models.ProcessingMetadata{}, nil // Return empty metadata on parse error
 	}
 
-	metadataMap, ok := messageBody["processing_metadata"].(map[string]interface{})
-	if !ok {
+	if message.ProcessingMetadata == nil {
 		return &models.ProcessingMetadata{}, nil
 	}
 
-	metadata := &models.ProcessingMetadata{}
-
-	if offset, ok := metadataMap["offset"].(float64); ok {
-		metadata.Offset = int(offset)
-	}
-
-	if retryCount, ok := metadataMap["retry_count"].(float64); ok {
-		metadata.RetryCount = int(retryCount)
-	}
-
-	if receiptHandle, ok := metadataMap["original_receipt_handle"].(string); ok {
-		metadata.OriginalReceiptHandle = receiptHandle
-	}
-
-	if requeuedAt, ok := metadataMap["requeued_at"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, requeuedAt); err == nil {
-			metadata.RequeuedAt = t
-		}
-	}
-
-	return metadata, nil
+	return message.ProcessingMetadata, nil
 }
 
 // ShouldSkipProcessedEvents skips events that have already been processed based on offset

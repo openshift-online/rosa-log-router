@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/openshift/rosa-log-router/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,7 +98,9 @@ func TestConvertLogRecordToEvent(t *testing.T) {
 		event := ConvertLogRecordToEvent(record, logger)
 
 		require.NotNil(t, event)
-		assert.Greater(t, event.Timestamp, int64(0))
+		ts, ok := event.Timestamp.(int64)
+		require.True(t, ok, "timestamp should be int64")
+		assert.Greater(t, ts, int64(0))
 		assert.Equal(t, "test log message", event.Message)
 	})
 
@@ -330,47 +333,47 @@ invalid json line
 	})
 }
 
-func TestParseTimestamp(t *testing.T) {
+func TestProcessTimestampLikeVector(t *testing.T) {
 	logger := getTestLogger()
 
 	t.Run("parses RFC3339 string timestamp", func(t *testing.T) {
-		ts := parseTimestamp("2024-01-01T12:00:00Z", logger)
+		ts := models.ProcessTimestampLikeVector("2024-01-01T12:00:00Z", logger)
 		assert.Greater(t, ts, int64(0))
 		// 2024-01-01 12:00:00 UTC = 1704110400 seconds = 1704110400000 milliseconds
 		assert.Equal(t, int64(1704110400000), ts)
 	})
 
 	t.Run("parses RFC3339 with timezone offset", func(t *testing.T) {
-		ts := parseTimestamp("2024-01-01T12:00:00-05:00", logger)
+		ts := models.ProcessTimestampLikeVector("2024-01-01T12:00:00-05:00", logger)
 		assert.Greater(t, ts, int64(0))
 		// Should be 5 hours later in milliseconds
 		assert.Equal(t, int64(1704128400000), ts)
 	})
 
 	t.Run("parses numeric timestamp in seconds", func(t *testing.T) {
-		ts := parseTimestamp(float64(1704110400), logger)
+		ts := models.ProcessTimestampLikeVector(float64(1704110400), logger)
 		assert.Equal(t, int64(1704110400000), ts) // Converted to milliseconds
 	})
 
 	t.Run("parses numeric timestamp in milliseconds", func(t *testing.T) {
-		ts := parseTimestamp(float64(1704110400000), logger)
+		ts := models.ProcessTimestampLikeVector(float64(1704110400000), logger)
 		assert.Equal(t, int64(1704110400000), ts)
 	})
 
 	t.Run("parses integer timestamp in seconds", func(t *testing.T) {
-		ts := parseTimestamp(int64(1704110400), logger)
+		ts := models.ProcessTimestampLikeVector(int64(1704110400), logger)
 		assert.Equal(t, int64(1704110400000), ts)
 	})
 
 	t.Run("returns current time for invalid timestamp format", func(t *testing.T) {
-		ts := parseTimestamp("invalid-timestamp", logger)
+		ts := models.ProcessTimestampLikeVector("invalid-timestamp", logger)
 		// Should return current time as fallback, not 0
 		assert.Greater(t, ts, int64(0))
 		assert.Greater(t, ts, int64(1704110400000)) // After 2024-01-01
 	})
 
 	t.Run("returns current time for nil timestamp", func(t *testing.T) {
-		ts := parseTimestamp(nil, logger)
+		ts := models.ProcessTimestampLikeVector(nil, logger)
 		// Should return current time as fallback, not 0
 		assert.Greater(t, ts, int64(0))
 		assert.Greater(t, ts, int64(1704110400000)) // After 2024-01-01
@@ -378,23 +381,23 @@ func TestParseTimestamp(t *testing.T) {
 
 	t.Run("handles very large timestamps", func(t *testing.T) {
 		// Year 2100 timestamp
-		ts := parseTimestamp(float64(4102444800000), logger)
+		ts := models.ProcessTimestampLikeVector(float64(4102444800000), logger)
 		assert.Equal(t, int64(4102444800000), ts)
 	})
 
 	t.Run("handles edge case: timestamp boundary between seconds and milliseconds", func(t *testing.T) {
 		// 999999999999 is just under the seconds/milliseconds threshold (< 1000000000000)
 		// so it's treated as seconds and multiplied by 1000
-		ts := parseTimestamp(float64(999999999999), logger)
+		ts := models.ProcessTimestampLikeVector(float64(999999999999), logger)
 		assert.Equal(t, int64(999999999999000), ts) // Converted to milliseconds
 
 		// 1000000000000 equals the threshold but condition uses >, not >=
 		// so it's still treated as seconds
-		ts = parseTimestamp(float64(1000000000000), logger)
+		ts = models.ProcessTimestampLikeVector(float64(1000000000000), logger)
 		assert.Equal(t, int64(1000000000000000), ts) // Converted to milliseconds
 
 		// 1000000000001 is above the threshold
-		ts = parseTimestamp(float64(1000000000001), logger)
+		ts = models.ProcessTimestampLikeVector(float64(1000000000001), logger)
 		assert.Equal(t, int64(1000000000001), ts) // Kept as milliseconds
 	})
 }
