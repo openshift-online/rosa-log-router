@@ -1,3 +1,4 @@
+// Package models defines data structures, error types, and configuration for the log processor.
 package models
 
 import (

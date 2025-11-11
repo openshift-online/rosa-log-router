@@ -1,3 +1,4 @@
+// Package aws provides AWS service integrations for metrics and monitoring.
 package aws
 
 import (

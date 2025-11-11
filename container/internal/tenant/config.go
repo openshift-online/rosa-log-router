@@ -1,3 +1,4 @@
+// Package tenant handles tenant configuration retrieval, validation, and log filtering.
 package tenant
 
 import (
