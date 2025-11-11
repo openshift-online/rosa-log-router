@@ -16,10 +16,10 @@ import (
 
 // Mock CloudWatch Logs client for testing
 type mockCloudWatchLogsClient struct {
-	createLogGroupFunc    func(ctx context.Context, params *cloudwatchlogs.CreateLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogGroupOutput, error)
-	createLogStreamFunc   func(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error)
-	putLogEventsFunc      func(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error)
-	describeLogGroupsFunc func(ctx context.Context, params *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
+	createLogGroupFunc     func(ctx context.Context, params *cloudwatchlogs.CreateLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogGroupOutput, error)
+	createLogStreamFunc    func(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error)
+	putLogEventsFunc       func(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error)
+	describeLogGroupsFunc  func(ctx context.Context, params *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
 	describeLogStreamsFunc func(ctx context.Context, params *cloudwatchlogs.DescribeLogStreamsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogStreamsOutput, error)
 }
 
@@ -89,9 +89,9 @@ func TestDeliverEventsInBatchesMaxEvents(t *testing.T) {
 		"test-group",
 		"test-stream",
 		events,
-		1000, // maxEventsPerBatch
+		1000,    // maxEventsPerBatch
 		1037576, // maxBytesPerBatch
-		5, // timeoutSeconds
+		5,       // timeoutSeconds
 		logger,
 	)
 
@@ -122,7 +122,7 @@ func TestDeliverEventsInBatchesPartialSuccess(t *testing.T) {
 
 			return &cloudwatchlogs.PutLogEventsOutput{
 				RejectedLogEventsInfo: &types.RejectedLogEventsInfo{
-					TooOldLogEventEndIndex: tooOldIndex,
+					TooOldLogEventEndIndex:   tooOldIndex,
 					TooNewLogEventStartIndex: tooNewIndex,
 				},
 			}, nil

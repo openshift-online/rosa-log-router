@@ -113,38 +113,38 @@ func TestS3DelivererDestinationKeyFormatting(t *testing.T) {
 
 func TestS3DelivererErrorClassification(t *testing.T) {
 	testCases := []struct {
-		name            string
-		errorMsg        string
+		name             string
+		errorMsg         string
 		isNonRecoverable bool
 	}{
 		{
-			name:            "no_such_bucket",
-			errorMsg:        "NoSuchBucket: The specified bucket does not exist",
+			name:             "no_such_bucket",
+			errorMsg:         "NoSuchBucket: The specified bucket does not exist",
 			isNonRecoverable: true,
 		},
 		{
-			name:            "access_denied",
-			errorMsg:        "AccessDenied: Access Denied",
+			name:             "access_denied",
+			errorMsg:         "AccessDenied: Access Denied",
 			isNonRecoverable: true,
 		},
 		{
-			name:            "no_such_key",
-			errorMsg:        "NoSuchKey: The specified key does not exist",
+			name:             "no_such_key",
+			errorMsg:         "NoSuchKey: The specified key does not exist",
 			isNonRecoverable: true,
 		},
 		{
-			name:            "throttling_error",
-			errorMsg:        "SlowDown: Please reduce your request rate",
+			name:             "throttling_error",
+			errorMsg:         "SlowDown: Please reduce your request rate",
 			isNonRecoverable: false,
 		},
 		{
-			name:            "service_unavailable",
-			errorMsg:        "ServiceUnavailable: Service is temporarily unavailable",
+			name:             "service_unavailable",
+			errorMsg:         "ServiceUnavailable: Service is temporarily unavailable",
 			isNonRecoverable: false,
 		},
 		{
-			name:            "network_error",
-			errorMsg:        "RequestTimeout: Your socket connection to the server was not read",
+			name:             "network_error",
+			errorMsg:         "RequestTimeout: Your socket connection to the server was not read",
 			isNonRecoverable: false,
 		},
 	}
@@ -393,13 +393,13 @@ func TestS3DelivererMetadataDirective(t *testing.T) {
 func TestS3DelivererSessionNameFormat(t *testing.T) {
 	// Test that session names follow the expected format
 	testCases := []struct {
-		name            string
-		expectedPrefix  string
+		name              string
+		expectedPrefix    string
 		containsTimestamp bool
 	}{
 		{
-			name:            "s3_delivery_session",
-			expectedPrefix:  "S3LogDelivery-",
+			name:              "s3_delivery_session",
+			expectedPrefix:    "S3LogDelivery-",
 			containsTimestamp: true,
 		},
 	}

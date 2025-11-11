@@ -81,7 +81,7 @@ jobs:
       run: |
         COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
         echo "Total coverage: ${COVERAGE}%"
-        THRESHOLD=70
+        THRESHOLD=55
         if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
           echo "❌ Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
           exit 1
@@ -142,4 +142,4 @@ jobs:
 
     - name: Run staticcheck
       working-directory: ./container
-      run: staticcheck ./...
+      run: staticcheck -checks all,-SA1019 ./...

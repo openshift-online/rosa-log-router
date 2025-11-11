@@ -268,11 +268,11 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 			currentRetryCount int
 			expectedDelay     int32
 		}{
-			{0, 2},   // 2^1 = 2 seconds
-			{1, 4},   // 2^2 = 4 seconds
-			{2, 8},   // 2^3 = 8 seconds
-			{3, 16},  // 2^4 = 16 seconds
-			{4, 32},  // 2^5 = 32 seconds
+			{0, 2},    // 2^1 = 2 seconds
+			{1, 4},    // 2^2 = 4 seconds
+			{2, 8},    // 2^3 = 8 seconds
+			{3, 16},   // 2^4 = 16 seconds
+			{4, 32},   // 2^5 = 32 seconds
 			{10, 900}, // Capped at 900 (15 minutes)
 		}
 

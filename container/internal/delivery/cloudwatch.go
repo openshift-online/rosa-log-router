@@ -45,9 +45,9 @@ func NewCloudWatchDeliverer(stsClient *sts.Client, centralRoleArn string, endpoi
 		centralRoleArn:    centralRoleArn,
 		endpointURL:       endpointURL,
 		logger:            logger,
-		maxEventsPerBatch: 1000,      // CloudWatch limit
-		maxBytesPerBatch:  1037576,   // ~1MB CloudWatch limit
-		timeoutSeconds:    5,          // Match Vector's timeout
+		maxEventsPerBatch: 1000,    // CloudWatch limit
+		maxBytesPerBatch:  1037576, // ~1MB CloudWatch limit
+		timeoutSeconds:    5,       // Match Vector's timeout
 	}
 }
 

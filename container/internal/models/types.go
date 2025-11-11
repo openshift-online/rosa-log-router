@@ -10,7 +10,7 @@ import (
 type TenantInfo struct {
 	ClusterID   string `json:"cluster_id"`
 	Namespace   string `json:"namespace"`
-	TenantID    string `json:"tenant_id"`   // Same as namespace for DynamoDB lookup
+	TenantID    string `json:"tenant_id"` // Same as namespace for DynamoDB lookup
 	Application string `json:"application"`
 	PodName     string `json:"pod_name"`
 	Environment string `json:"environment"`
@@ -38,10 +38,10 @@ type LogEvent struct {
 
 // ProcessingMetadata contains SQS message processing metadata
 type ProcessingMetadata struct {
-	Offset                 int       `json:"offset"`
-	RetryCount             int       `json:"retry_count"`
-	OriginalReceiptHandle  string    `json:"original_receipt_handle"`
-	RequeuedAt             time.Time `json:"requeued_at,omitempty"`
+	Offset                int       `json:"offset"`
+	RetryCount            int       `json:"retry_count"`
+	OriginalReceiptHandle string    `json:"original_receipt_handle"`
+	RequeuedAt            time.Time `json:"requeued_at,omitempty"`
 }
 
 // DeliveryStats tracks delivery success/failure statistics
@@ -77,13 +77,13 @@ type SNSMessage struct {
 
 // Vector metadata fields that should be excluded when creating fallback messages
 var VectorMetadataFields = map[string]bool{
-	"cluster_id":        true,
-	"namespace":         true,
-	"application":       true,
-	"pod_name":          true,
-	"ingest_timestamp":  true,
-	"timestamp":         true,
-	"kubernetes":        true,
+	"cluster_id":       true,
+	"namespace":        true,
+	"application":      true,
+	"pod_name":         true,
+	"ingest_timestamp": true,
+	"timestamp":        true,
+	"kubernetes":       true,
 }
 
 // Application group definitions for filtering
@@ -108,17 +108,17 @@ var ApplicationGroups = map[string][]string{
 
 // Config represents the application configuration
 type Config struct {
-	TenantConfigTable              string
-	MaxBatchSize                   int
-	RetryAttempts                  int
-	CentralLogDistributionRoleArn  string
-	SQSQueueURL                    string
-	AWSRegion                      string
-	ExecutionMode                  string // lambda, sqs, manual, scan
-	SourceBucket                   string // For scan mode
-	ScanInterval                   int    // For scan mode
-	S3UsePathStyle                 bool   // Use path-style S3 URLs (for LocalStack; defaults to false for AWS virtual-hosted style)
-	AWSEndpointURL                 string // AWS endpoint URL (for LocalStack/testing; empty for real AWS)
+	TenantConfigTable             string
+	MaxBatchSize                  int
+	RetryAttempts                 int
+	CentralLogDistributionRoleArn string
+	SQSQueueURL                   string
+	AWSRegion                     string
+	ExecutionMode                 string // lambda, sqs, manual, scan
+	SourceBucket                  string // For scan mode
+	ScanInterval                  int    // For scan mode
+	S3UsePathStyle                bool   // Use path-style S3 URLs (for LocalStack; defaults to false for AWS virtual-hosted style)
+	AWSEndpointURL                string // AWS endpoint URL (for LocalStack/testing; empty for real AWS)
 }
 
 // DefaultConfig returns a configuration with default values
