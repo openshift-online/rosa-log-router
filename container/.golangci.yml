@@ -19,8 +19,3 @@ issues:
       linters:
         - staticcheck
       text: "SA1019"
-
-run:
-  timeout: 5m
-  skip-dirs:
-    - vendor
