@@ -21,11 +21,6 @@ generate_hcl "main.tf" {
 
     data "aws_caller_identity" "current" {}
 
-    resource "aws_ecr_pull_through_cache_rule" "quay" {
-      ecr_repository_prefix = "quay"
-      upstream_registry_url = "quay.io"
-    }
-
     resource "aws_ecr_replication_configuration" "ecr_replication" {
       replication_configuration {
         rule {
@@ -46,7 +41,7 @@ generate_hcl "main.tf" {
       labels   = ["aws_ecr_repository", "rosa-log-router-api-${region.value}"]
       attributes = {
         provider = tm_hcl_expression("aws.${region.value}")
-        name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+        name     = "rosa-log-router-api"
       }
     }
 
@@ -56,7 +51,7 @@ generate_hcl "main.tf" {
       labels   = ["aws_ecr_repository", "rosa-log-router-authorizer-${region.value}"]
       attributes = {
         provider = tm_hcl_expression("aws.${region.value}")
-        name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+        name     = "rosa-log-router-authorizer"
       }
     }
 
@@ -66,10 +61,9 @@ generate_hcl "main.tf" {
       labels   = ["aws_ecr_repository", "rosa-log-router-processor-${region.value}"]
       attributes = {
         provider = tm_hcl_expression("aws.${region.value}")
-        name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+        name     = "rosa-log-router-processor"
       }
     }
-
   }
 }
 
