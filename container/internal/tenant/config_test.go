@@ -54,7 +54,7 @@ func TestGetTenantDeliveryConfigsSuccess(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	configs, err := manager.GetTenantDeliveryConfigs(ctx, "acme-corp")
+	configs, err := manager.GetEnabledDeliveryConfigs(ctx, "acme-corp")
 
 	require.NoError(t, err)
 	assert.Len(t, configs, 1)
@@ -88,7 +88,7 @@ func TestGetTenantDeliveryConfigsNotFound(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := manager.GetTenantDeliveryConfigs(ctx, "nonexistent-tenant")
+	_, err := manager.GetEnabledDeliveryConfigs(ctx, "nonexistent-tenant")
 
 	require.Error(t, err)
 	assert.IsType(t, &models.TenantNotFoundError{}, err)
@@ -121,7 +121,7 @@ func TestGetTenantDeliveryConfigsMissingRequiredFields(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := manager.GetTenantDeliveryConfigs(ctx, "missing-fields")
+	_, err := manager.GetEnabledDeliveryConfigs(ctx, "missing-fields")
 
 	require.Error(t, err)
 	assert.IsType(t, &models.TenantNotFoundError{}, err)
@@ -155,7 +155,7 @@ func TestGetTenantDeliveryConfigsDisabledFiltered(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := manager.GetTenantDeliveryConfigs(ctx, "disabled-tenant")
+	_, err := manager.GetEnabledDeliveryConfigs(ctx, "disabled-tenant")
 
 	require.Error(t, err)
 	assert.IsType(t, &models.TenantNotFoundError{}, err)
@@ -179,7 +179,7 @@ func TestGetTenantDeliveryConfigsEmptyTenantID(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := manager.GetTenantDeliveryConfigs(ctx, "")
+	_, err := manager.GetEnabledDeliveryConfigs(ctx, "")
 
 	require.Error(t, err)
 	assert.IsType(t, &models.TenantNotFoundError{}, err)
@@ -222,7 +222,7 @@ func TestGetTenantDeliveryConfigsMultipleConfigs(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	configs, err := manager.GetTenantDeliveryConfigs(ctx, "multi-tenant")
+	configs, err := manager.GetEnabledDeliveryConfigs(ctx, "multi-tenant")
 
 	require.NoError(t, err)
 	assert.Len(t, configs, 2)
@@ -272,7 +272,7 @@ func TestGetTenantDeliveryConfigsDefaultEnabled(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := manager.GetTenantDeliveryConfigs(ctx, "default-disabled")
+	_, err := manager.GetEnabledDeliveryConfigs(ctx, "default-disabled")
 
 	// Should return error because config defaults to disabled
 	require.Error(t, err)

@@ -56,11 +56,15 @@ func NewProcessor(
 
 // HandleLambdaEvent processes SQS messages from Lambda
 func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
-	batchItemFailures := []events.SQSBatchItemFailure{}
-	successfulRecords := 0
-	failedRecords := 0
-	totalSuccessfulDeliveries := 0
-	totalFailedDeliveries := 0
+	var (
+		batchItemFailures = []events.SQSBatchItemFailure{}
+
+		successfulRecords         = 0
+		failedRecords             = 0
+		undeliverableRecords      = 0
+		totalSuccessfulDeliveries = 0
+		totalFailedDeliveries     = 0
+	)
 
 	p.logger.Info("processing SQS messages", "message_count", len(event.Records))
 
@@ -72,7 +76,7 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 			p.logger.Warn("non-recoverable error processing record, message will be removed from queue",
 				"message_id", record.MessageId,
 				"error", err)
-			successfulRecords++ // Count as successful to remove from queue
+			undeliverableRecords++
 		} else if err != nil {
 			// Recoverable errors should be retried
 			p.logger.Error("recoverable error processing record, message will be retried",
@@ -95,6 +99,7 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 	p.logger.Info("processing complete",
 		"successful_records", successfulRecords,
 		"failed_records", failedRecords,
+		"undeliverable_records", undeliverableRecords,
 		"successful_deliveries", totalSuccessfulDeliveries,
 		"failed_deliveries", totalFailedDeliveries)
 
@@ -155,7 +160,7 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 	}
 
 	// Get all enabled delivery configurations for this tenant
-	deliveryConfigs, err := p.tenantConfig.GetTenantDeliveryConfigs(ctx, tenantInfo.TenantID)
+	deliveryConfigs, err := p.tenantConfig.GetEnabledDeliveryConfigs(ctx, tenantInfo.TenantID)
 	if err != nil {
 		return err
 	}
@@ -164,16 +169,8 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 	for _, deliveryConfig := range deliveryConfigs {
 		deliveryType := deliveryConfig.Type
 
-		// Check if this delivery configuration should be processed
-		if !tenant.ShouldProcessDeliveryConfig(deliveryConfig) {
-			p.logger.Info("skipping delivery because it is disabled",
-				"tenant_id", tenantInfo.TenantID,
-				"delivery_type", deliveryType)
-			continue
-		}
-
-		// Check if this application should be processed based on THIS config's desired_logs filtering
-		if !tenant.ShouldProcessApplication(deliveryConfig, tenantInfo.Application, p.logger) {
+		// Check if this application should be processed based on this config's desired_logs filtering
+		if !deliveryConfig.ApplicationEnabled(tenantInfo.Application) {
 			p.logger.Info("skipping delivery for application due to desired_logs filtering",
 				"delivery_type", deliveryType,
 				"application", tenantInfo.Application)

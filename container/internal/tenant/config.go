@@ -35,8 +35,8 @@ func NewConfigManager(client DynamoDBQueryAPI, tableName string, logger *slog.Lo
 	}
 }
 
-// GetTenantDeliveryConfigs retrieves all enabled delivery configurations for a tenant
-func (cm *ConfigManager) GetTenantDeliveryConfigs(ctx context.Context, tenantID string) ([]*models.DeliveryConfig, error) {
+// GetEnabledDeliveryConfigs retrieves all enabled delivery configurations for a tenant
+func (cm *ConfigManager) GetEnabledDeliveryConfigs(ctx context.Context, tenantID string) ([]*models.DeliveryConfig, error) {
 	// Handle empty tenant ID (from malformed S3 paths)
 	if tenantID == "" {
 		cm.logger.Warn("invalid tenant_id (empty string) for DynamoDB lookup - indicates malformed S3 path")

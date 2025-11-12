@@ -49,8 +49,3 @@ func validateS3Config(config *models.DeliveryConfig, tenantID string) error {
 
 	return nil
 }
-
-// ShouldProcessDeliveryConfig checks if the delivery configuration should be processed based on enabled status
-func ShouldProcessDeliveryConfig(config *models.DeliveryConfig) bool {
-	return config.Enabled
-}
