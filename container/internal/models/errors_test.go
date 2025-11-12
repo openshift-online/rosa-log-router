@@ -29,6 +29,9 @@ func TestNonRecoverableError(t *testing.T) {
 
 		regularErr := errors.New("regular error")
 		assert.False(t, IsNonRecoverable(regularErr))
+
+		var nilErr error = nil
+		assert.False(t, IsNonRecoverable(nilErr))
 	})
 }
 

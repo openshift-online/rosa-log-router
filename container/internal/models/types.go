@@ -3,6 +3,7 @@ package models
 import (
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -27,6 +28,18 @@ type DeliveryConfig struct {
 	LogGroupName           string   `json:"log_group_name,omitempty" dynamodbav:"log_group_name,omitempty"`
 	BucketName             string   `json:"bucket_name,omitempty" dynamodbav:"bucket_name,omitempty"`
 	BucketPrefix           string   `json:"bucket_prefix,omitempty" dynamodbav:"bucket_prefix,omitempty"`
+}
+
+func (c *DeliveryConfig) ApplicationEnabled(applicationName string) bool {
+	// No desired logs specified - process all applications
+	if len(c.DesiredLogs) == 0 {
+		return true
+	}
+	if len(c.DesiredLogs) == 1 && c.DesiredLogs[0] == "" {
+		return true
+	}
+
+	return slices.Contains(c.DesiredLogs, applicationName)
 }
 
 // LogEvent represents a CloudWatch Logs event
