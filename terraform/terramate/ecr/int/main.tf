@@ -2,10 +2,6 @@
 
 data "aws_caller_identity" "current" {
 }
-resource "aws_ecr_pull_through_cache_rule" "quay" {
-  ecr_repository_prefix = "quay"
-  upstream_registry_url = "quay.io"
-}
 resource "aws_ecr_replication_configuration" "ecr_replication" {
   replication_configuration {
     rule {
@@ -20,62 +16,62 @@ resource "aws_ecr_replication_configuration" "ecr_replication" {
   }
 }
 resource "aws_ecr_repository" "rosa-log-router-api-ap-northeast-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+  name     = "rosa-log-router-api"
   provider = aws.ap-northeast-2
 }
 resource "aws_ecr_repository" "rosa-log-router-api-ap-southeast-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+  name     = "rosa-log-router-api"
   provider = aws.ap-southeast-1
 }
 resource "aws_ecr_repository" "rosa-log-router-api-us-east-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+  name     = "rosa-log-router-api"
   provider = aws.us-east-1
 }
 resource "aws_ecr_repository" "rosa-log-router-api-us-east-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+  name     = "rosa-log-router-api"
   provider = aws.us-east-2
 }
 resource "aws_ecr_repository" "rosa-log-router-api-us-west-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-api"
+  name     = "rosa-log-router-api"
   provider = aws.us-west-2
 }
 resource "aws_ecr_repository" "rosa-log-router-authorizer-ap-northeast-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+  name     = "rosa-log-router-authorizer"
   provider = aws.ap-northeast-2
 }
 resource "aws_ecr_repository" "rosa-log-router-authorizer-ap-southeast-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+  name     = "rosa-log-router-authorizer"
   provider = aws.ap-southeast-1
 }
 resource "aws_ecr_repository" "rosa-log-router-authorizer-us-east-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+  name     = "rosa-log-router-authorizer"
   provider = aws.us-east-1
 }
 resource "aws_ecr_repository" "rosa-log-router-authorizer-us-east-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+  name     = "rosa-log-router-authorizer"
   provider = aws.us-east-2
 }
 resource "aws_ecr_repository" "rosa-log-router-authorizer-us-west-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-authorizer"
+  name     = "rosa-log-router-authorizer"
   provider = aws.us-west-2
 }
 resource "aws_ecr_repository" "rosa-log-router-processor-ap-northeast-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+  name     = "rosa-log-router-processor"
   provider = aws.ap-northeast-2
 }
 resource "aws_ecr_repository" "rosa-log-router-processor-ap-southeast-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+  name     = "rosa-log-router-processor"
   provider = aws.ap-southeast-1
 }
 resource "aws_ecr_repository" "rosa-log-router-processor-us-east-1" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+  name     = "rosa-log-router-processor"
   provider = aws.us-east-1
 }
 resource "aws_ecr_repository" "rosa-log-router-processor-us-east-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+  name     = "rosa-log-router-processor"
   provider = aws.us-east-2
 }
 resource "aws_ecr_repository" "rosa-log-router-processor-us-west-2" {
-  name     = "quay/redhat-services-prod/rosa-log-router-tenant/rosa-log-router-processor"
+  name     = "rosa-log-router-processor"
   provider = aws.us-west-2
 }
