@@ -1434,13 +1434,13 @@ class TestCloudWatchBatchOptimization:
         """Test 5-second timeout vs size-based batch sending."""
         mock_logs_client = Mock()
         mock_logs_client.put_log_events.return_value = {'rejectedLogEventsInfo': {}}
-        
+
         # Create a small number of events that won't trigger size/count limits
         events = [
             {'timestamp': 1640995200000, 'message': 'Event 1'},
             {'timestamp': 1640995200001, 'message': 'Event 2'},
         ]
-        
+
         # Mock time.time to simulate timeout
         with patch('time.time') as mock_time:
             # Use a side effect that simulates timeout after the first few calls
@@ -1452,9 +1452,9 @@ class TestCloudWatchBatchOptimization:
                     return 0  # Initial calls return 0
                 else:
                     return 6  # All subsequent calls return 6 (past timeout)
-            
+
             mock_time.side_effect = time_side_effect
-            
+
             deliver_events_in_batches(
                 logs_client=mock_logs_client,
                 log_group='test-group',
@@ -1464,11 +1464,19 @@ class TestCloudWatchBatchOptimization:
                 max_bytes_per_batch=1037576,
                 timeout_secs=5  # 5 second timeout
             )
-        
-        # Should have sent the batch due to timeout
-        assert mock_logs_client.put_log_events.call_count >= 1
-        sent_events = mock_logs_client.put_log_events.call_args[1]['logEvents']
-        assert len(sent_events) == 2
+
+        # Should have sent 2 batches due to timeout: first with Event 1, then final with Event 2
+        assert mock_logs_client.put_log_events.call_count == 2
+
+        # Verify both events were sent across the two batches
+        all_sent_events = []
+        for call in mock_logs_client.put_log_events.call_args_list:
+            batch_events = call[1]['logEvents']
+            all_sent_events.extend(batch_events)
+
+        assert len(all_sent_events) == 2
+        assert all_sent_events[0]['message'] == 'Event 1'
+        assert all_sent_events[1]['message'] == 'Event 2'
     
     def test_optimal_batch_splitting(self):
         """Test intelligent batch splitting when approaching limits."""
