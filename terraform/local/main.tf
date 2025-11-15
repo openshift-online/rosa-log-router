@@ -194,8 +194,11 @@ resource "aws_iam_role_policy" "central_lambda_log_processor_policy" {
   })
 }
 
-# Lambda function - supports both zip file and container image
+# Lambda function - supports zip file and container images
 # Container images require LocalStack Pro
+# Supports two deployment modes:
+#   1. ECR-based (use_container_image=true): Uses ECR repository with lambda_image_tag
+#   2. Simple testing (use_container): Uses local tags (pyzip, py, go)
 resource "aws_lambda_function" "central_log_distributor" {
   count    = var.deploy_lambda ? 1 : 0
   provider = aws.central
@@ -203,17 +206,25 @@ resource "aws_lambda_function" "central_log_distributor" {
   function_name = "${local.project_name}-${local.environment}-log-distributor"
   role          = aws_iam_role.central_lambda_execution_role.arn
 
-  # Conditional: use container image or zip file
-  package_type = var.use_container_image ? "Image" : "Zip"
+  # Determine package type
+  # ECR mode (use_container_image=true): always Image
+  # Simple mode: Zip for pyzip, Image for py/go
+  package_type = var.use_container_image ? "Image" : (var.use_container == "pyzip" ? "Zip" : "Image")
 
-  # For zip deployment
-  filename         = var.use_container_image ? null : var.lambda_zip_path
-  source_code_hash = var.use_container_image ? null : filebase64sha256(var.lambda_zip_path)
-  handler          = var.use_container_image ? null : "log_processor.lambda_handler"
-  runtime          = var.use_container_image ? null : "python3.13"
+  # Zip file configuration (only for pyzip in simple mode)
+  filename         = !var.use_container_image && var.use_container == "pyzip" ? var.lambda_zip_path : null
+  source_code_hash = !var.use_container_image && var.use_container == "pyzip" ? filebase64sha256(var.lambda_zip_path) : null
+  handler          = !var.use_container_image && var.use_container == "pyzip" ? "log_processor.lambda_handler" : null
+  runtime          = !var.use_container_image && var.use_container == "pyzip" ? "python3.13" : null
 
-  # For container image deployment
-  image_uri = var.use_container_image ? "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}" : null
+  # Container image URI
+  # ECR mode: use ECR repository URL
+  # Simple mode: use local tags (py or go)
+  image_uri = var.use_container_image ? "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}" : (
+    var.use_container == "py" ? "log-processor:local-py" : (
+      var.use_container == "go" ? "log-processor:local-go" : null
+    )
+  )
 
   timeout     = 300
   memory_size = 512
