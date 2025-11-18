@@ -126,7 +126,7 @@ curl -sI https://<bucket_name>.s3.amazonaws.com
   x-amz-request-id: STETV4PW25TJQRYQ
   ```
 
-- **HTTP 403 Forbidden**: Bucket exists but no access - check the `x-amz-bucket-region` header
+- **HTTP 403 Forbidden**: Bucket exists but no access (This is expected) - check the `x-amz-bucket-region` header
   ```
   HTTP/1.1 403 Forbidden
   x-amz-bucket-region: us-east-2
