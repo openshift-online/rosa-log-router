@@ -6,6 +6,7 @@ stack {
 globals "aws" {
   regions = [
     "ap-southeast-1",
+    "ap-southeast-6",
     "mx-central-1",
     "us-east-1",
     "us-east-2",
@@ -62,6 +63,16 @@ generate_hcl "main.tf" {
       attributes = {
         provider = tm_hcl_expression("aws.${region.value}")
         name     = "rosa-log-router-processor"
+      }
+    }
+
+    tm_dynamic "resource" {
+      for_each = global.aws.regions
+      iterator = region
+      labels   = ["aws_ecr_repository", "rosa-log-router-processor-go-${region.value}"]
+      attributes = {
+        provider = tm_hcl_expression("aws.${region.value}")
+        name     = "rosa-log-router-processor-go"
       }
     }
   }
