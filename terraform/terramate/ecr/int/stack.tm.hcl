@@ -13,6 +13,12 @@ globals "aws" {
   ]
   # In case of resources detection, terraform still need to have the provider.
   delete_regions = []
+  default_tags = {
+    "app-code"               = "OSD-002"
+    "cost-center"            = "148"
+    "service-phase"          = "dev"
+    "managed_by_integration" = "terraform-repo"
+  }
 }
 
 generate_hcl "main.tf" {
@@ -105,9 +111,12 @@ generate_hcl "config.tf" {
       for_each = tm_concat(global.aws.regions, global.aws.delete_regions)
       iterator = region
       labels   = ["aws"]
-      attributes = {
+      content {
         alias  = region.value
         region = region.value
+        default_tags {
+          tags = global.aws.default_tags
+        }
       }
     }
   }
