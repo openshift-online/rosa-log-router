@@ -14,6 +14,16 @@ import (
 const (
 	// MetricsNamespace is the CloudWatch namespace for log forwarding metrics
 	MetricsNamespace = "HCPLF/LogForwarding"
+
+	deliverySuccessLabel = "successful_delivery"
+	deliveryFailureLabel = "failed_delivery"
+	deliveryLatencyLabel = "delivery_latency"
+
+	cloudwatchSuccessfulEventsLabel = "successful_events"
+	cloudwatchFailedEventsLabel     = "failed_events"
+
+	MethodCloudwatch = "cloudwatch"
+	MethodS3         = "s3"
 )
 
 // MetricsPublisher handles publishing metrics to CloudWatch
@@ -81,21 +91,34 @@ func (p *MetricsPublisher) PushMetrics(ctx context.Context, tenantID, method str
 // PushCloudWatchDeliveryMetrics is a convenience method for CloudWatch delivery metrics
 func (p *MetricsPublisher) PushCloudWatchDeliveryMetrics(ctx context.Context, tenantID string, successfulEvents, failedEvents int) {
 	metrics := map[string]float64{
-		"successful_events": float64(successfulEvents),
-		"failed_events":     float64(failedEvents),
+		cloudwatchSuccessfulEventsLabel: float64(successfulEvents),
+		cloudwatchFailedEventsLabel:     float64(failedEvents),
 	}
 
 	// Only add successful_delivery if there were events
 	if successfulEvents > 0 || failedEvents > 0 {
 		if failedEvents == 0 {
-			metrics["successful_delivery"] = 1
+			metrics[deliverySuccessLabel] = 1
 		} else {
-			metrics["failed_delivery"] = 1
+			metrics[deliveryFailureLabel] = 1
 		}
 	}
 
-	if err := p.PushMetrics(ctx, tenantID, "cloudwatch", metrics); err != nil {
-		p.logger.Error("failed to write metrics to CloudWatch for CloudWatch delivery",
+	if err := p.PushMetrics(ctx, tenantID, MethodCloudwatch, metrics); err != nil {
+		p.logger.Error("failed to write metrics to central CloudWatch instance regarding customer CloudWatch delivery",
+			"tenant_id", tenantID,
+			"error", err)
+	}
+}
+
+// PushCloudWatchLatencyMetrics is a convenience method for CloudWatch latency metrics
+func (p *MetricsPublisher) PushCloudWatchLatencyMetrics(ctx context.Context, tenantID string, latencyMS int64) {
+	metrics := map[string]float64{
+		deliveryLatencyLabel: float64(latencyMS),
+	}
+
+	if err := p.PushMetrics(ctx, tenantID, MethodCloudwatch, metrics); err != nil {
+		p.logger.Error("failed to write metrics to central CloudWatch instance regarding customer CloudWatch delivery latency",
 			"tenant_id", tenantID,
 			"error", err)
 	}
@@ -105,13 +128,26 @@ func (p *MetricsPublisher) PushCloudWatchDeliveryMetrics(ctx context.Context, te
 func (p *MetricsPublisher) PushS3DeliveryMetrics(ctx context.Context, tenantID string, success bool) {
 	var metrics map[string]float64
 	if success {
-		metrics = map[string]float64{"successful_delivery": 1}
+		metrics = map[string]float64{deliverySuccessLabel: 1}
 	} else {
-		metrics = map[string]float64{"failed_delivery": 1}
+		metrics = map[string]float64{deliveryFailureLabel: 1}
 	}
 
-	if err := p.PushMetrics(ctx, tenantID, "s3", metrics); err != nil {
-		p.logger.Error("failed to write metrics to CloudWatch for S3 delivery",
+	if err := p.PushMetrics(ctx, tenantID, MethodS3, metrics); err != nil {
+		p.logger.Error("failed to write metrics to central CloudWatch instance regarding customer S3 delivery",
+			"tenant_id", tenantID,
+			"error", err)
+	}
+}
+
+// PushS3LatencyMetrics is a convenience method for S3 latency metrics
+func (p *MetricsPublisher) PushS3LatencyMetrics(ctx context.Context, tenantID string, latencyMS int64) {
+	metrics := map[string]float64{
+		deliveryLatencyLabel: float64(latencyMS),
+	}
+
+	if err := p.PushMetrics(ctx, tenantID, MethodS3, metrics); err != nil {
+		p.logger.Error("failed to write metrics to central CloudWatch instance regarding customer S3 delivery latency",
 			"tenant_id", tenantID,
 			"error", err)
 	}
