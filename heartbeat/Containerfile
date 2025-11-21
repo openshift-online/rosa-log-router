@@ -1,0 +1,22 @@
+# Build stage - UBI9 Go toolset
+FROM registry.access.redhat.com/ubi9/go-toolset:latest AS builder
+
+# Use default working directory that has proper permissions
+WORKDIR /opt/app-root/src
+
+# Copy source
+COPY main.go .
+
+# Build static binary
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o heartbeat main.go
+
+# Runtime stage - UBI9 micro (minimal Red Hat base image)
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+
+# Copy the binary from builder
+COPY --from=builder /opt/app-root/src/heartbeat /usr/local/bin/heartbeat
+
+# Run as non-root user
+USER 1001:1001
+
+ENTRYPOINT ["/usr/local/bin/heartbeat"]
