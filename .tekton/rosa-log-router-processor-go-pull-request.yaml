@@ -9,8 +9,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "true"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
-      == "main" && ( "./container/***".pathChanged() || ".tekton/rosa-log-router-processor-go-pull-request.yaml".pathChanged()
-      || "container/Containerfile.processor_go".pathChanged() )
+      == "main" && ( "container/***".pathChanged() || ".tekton/rosa-log-router-processor-go-pull-request.yaml".pathChanged() || "container/Containerfile.processor_go".pathChanged() )
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: rosa-log-router
