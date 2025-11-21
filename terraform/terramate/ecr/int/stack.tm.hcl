@@ -64,6 +64,16 @@ generate_hcl "main.tf" {
         name     = "rosa-log-router-processor"
       }
     }
+
+    tm_dynamic "resource" {
+      for_each = global.aws.regions
+      iterator = region
+      labels   = ["aws_ecr_repository", "rosa-log-router-processor-go-${region.value}"]
+      attributes = {
+        provider = tm_hcl_expression("aws.${region.value}")
+        name     = "rosa-log-router-processor-go"
+      }
+    }
   }
 }
 
