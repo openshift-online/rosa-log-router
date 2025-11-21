@@ -2,6 +2,7 @@
 
 This directory contains the **Go implementation** of the log processor for the multi-tenant logging pipeline. This is a complete rewrite of the Python `log_processor.py` with feature parity and performance improvements.
 
+
 ## Overview
 
 The Go implementation provides:
