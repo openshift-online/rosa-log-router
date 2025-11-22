@@ -30,26 +30,6 @@ variable "aws_region" {
     error_message = "AWS region must be a valid region format (e.g., us-east-1, eu-west-1)."
   }
 }
-
-# Regional Module Configuration
-variable "include_sqs_stack" {
-  description = "Whether to deploy the SQS stack for log processing"
-  type        = bool
-  default     = true
-}
-
-variable "include_lambda_stack" {
-  description = "Whether to deploy the Lambda stack for container-based log processing"
-  type        = bool
-  default     = true
-}
-
-variable "include_api_stack" {
-  description = "Whether to deploy the API stack"
-  type        = bool
-  default     = true
-}
-
 # S3 Configuration
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
@@ -91,15 +71,4 @@ variable "api_image" {
 variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
-}
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {
-    "app-code"               = "OSD-002"
-    "cost-center"            = "148"
-    "service-phase"          = "dev"
-    "managed_by_integration" = "terraform-repo"
-  }
 }

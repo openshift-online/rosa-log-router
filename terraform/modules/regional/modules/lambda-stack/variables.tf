@@ -42,9 +42,3 @@ variable "lambda_execution_role_arn" {
   description = "ARN of the global Lambda execution role"
   type        = string
 }
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {}
-}

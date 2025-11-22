@@ -18,12 +18,11 @@ resource "random_id" "suffix" {
 
 locals {
   random_suffix = random_id.suffix.hex
-  common_tags = merge(var.tags, {
+  common_tags = {
     Project     = var.project_name
     Environment = var.environment
-    ManagedBy   = "terraform"
     StackType   = "global"
-  })
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -394,6 +393,7 @@ resource "aws_iam_role" "api_gateway_authorizer_role" {
       }
     ]
   })
+  tags = local.common_tags
 }
 
 # Policy for API Gateway to invoke authorizer function

@@ -58,9 +58,3 @@ variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
 }
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {}
-}

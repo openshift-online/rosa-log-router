@@ -89,7 +89,7 @@ output "customer2_log_group" {
 
 output "test_commands" {
   description = "Commands for testing the setup"
-  value = <<-EOT
+  value       = <<-EOT
 
   # Upload test log to central bucket (triggers S3 → SNS → SQS → Lambda)
   aws --endpoint-url=http://localhost:4566 s3 cp test.json.gz \

@@ -43,9 +43,3 @@ variable "random_suffix" {
   description = "Bucket name random suffix"
   type        = string
 }
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {}
-}

@@ -3,7 +3,7 @@
 
 locals {
   project_name = "multi-tenant-logging"
-  environment  = "int"  # Must be one of: prod, stage, int (per module validation)
+  environment  = "int" # Must be one of: prod, stage, int (per module validation)
 
   common_tags = {
     Environment = "int-localstack"
@@ -22,7 +22,7 @@ resource "aws_ecr_repository" "lambda_processor" {
   name     = "${local.project_name}-${local.environment}-log-processor"
 
   image_scanning_configuration {
-    scan_on_push = false  # Disable for LocalStack
+    scan_on_push = false # Disable for LocalStack
   }
 
   tags = local.common_tags
@@ -31,7 +31,7 @@ resource "aws_ecr_repository" "lambda_processor" {
 # Central account role for cross-account access (create this first, needed by core-infrastructure)
 resource "aws_iam_role" "central_log_distribution_role" {
   provider = aws.central
-  name     = "ROSA-CentralLogDistributionRole-12345678"  # Matches expected naming pattern
+  name     = "ROSA-CentralLogDistributionRole-12345678" # Matches expected naming pattern
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -77,10 +77,9 @@ module "central_core_infrastructure" {
   project_name                      = local.project_name
   environment                       = local.environment
   random_suffix                     = "local"
-  enable_s3_encryption              = false  # Disable KMS for local testing
+  enable_s3_encryption              = false # Disable KMS for local testing
   s3_delete_after_days              = 7
   central_log_distribution_role_arn = aws_iam_role.central_log_distribution_role.arn
-  tags                              = local.common_tags
 }
 
 # Use your existing SQS stack module
@@ -94,7 +93,6 @@ module "central_sqs_stack" {
   project_name           = local.project_name
   environment            = local.environment
   log_delivery_topic_arn = module.central_core_infrastructure.log_delivery_topic_arn
-  tags                   = local.common_tags
 }
 
 # Central account IAM role for Lambda execution
@@ -268,12 +266,12 @@ module "customer1_acme_corp" {
     aws = aws.customer1
   }
 
-  customer_name        = "acme-corp"
-  account_id           = local.customer1_account_id
-  central_account_id   = local.central_account_id
-  project_name         = local.project_name
-  environment          = local.environment
-  tags                 = local.common_tags
+  customer_name      = "acme-corp"
+  account_id         = local.customer1_account_id
+  central_account_id = local.central_account_id
+  project_name       = local.project_name
+  environment        = local.environment
+  tags               = local.common_tags
 }
 
 # Customer 2: Globex Industries (Account 333333333333)
@@ -284,12 +282,12 @@ module "customer2_globex" {
     aws = aws.customer2
   }
 
-  customer_name        = "globex-industries"
-  account_id           = local.customer2_account_id
-  central_account_id   = local.central_account_id
-  project_name         = local.project_name
-  environment          = local.environment
-  tags                 = local.common_tags
+  customer_name      = "globex-industries"
+  account_id         = local.customer2_account_id
+  central_account_id = local.central_account_id
+  project_name       = local.project_name
+  environment        = local.environment
+  tags               = local.common_tags
 }
 
 ##############################################################################
@@ -304,17 +302,17 @@ resource "aws_dynamodb_table_item" "tenant_acme_corp_s3" {
   range_key  = "type"
 
   item = jsonencode({
-    tenant_id                  = { S = "acme-corp" }
-    type                       = { S = "s3" }
-    enabled                    = { BOOL = true }
-    bucket_name                = { S = module.customer1_acme_corp.log_delivery_bucket_name }
-    bucket_prefix              = { S = "logs/" }
-    target_region              = { S = "us-east-1" }
-    log_distribution_role_arn  = { S = module.customer1_acme_corp.log_distribution_role_arn }
-    desired_logs               = { L = [
+    tenant_id                 = { S = "acme-corp" }
+    type                      = { S = "s3" }
+    enabled                   = { BOOL = true }
+    bucket_name               = { S = module.customer1_acme_corp.log_delivery_bucket_name }
+    bucket_prefix             = { S = "logs/" }
+    target_region             = { S = "us-east-1" }
+    log_distribution_role_arn = { S = module.customer1_acme_corp.log_distribution_role_arn }
+    desired_logs = { L = [
       { S = "payment-service" },
       { S = "user-database" }
-    ]}
+    ] }
   })
 }
 
@@ -326,13 +324,13 @@ resource "aws_dynamodb_table_item" "tenant_globex_s3" {
   range_key  = "type"
 
   item = jsonencode({
-    tenant_id                  = { S = "globex-industries" }
-    type                       = { S = "s3" }
-    enabled                    = { BOOL = true }
-    bucket_name                = { S = module.customer2_globex.log_delivery_bucket_name }
-    bucket_prefix              = { S = "platform-logs/" }
-    target_region              = { S = "us-east-1" }
-    log_distribution_role_arn  = { S = module.customer2_globex.log_distribution_role_arn }
+    tenant_id                 = { S = "globex-industries" }
+    type                      = { S = "s3" }
+    enabled                   = { BOOL = true }
+    bucket_name               = { S = module.customer2_globex.log_delivery_bucket_name }
+    bucket_prefix             = { S = "platform-logs/" }
+    target_region             = { S = "us-east-1" }
+    log_distribution_role_arn = { S = module.customer2_globex.log_distribution_role_arn }
   })
 }
 
@@ -344,12 +342,12 @@ resource "aws_dynamodb_table_item" "tenant_globex_cloudwatch" {
   range_key  = "type"
 
   item = jsonencode({
-    tenant_id                  = { S = "globex-industries" }
-    type                       = { S = "cloudwatch" }
-    enabled                    = { BOOL = true }
-    log_group_name             = { S = module.customer2_globex.cloudwatch_log_group_name }
-    target_region              = { S = "us-east-1" }
-    log_distribution_role_arn  = { S = module.customer2_globex.log_distribution_role_arn }
+    tenant_id                 = { S = "globex-industries" }
+    type                      = { S = "cloudwatch" }
+    enabled                   = { BOOL = true }
+    log_group_name            = { S = module.customer2_globex.cloudwatch_log_group_name }
+    target_region             = { S = "us-east-1" }
+    log_distribution_role_arn = { S = module.customer2_globex.log_distribution_role_arn }
   })
 }
 
