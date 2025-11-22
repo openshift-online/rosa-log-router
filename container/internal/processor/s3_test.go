@@ -197,7 +197,7 @@ func TestConvertLogRecordToEvent(t *testing.T) {
 	})
 }
 
-func TestProcessJSONFile(t *testing.T) {
+func TestProcessJSON(t *testing.T) {
 	logger := getTestLogger()
 
 	t.Run("processes NDJSON format", func(t *testing.T) {
@@ -205,7 +205,7 @@ func TestProcessJSONFile(t *testing.T) {
 {"timestamp":"2024-01-01T12:01:00Z","message":"second log"}
 {"timestamp":"2024-01-01T12:02:00Z","message":"third log"}`
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 3)
@@ -218,7 +218,7 @@ func TestProcessJSONFile(t *testing.T) {
 		// Compact JSON array on single line to trigger fallback (all lines fail except array)
 		jsonArray := `[{"timestamp":"2024-01-01T12:00:00Z","message":"first log"},{"timestamp":"2024-01-01T12:01:00Z","message":"second log"}]`
 
-		events, err := ProcessJSONFile([]byte(jsonArray), logger)
+		events, err := ProcessJSON([]byte(jsonArray), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 2)
@@ -229,7 +229,7 @@ func TestProcessJSONFile(t *testing.T) {
 	t.Run("processes single JSON object as fallback", func(t *testing.T) {
 		singleObject := `{"timestamp":"2024-01-01T12:00:00Z","message":"single log"}`
 
-		events, err := ProcessJSONFile([]byte(singleObject), logger)
+		events, err := ProcessJSON([]byte(singleObject), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 1)
@@ -243,7 +243,7 @@ func TestProcessJSONFile(t *testing.T) {
 
 `
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 2) // Empty lines should be skipped
@@ -254,7 +254,7 @@ func TestProcessJSONFile(t *testing.T) {
 	t.Run("handles structured log messages", func(t *testing.T) {
 		ndjson := `{"timestamp":"2024-01-01T12:00:00Z","message":{"level":"ERROR","msg":"error occurred"}}`
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 1)
@@ -269,7 +269,7 @@ func TestProcessJSONFile(t *testing.T) {
 invalid json line
 {"timestamp":"2024-01-01T12:01:00Z","message":"another valid log"}`
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 2) // Invalid line skipped
@@ -278,7 +278,7 @@ invalid json line
 	})
 
 	t.Run("handles empty content", func(t *testing.T) {
-		events, err := ProcessJSONFile([]byte(""), logger)
+		events, err := ProcessJSON([]byte(""), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 0)
@@ -287,7 +287,7 @@ invalid json line
 	t.Run("returns error for completely invalid JSON", func(t *testing.T) {
 		invalidJSON := `this is not json at all`
 
-		events, err := ProcessJSONFile([]byte(invalidJSON), logger)
+		events, err := ProcessJSON([]byte(invalidJSON), logger)
 
 		require.Error(t, err)
 		assert.Nil(t, events)
@@ -298,7 +298,7 @@ invalid json line
 {"timestamp":"2024-01-01T12:01:00Z"}
 {"message":"log without timestamp"}`
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		// All records should be processed, even if missing some fields
@@ -313,7 +313,7 @@ invalid json line
 			ndjson += fmt.Sprintf(`{"timestamp":"2024-01-01T12:00:00Z","message":"log entry %d"}`, i) + "\n"
 		}
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 1000)
@@ -322,7 +322,7 @@ invalid json line
 	t.Run("preserves all non-Vector metadata fields", func(t *testing.T) {
 		ndjson := `{"timestamp":"2024-01-01T12:00:00Z","custom_field":"value","another_field":123}`
 
-		events, err := ProcessJSONFile([]byte(ndjson), logger)
+		events, err := ProcessJSON([]byte(ndjson), logger)
 
 		require.NoError(t, err)
 		assert.Len(t, events, 1)

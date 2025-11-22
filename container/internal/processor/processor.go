@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
@@ -213,10 +214,16 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 
 // deliverLogs handles log delivery based on type
 func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deliveryType string, deliveryConfig *models.DeliveryConfig, tenantInfo *models.TenantInfo, messageBody string) error {
+	s3Obj, uploadTime, err := GetS3Object(ctx, p.s3Client, bucketName, objectKey, p.logger)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve object %q from S3 bucket %q: %w", objectKey, bucketName, err)
+	}
+	p.logger.Info("downloaded S3 object", "unix_ts_obj_creation_time", uploadTime)
+
 	switch deliveryType {
 	case "cloudwatch":
 		// CloudWatch requires downloading and processing log events
-		logEvents, s3Timestamp, err := DownloadAndProcessLogFile(ctx, p.s3Client, bucketName, objectKey, p.logger)
+		logEvents, err := ProcessLogFile(ctx, objectKey, s3Obj, p.logger)
 		if err != nil {
 			p.metricsPublisher.PushCloudWatchDeliveryMetrics(ctx, tenantInfo.TenantID, 0, 1)
 			return err
@@ -235,12 +242,14 @@ func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deli
 		}
 
 		// Deliver to CloudWatch
-		stats, err := p.cwDeliverer.DeliverLogs(ctx, logEvents, deliveryConfig, tenantInfo, s3Timestamp)
+		stats, err := p.cwDeliverer.DeliverLogs(ctx, logEvents, deliveryConfig, tenantInfo, uploadTime)
 		if err != nil {
 			p.metricsPublisher.PushCloudWatchDeliveryMetrics(ctx, tenantInfo.TenantID, 0, len(logEvents))
 			return err
 		}
 
+		latency := (time.Now().UnixMilli() - uploadTime)
+		p.metricsPublisher.PushCloudWatchLatencyMetrics(ctx, tenantInfo.TenantID, latency)
 		p.metricsPublisher.PushCloudWatchDeliveryMetrics(ctx, tenantInfo.TenantID, stats.SuccessfulEvents, stats.FailedEvents)
 
 	case "s3":
@@ -249,6 +258,8 @@ func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deli
 			p.metricsPublisher.PushS3DeliveryMetrics(ctx, tenantInfo.TenantID, false)
 			return err
 		}
+		latency := (time.Now().UnixMilli() - uploadTime)
+		p.metricsPublisher.PushS3LatencyMetrics(ctx, tenantInfo.TenantID, latency)
 		p.metricsPublisher.PushS3DeliveryMetrics(ctx, tenantInfo.TenantID, true)
 
 	default:

@@ -79,8 +79,8 @@ func ExtractTenantInfoFromKey(objectKey string, logger *slog.Logger) (*models.Te
 	return tenantInfo, nil
 }
 
-// DownloadAndProcessLogFile downloads log file from S3 and extracts log events
-func DownloadAndProcessLogFile(ctx context.Context, s3Client *s3.Client, bucketName, objectKey string, logger *slog.Logger) ([]*models.LogEvent, int64, error) {
+// GetS3Object retrieves a file from S3 and it's upload time
+func GetS3Object(ctx context.Context, s3Client *s3.Client, bucketName, objectKey string, logger *slog.Logger) (io.ReadCloser, int64, error) {
 	// Download from S3
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &bucketName,
@@ -89,35 +89,27 @@ func DownloadAndProcessLogFile(ctx context.Context, s3Client *s3.Client, bucketN
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to download S3 object s3://%s/%s: %w", bucketName, objectKey, err)
 	}
-	defer result.Body.Close()
+	return result.Body, result.LastModified.UnixMilli(), nil
+}
 
-	// Extract S3 object timestamp for more accurate fallback timestamp
-	s3TimestampMS := result.LastModified.UnixMilli()
-	logger.Info("downloaded S3 object",
-		"last_modified", result.LastModified,
-		"timestamp_ms", s3TimestampMS)
-
-	// Read file content
-	var reader io.Reader = result.Body
-	fileContent, err := io.ReadAll(reader)
+// ProcessLogFile extracts the log events from a file
+func ProcessLogFile(ctx context.Context, filename string, content io.Reader, logger *slog.Logger) ([]*models.LogEvent, error) {
+	fileContent, err := io.ReadAll(content)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to read S3 object content: %w", err)
+		return nil, fmt.Errorf("failed to read S3 object content: %w", err)
 	}
 
-	logger.Info("downloaded file",
-		"size_bytes_compressed", len(fileContent))
-
 	// Decompress if gzipped
-	if strings.HasSuffix(objectKey, ".gz") {
+	if strings.HasSuffix(filename, ".gz") {
 		gzReader, err := gzip.NewReader(strings.NewReader(string(fileContent)))
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create gzip reader: %w", err)
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		defer gzReader.Close()
 
 		decompressed, err := io.ReadAll(gzReader)
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to decompress gzip content: %w", err)
+			return nil, fmt.Errorf("failed to decompress gzip content: %w", err)
 		}
 
 		fileContent = decompressed
@@ -125,17 +117,17 @@ func DownloadAndProcessLogFile(ctx context.Context, s3Client *s3.Client, bucketN
 			"size_bytes_decompressed", len(fileContent))
 	}
 
-	logEvents, err := ProcessJSONFile(fileContent, logger)
+	logEvents, err := ProcessJSON(fileContent, logger)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	return logEvents, s3TimestampMS, nil
+	return logEvents, nil
 }
 
-// ProcessJSONFile processes JSON file content and extracts log events
+// ProcessJSON processes JSON content and extracts log events
 // Prioritizes Vector's NDJSON (line-delimited JSON) format with JSON array fallback
-func ProcessJSONFile(fileContent []byte, logger *slog.Logger) ([]*models.LogEvent, error) {
+func ProcessJSON(fileContent []byte, logger *slog.Logger) ([]*models.LogEvent, error) {
 	content := string(fileContent)
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 
