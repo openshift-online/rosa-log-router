@@ -685,6 +685,8 @@ resource "aws_api_gateway_method_settings" "all" {
     logging_level      = "INFO"
     data_trace_enabled = true
   }
+
+  depends_on = [aws_cloudwatch_log_group.api_gateway_log_welcome]
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway_ecexution_log" {
