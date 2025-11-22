@@ -21,6 +21,14 @@ provider "aws" {
   access_key = var.access_key
   region     = var.region
   secret_key = var.secret_key
+  default_tags {
+    tags = {
+      app-code               = "OSD-002"
+      cost-center            = "148"
+      managed_by_integration = "terraform-repo"
+      service-phase          = "dev"
+    }
+  }
 }
 provider "aws" {
   alias  = "ap-northeast-2"

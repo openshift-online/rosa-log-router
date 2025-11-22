@@ -20,7 +20,6 @@ module "global" {
     "us-west-2",
   ]
   source = "../../modules/global"
-  tags   = var.tags
 }
 module "regional-resource-ap-northeast-2" {
   source = "../../modules/regional"
@@ -29,9 +28,6 @@ module "regional-resource-ap-northeast-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
-  include_sqs_stack                 = var.include_sqs_stack
-  include_lambda_stack              = var.include_lambda_stack
-  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
@@ -46,7 +42,6 @@ module "regional-resource-ap-northeast-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  tags                              = var.tags
 }
 module "regional-resource-ap-southeast-1" {
   source = "../../modules/regional"
@@ -55,9 +50,6 @@ module "regional-resource-ap-southeast-1" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
-  include_sqs_stack                 = var.include_sqs_stack
-  include_lambda_stack              = var.include_lambda_stack
-  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
@@ -72,7 +64,6 @@ module "regional-resource-ap-southeast-1" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  tags                              = var.tags
 }
 module "regional-resource-us-east-1" {
   source = "../../modules/regional"
@@ -81,9 +72,6 @@ module "regional-resource-us-east-1" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
-  include_sqs_stack                 = var.include_sqs_stack
-  include_lambda_stack              = var.include_lambda_stack
-  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
@@ -98,7 +86,6 @@ module "regional-resource-us-east-1" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  tags                              = var.tags
 }
 module "regional-resource-us-east-2" {
   source = "../../modules/regional"
@@ -107,9 +94,6 @@ module "regional-resource-us-east-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
-  include_sqs_stack                 = var.include_sqs_stack
-  include_lambda_stack              = var.include_lambda_stack
-  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
@@ -124,7 +108,6 @@ module "regional-resource-us-east-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  tags                              = var.tags
 }
 module "regional-resource-us-west-2" {
   source = "../../modules/regional"
@@ -133,9 +116,6 @@ module "regional-resource-us-west-2" {
   }
   project_name                      = var.project_name
   environment                       = var.environment
-  include_sqs_stack                 = var.include_sqs_stack
-  include_lambda_stack              = var.include_lambda_stack
-  include_api_stack                 = var.include_api_stack
   random_suffix                     = local.random_suffix
   s3_delete_after_days              = var.s3_delete_after_days
   enable_s3_encryption              = var.enable_s3_encryption
@@ -150,5 +130,4 @@ module "regional-resource-us-west-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  tags                              = var.tags
 }
