@@ -8,12 +8,11 @@ data "aws_region" "current" {}
 # Local values
 locals {
   domain_name = "${data.aws_region.current.id}.${var.project_name}.${var.environment}.devshift.net"
-  common_tags = merge(var.tags, {
+  common_tags = {
     Project     = var.project_name
     Environment = var.environment
-    ManagedBy   = "terraform"
     StackType   = "api-stack"
-  })
+  }
 }
 
 # Lambda Authorizer Function
@@ -698,27 +697,27 @@ resource "aws_cloudwatch_log_group" "api_gateway_ecexution_log" {
 resource "aws_cloudwatch_log_group" "api_gateway_log_group" {
   name              = "/aws/apigateway/${var.project_name}-${var.environment}-tenant-api"
   retention_in_days = 14
+  tags              = local.common_tags
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway_log_welcome" {
   name              = "/aws/apigateway/welcome"
   retention_in_days = 14
+  tags              = local.common_tags
 }
 
 # CloudWatch Log Group for Lambda functions
 resource "aws_cloudwatch_log_group" "api_service_log_group" {
   name              = "/aws/lambda/${var.project_name}-${var.environment}-api-service"
   retention_in_days = 14
-
-  tags = local.common_tags
+  tags              = local.common_tags
 }
 
 # CloudWatch Log Group for Lambda functions
 resource "aws_cloudwatch_log_group" "api_authorizer_log_group" {
   name              = "/aws/lambda/${var.project_name}-${var.environment}-api-authorizer"
   retention_in_days = 14
-
-  tags = local.common_tags
+  tags              = local.common_tags
 }
 
 resource "aws_acm_certificate" "cert" {
@@ -728,6 +727,7 @@ resource "aws_acm_certificate" "cert" {
   lifecycle {
     create_before_destroy = true
   }
+  tags = local.common_tags
 }
 
 resource "aws_route53_record" "cert_validation" {

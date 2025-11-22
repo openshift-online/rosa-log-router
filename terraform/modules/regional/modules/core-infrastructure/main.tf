@@ -15,12 +15,11 @@ data "aws_region" "current" {}
 
 # Local values
 locals {
-  common_tags = merge(var.tags, {
+  common_tags = {
     Project     = var.project_name
     Environment = var.environment
-    ManagedBy   = "terraform"
     StackType   = "core-infrastructure"
-  })
+  }
 }
 
 # KMS Key for encryption (conditional)

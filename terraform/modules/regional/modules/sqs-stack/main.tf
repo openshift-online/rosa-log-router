@@ -11,12 +11,11 @@ terraform {
 
 # Local values
 locals {
-  common_tags = merge(var.tags, {
+  common_tags = {
     Project     = var.project_name
     Environment = var.environment
-    ManagedBy   = "terraform"
     StackType   = "sqs-stack"
-  })
+  }
 }
 
 # Dead Letter Queue for failed messages

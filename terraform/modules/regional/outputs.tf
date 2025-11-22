@@ -20,5 +20,5 @@ output "tenant_config_table_arn" {
 
 output "api_endpoint" {
   description = "API Gateway endpoint URL"
-  value       = module.api_stack[0].api_endpoint
+  value       = module.api_stack.api_endpoint
 }

@@ -15,12 +15,11 @@ data "aws_region" "current" {}
 
 # Local values
 locals {
-  common_tags = merge(var.tags, {
+  common_tags = {
     Project     = var.project_name
     Environment = var.environment
-    ManagedBy   = "terraform"
     StackType   = "lambda-stack"
-  })
+  }
 }
 
 
@@ -28,8 +27,7 @@ locals {
 resource "aws_cloudwatch_log_group" "log_distributor_log_group" {
   name              = "/aws/lambda/${var.project_name}-${var.environment}-log-distributor"
   retention_in_days = 14
-
-  tags = local.common_tags
+  tags              = local.common_tags
 }
 
 # Container-based Lambda function for log distribution

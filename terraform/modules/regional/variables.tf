@@ -13,26 +13,6 @@ variable "project_name" {
   type        = string
   default     = "hcp-log"
 }
-
-# Optional Stack Configuration
-variable "include_sqs_stack" {
-  description = "Whether to deploy the SQS stack for log processing"
-  type        = bool
-  default     = true
-}
-
-variable "include_lambda_stack" {
-  description = "Whether to deploy the Lambda stack for container-based log processing"
-  type        = bool
-  default     = true
-}
-
-variable "include_api_stack" {
-  description = "Whether to deploy the API stack"
-  type        = bool
-  default     = true
-}
-
 variable "random_suffix" {
   description = "Bucket name random suffix"
   type        = string
@@ -133,10 +113,4 @@ variable "api_gateway_cloudwatch_role_arn" {
 variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
-}
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {}
 }

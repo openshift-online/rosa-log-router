@@ -13,6 +13,12 @@ globals "aws" {
   ]
   # In case of resources detection, terraform still need to have the provider.
   delete_regions = []
+  default_tags = {
+    "app-code"               = "OSD-002"
+    "cost-center"            = "148"
+    "service-phase"          = "dev"
+    "managed_by_integration" = "terraform-repo"
+  }
 }
 
 generate_hcl "main.tf" {
@@ -35,7 +41,6 @@ generate_hcl "main.tf" {
       api_auth_psk_value = var.api_auth_psk_value
       region             = var.region
       regions            = global.aws.regions
-      tags               = var.tags
     }
 
     tm_dynamic "module" {
@@ -50,9 +55,6 @@ generate_hcl "main.tf" {
         }
         project_name                      = var.project_name
         environment                       = var.environment
-        include_sqs_stack                 = var.include_sqs_stack
-        include_lambda_stack              = var.include_lambda_stack
-        include_api_stack                 = var.include_api_stack
         random_suffix                     = local.random_suffix
         s3_delete_after_days              = var.s3_delete_after_days
         enable_s3_encryption              = var.enable_s3_encryption
@@ -67,7 +69,6 @@ generate_hcl "main.tf" {
         api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
         api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
         route53_zone_id                   = var.route53_zone_id
-        tags                              = var.tags
       }
     }
   }
@@ -99,15 +100,21 @@ generate_hcl "config.tf" {
       access_key = var.access_key
       secret_key = var.secret_key
       region     = var.region
+      default_tags {
+        tags = global.aws.default_tags
+      }
     }
 
     tm_dynamic "provider" {
       for_each = tm_concat(global.aws.regions, global.aws.delete_regions)
       iterator = region
       labels   = ["aws"]
-      attributes = {
+      content {
         alias  = region.value
         region = region.value
+        default_tags {
+          tags = global.aws.default_tags
+        }
       }
     }
   }

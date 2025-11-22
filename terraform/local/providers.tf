@@ -17,7 +17,7 @@ locals {
   localstack_endpoint = "http://localhost:4566"
 
   # Simulated account IDs via access keys
-  central_account_id  = "111111111111"
+  central_account_id   = "111111111111"
   customer1_account_id = "222222222222"
   customer2_account_id = "333333333333"
 }

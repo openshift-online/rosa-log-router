@@ -33,9 +33,3 @@ variable "regions" {
   description = "List of AWS regions where the secret should be applied"
   type        = list(string)
 }
-
-variable "tags" {
-  description = "Common tags to apply to all resources"
-  type        = map(string)
-  default     = {}
-}
