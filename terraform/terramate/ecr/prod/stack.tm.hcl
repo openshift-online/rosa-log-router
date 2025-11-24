@@ -86,7 +86,7 @@ generate_hcl "main.tf" {
               Sid    = "testpolicy",
               Effect = "Allow",
               Principal = {
-                "AWS" : "arn:aws:iam::${var.pord-2-account-id}:root"
+                "AWS" : "arn:aws:iam::${var.pord_2_account_id}:root"
               },
               Action = [
                 "ecr:ReplicateImage"
@@ -149,7 +149,7 @@ generate_hcl "config.tf" {
     variable "secret_key" {}
     variable "region" {}
 
-    variable "pord-2-account-id" {}
+    variable "pord_2_account_id" {}
 
     terraform {
       required_version = ">= 1.8.5"
