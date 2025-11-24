@@ -20,7 +20,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-me-central-
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
@@ -41,7 +41,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-me-south-1"
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
@@ -62,7 +62,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-mx-central-
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
@@ -83,7 +83,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-sa-east-1" 
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
@@ -104,7 +104,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-us-east-2" 
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
@@ -125,7 +125,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-us-west-2" 
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "testpolicy"
+        Sid    = "ReplicationPolicy"
         Effect = "Allow"
         Principal = {
           "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
