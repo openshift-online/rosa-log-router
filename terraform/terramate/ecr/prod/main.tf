@@ -23,7 +23,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-me-central-
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
@@ -44,7 +44,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-me-south-1"
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
@@ -65,7 +65,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-mx-central-
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
@@ -86,7 +86,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-sa-east-1" 
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
@@ -107,7 +107,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-us-east-2" 
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
@@ -128,7 +128,7 @@ resource "aws_ecr_registry_policy" "cross-account-replication-policy-us-west-2" 
         Sid    = "testpolicy"
         Effect = "Allow"
         Principal = {
-          "AWS" = "arn:aws:iam::${var.pord_2_account_id}:root"
+          "AWS" = "arn:aws:iam::${var.prod_2_account_id}:root"
         }
         Action = [
           "ecr:ReplicateImage",
