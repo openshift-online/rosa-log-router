@@ -12,7 +12,7 @@ globals "aws" {
     "us-east-2",
     "us-west-2"
   ]
-  # In case of resources detection, terraform still need to have the provider.
+  # Regions to remove. Terraform still requires provider configuration for deletion operations.
   delete_regions = []
   default_tags = {
     "app-code"               = "OSD-002"
