@@ -34,7 +34,7 @@ generate_hcl "main.tf" {
             for_each = [for r in global.aws.pord-2-replicate-regions : r if r != var.region]
             content {
               region      = destination.value
-              registry_id = var.prod-account-id
+              registry_id = var.prod_account_id
             }
           }
         }
@@ -50,7 +50,7 @@ generate_hcl "config.tf" {
     variable "secret_key" {}
     variable "region" {}
 
-    variable "prod-account-id" {}
+    variable "prod_account_id" {}
 
     terraform {
       required_version = ">= 1.8.5"
