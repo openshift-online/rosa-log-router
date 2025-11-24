@@ -6,7 +6,7 @@ variable "secret_key" {
 }
 variable "region" {
 }
-variable "prod-account-id" {
+variable "prod_account_id" {
 }
 terraform {
   required_version = ">= 1.8.5"
