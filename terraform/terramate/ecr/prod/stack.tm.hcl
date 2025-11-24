@@ -83,7 +83,7 @@ generate_hcl "main.tf" {
           Version = "2012-10-17",
           Statement = [
             {
-              Sid    = "testpolicy",
+              Sid    = "ReplicationPolicy",
               Effect = "Allow",
               Principal = {
                 "AWS" : "arn:aws:iam::${var.prod_2_account_id}:root"
