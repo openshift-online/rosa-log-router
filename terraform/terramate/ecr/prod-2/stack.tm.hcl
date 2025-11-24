@@ -1,0 +1,75 @@
+stack {
+  name        = "prod-2-environment"
+  description = "Prod-2 environment ecr resources"
+}
+
+globals "aws" {
+  pord-2-replicate-regions = [
+    "me-central-1",
+    "me-south-1",
+    "mx-central-1",
+    "sa-east-1",
+    "us-east-2",
+    "us-west-2"
+  ]
+  prod-account-id = "859037107838"
+  default_tags = {
+    "app-code"               = "OSD-002"
+    "cost-center"            = "148"
+    "service-phase"          = "prod"
+    "managed_by_integration" = "terraform-repo"
+  }
+}
+
+generate_hcl "main.tf" {
+
+  content {
+
+    data "aws_caller_identity" "current" {}
+
+    resource "aws_ecr_replication_configuration" "ecr_replication" {
+      replication_configuration {
+        rule {
+          dynamic "destination" {
+            for_each = [for r in global.aws.pord-2-replicate-regions : r if r != var.region]
+            content {
+              region      = destination.value
+              registry_id = var.prod-account-id
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+generate_hcl "config.tf" {
+  content {
+
+    variable "access_key" {}
+    variable "secret_key" {}
+    variable "region" {}
+
+    variable "prod-account-id" {}
+
+    terraform {
+      required_version = ">= 1.8.5"
+      required_providers {
+        aws = {
+          source  = "hashicorp/aws"
+          version = "~> 6.0"
+        }
+      }
+      backend "s3" {}
+    }
+
+    provider "aws" {
+      access_key = var.access_key
+      secret_key = var.secret_key
+      region     = var.region
+      default_tags {
+        tags = global.aws.default_tags
+      }
+    }
+  }
+}
