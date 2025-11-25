@@ -63,30 +63,6 @@ resource "aws_ecr_repository" "rosa-log-router-authorizer-us-west-2" {
   name     = "rosa-log-router-authorizer"
   provider = aws.us-west-2
 }
-resource "aws_ecr_repository" "rosa-log-router-processor-ap-southeast-1" {
-  name     = "rosa-log-router-processor"
-  provider = aws.ap-southeast-1
-}
-resource "aws_ecr_repository" "rosa-log-router-processor-ap-southeast-6" {
-  name     = "rosa-log-router-processor"
-  provider = aws.ap-southeast-6
-}
-resource "aws_ecr_repository" "rosa-log-router-processor-mx-central-1" {
-  name     = "rosa-log-router-processor"
-  provider = aws.mx-central-1
-}
-resource "aws_ecr_repository" "rosa-log-router-processor-us-east-1" {
-  name     = "rosa-log-router-processor"
-  provider = aws.us-east-1
-}
-resource "aws_ecr_repository" "rosa-log-router-processor-us-east-2" {
-  name     = "rosa-log-router-processor"
-  provider = aws.us-east-2
-}
-resource "aws_ecr_repository" "rosa-log-router-processor-us-west-2" {
-  name     = "rosa-log-router-processor"
-  provider = aws.us-west-2
-}
 resource "aws_ecr_repository" "rosa-log-router-processor-go-ap-southeast-1" {
   name     = "rosa-log-router-processor-go"
   provider = aws.ap-southeast-1
