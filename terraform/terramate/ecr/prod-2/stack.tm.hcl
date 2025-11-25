@@ -40,6 +40,15 @@ generate_hcl "main.tf" {
         }
       }
     }
+    resource "aws_ecr_repository" "rosa-log-router-api" {
+      name     = "rosa-log-router-api"
+    }
+    resource "aws_ecr_repository" "rosa-log-router-authorizer" {
+      name     = "rosa-log-router-authorizer"
+    }
+    resource "aws_ecr_repository" "rosa-log-router-processor-go" {
+      name     = "rosa-log-router-processor-go"
+    }
   }
 }
 
