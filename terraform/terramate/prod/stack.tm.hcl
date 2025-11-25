@@ -17,6 +17,7 @@ globals "aws" {
     "ap-southeast-3",
     "ap-southeast-4",
     "ap-southeast-5",
+    "ap-southeast-6",
     "ap-southeast-7",
     "ca-central-1",
     "ca-west-1",
@@ -37,6 +38,14 @@ globals "aws" {
     "us-east-2",
     "us-west-2"
   ]
+  # In case of resources detection, terraform still need to have the provider.
+  delete_regions = []
+  default_tags = {
+    "app-code"               = "OSD-002"
+    "cost-center"            = "148"
+    "service-phase"          = "prod"
+    "managed_by_integration" = "terraform-repo"
+  }
 }
 
 generate_hcl "main.tf" {
@@ -53,9 +62,12 @@ generate_hcl "main.tf" {
     module "global" {
       source = "../../modules/global"
 
-      project_name = var.project_name
-      environment  = var.environment
-      org_id       = var.org_id
+      project_name       = var.project_name
+      environment        = var.environment
+      org_id             = var.org_id
+      api_auth_psk_value = var.api_auth_psk_value
+      region             = var.region
+      regions            = global.aws.regions
     }
 
     tm_dynamic "module" {
@@ -70,13 +82,20 @@ generate_hcl "main.tf" {
         }
         project_name                      = var.project_name
         environment                       = var.environment
-        include_sqs_stack                 = var.include_sqs_stack
-        include_lambda_stack              = var.include_lambda_stack
         random_suffix                     = local.random_suffix
         s3_delete_after_days              = var.s3_delete_after_days
         enable_s3_encryption              = var.enable_s3_encryption
         central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
+        processor_image                   = var.processor_image
         lambda_execution_role_arn         = module.global.lambda_execution_role_arn
+        api_auth_secret_name              = module.global.api_auth_secret_name
+        authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
+        authorizer_image                  = var.authorizer_image
+        api_execution_role_arn            = module.global.api_execution_role_arn
+        api_image                         = var.api_image
+        api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
+        api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
+        route53_zone_id                   = var.route53_zone_id
       }
     }
   }
@@ -108,15 +127,21 @@ generate_hcl "config.tf" {
       access_key = var.access_key
       secret_key = var.secret_key
       region     = var.region
+      default_tags {
+        tags = global.aws.default_tags
+      }
     }
 
     tm_dynamic "provider" {
-      for_each = global.aws.regions
+      for_each = tm_concat(global.aws.regions, global.aws.delete_regions)
       iterator = region
       labels   = ["aws"]
-      attributes = {
+      content {
         alias  = region.value
         region = region.value
+        default_tags {
+          tags = global.aws.default_tags
+        }
       }
     }
   }
@@ -133,6 +158,12 @@ generate_hcl "outputs.tf" {
     output "environment" {
       description = "Environment name"
       value       = var.environment
+    }
+
+    output "api_auth_psk_value" {
+      description = "The PSK value for API authentication"
+      value       = var.api_auth_psk_value
+      sensitive   = true
     }
 
     output "central_log_distribution_role_arn" {
@@ -156,9 +187,9 @@ generate_hcl "outputs.tf" {
     tm_dynamic "output" {
       for_each = global.aws.regions
       iterator = region
-      labels   = ["tenant_config_table_arn_${region.value}"]
+      labels   = ["api_endpoint_${region.value}"]
       attributes = {
-        value = tm_hcl_expression("module.regional-resource-${region.value}.tenant_config_table_arn")
+        value = tm_hcl_expression("module.regional-resource-${region.value}.api_endpoint")
       }
     }
   }
