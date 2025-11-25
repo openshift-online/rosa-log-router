@@ -41,14 +41,12 @@ class TestTenantDeliveryConfigAPIIntegration:
         assert retrieved["log_group_name"] == config_data["log_group_name"]
         assert retrieved["target_region"] == config_data["target_region"]
         assert retrieved["desired_logs"] == config_data["desired_logs"]
-        assert retrieved["groups"] == config_data["groups"]
         
         # UPDATE: Modify delivery configuration via API
         update_data = {
             "log_group_name": "/aws/logs/updated-integration-tenant",
             "enabled": False,
-            "desired_logs": ["updated-app"],
-            "groups": ["updated-group"]
+            "desired_logs": ["updated-app"]
         }
         response = api_client.update_delivery_config(tenant_id, delivery_type, update_data)
         updated = response["data"]
@@ -56,7 +54,6 @@ class TestTenantDeliveryConfigAPIIntegration:
         assert updated["log_group_name"] == "/aws/logs/updated-integration-tenant"
         assert updated["enabled"] is False
         assert updated["desired_logs"] == ["updated-app"]
-        assert updated["groups"] == ["updated-group"]
         # Unchanged fields should persist
         assert updated["log_distribution_role_arn"] == config_data["log_distribution_role_arn"]
         assert updated["target_region"] == config_data["target_region"]
@@ -232,8 +229,7 @@ class TestTenantDeliveryConfigAPIIntegration:
                 "log_group_name": f"/aws/logs/bulk-tenant-{i:03d}",
                 "target_region": "us-east-1",
                 "enabled": i % 2 == 0,  # Alternate enabled/disabled
-                "desired_logs": [f"app-{i}", f"service-{i}"],
-                "groups": [f"group-{i}", f"team-{i}"]
+                "desired_logs": [f"app-{i}", f"service-{i}"]
             }
             
             # Create S3 delivery configuration
@@ -244,8 +240,7 @@ class TestTenantDeliveryConfigAPIIntegration:
                 "bucket_prefix": "logs/",
                 "target_region": "us-east-1",
                 "enabled": i % 3 == 0,  # Different pattern for S3
-                "desired_logs": [f"app-{i}", f"service-{i}"],
-                "groups": [f"group-{i}", f"team-{i}"]
+                "desired_logs": [f"app-{i}", f"service-{i}"]
             }
             
             cw_response = api_client.create_delivery_config(f"bulk-tenant-{i:03d}", cloudwatch_config)
