@@ -30,20 +30,6 @@ variable "aws_region" {
     error_message = "AWS region must be a valid region format (e.g., us-east-1, eu-west-1)."
   }
 }
-
-# Regional Module Configuration
-variable "include_sqs_stack" {
-  description = "Whether to deploy the SQS stack for log processing"
-  type        = bool
-  default     = true
-}
-
-variable "include_lambda_stack" {
-  description = "Whether to deploy the Lambda stack for container-based log processing"
-  type        = bool
-  default     = true
-}
-
 # S3 Configuration
 variable "s3_delete_after_days" {
   description = "Number of days after which to delete logs from S3"
@@ -59,4 +45,30 @@ variable "enable_s3_encryption" {
   description = "Enable S3 server-side encryption"
   type        = bool
   default     = true
+}
+
+variable "processor_image" {
+  description = "ECR image for the log processor container image"
+  type        = string
+}
+
+variable "api_auth_psk_value" {
+  description = "The PSK value for API authentication"
+  type        = string
+  sensitive   = true
+}
+
+variable "authorizer_image" {
+  description = "ECR image for the Lambda authorizer container image"
+  type        = string
+}
+
+variable "api_image" {
+  description = "ECR image for the API service container image"
+  type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Zone id of the customer domain"
+  type        = string
 }
