@@ -48,7 +48,12 @@ deploy: build init ## Deploy infrastructure with Lambda container
 	@echo "Step 2: Tagging and pushing container to ECR..."
 	@ECR_URL=$$(cd terraform/local && terraform output -raw ecr_repository_url 2>/dev/null); \
 	docker tag log-processor:local $$ECR_URL:local && \
-	docker push $$ECR_URL:local
+	if docker info 2>&1 | grep -qi podman; then \
+		echo "Detected Podman - using Podman-specific flags for LocalStack ECR"; \
+		docker push $$ECR_URL:local --format docker --tls-verify=false --remove-signatures; \
+	else \
+		docker push $$ECR_URL:local; \
+	fi
 	@echo "Step 3: Deploying infrastructure..."
 	cd terraform/local && terraform apply -auto-approve
 	@echo ""
