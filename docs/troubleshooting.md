@@ -300,7 +300,7 @@ aws lambda get-function-configuration \
 # Test container build locally
 cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor_go-t log-processor:latest .
+podman build -f Containerfile.processor-t log-processor:latest .
 
 # Test container run locally
 podman run --rm log-processor:latest /bin/bash -c "python3 --version && vector --version"
@@ -314,7 +314,7 @@ podman run --rm log-processor:latest /bin/bash -c "python3 --version && vector -
 podman pull public.ecr.aws/lambda/python:3.13
 
 # Clear build cache if needed
-podman build --no-cache -f Containerfile.processor_go-t log-processor:latest .
+podman build --no-cache -f Containerfile.processor-t log-processor:latest .
 ```
 
 **ECR Authentication**

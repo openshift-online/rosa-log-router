@@ -112,7 +112,7 @@ Complete serverless processing with containers:
 ```bash
 # Build containers first
 cd ../container/
-podman build -f Containerfile.processor_go-t log-processor:latest .
+podman build -f Containerfile.processor-t log-processor:latest .
 # Push to ECR...
 
 # Deploy with Lambda processing

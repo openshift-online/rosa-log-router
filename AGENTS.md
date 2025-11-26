@@ -82,7 +82,7 @@ cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
 
 # Build processor container (includes Vector from collector)
-podman build -f Containerfile.processor_go-t log-processor:latest .
+podman build -f Containerfile.processor-t log-processor:latest .
 ```
 
 #### Run with AWS Profile
@@ -142,7 +142,7 @@ cd container/
 
 # Build containers with multi-stage build
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor_go-t log-processor:latest .
+podman build -f Containerfile.processor-t log-processor:latest .
 
 # Tag and push to ECR (for Lambda deployment)
 aws ecr get-login-password --region "$AWS_REGION" | \
@@ -397,7 +397,7 @@ aws cloudwatch get-metric-statistics \
 ### Container Build Failures
 ```bash
 # Force rebuild without cache
-podman build --no-cache -f Containerfile.processor_go-t log-processor:latest .
+podman build --no-cache -f Containerfile.processor-t log-processor:latest .
 
 # Check base image availability
 podman pull public.ecr.aws/lambda/python:3.13

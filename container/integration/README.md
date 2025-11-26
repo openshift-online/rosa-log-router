@@ -52,12 +52,12 @@ Before running integration tests, you need:
 
    **Option B: Go Processor in Scan Mode (for Go rewrite development)**
    ```bash
-   make deploy-go  # Deploys infrastructure without Lambda
+   make deploy  # Deploys infrastructure without Lambda
    ```
 
    Then in a separate terminal, run the Go processor in scan mode:
    ```bash
-   make run-go-scan
+   make run-scan
    ```
 
    This starts the Go log processor in scan mode, which polls the central S3 bucket every 10 seconds.
@@ -86,7 +86,7 @@ go test -tags=integration ./integration -v -timeout 5m
 
 ### Run From Project Root (using Makefile)
 ```bash
-make test-e2e-go
+make test-e2e
 ```
 
 ## Test Cases
@@ -210,9 +210,9 @@ DefaultTimeout      = 30 * time.Second
    ```bash
    make clean
    make start
-   make deploy-go
+   make deploy
    # In separate terminal:
-   make run-go-scan
+   make run-scan
    # Then run tests
    ```
 
@@ -231,7 +231,7 @@ The Go integration tests (`go test -tags=integration`) are the **primary and rec
 - ✅ Comprehensive coverage (S3, CloudWatch, concurrent, mixed delivery)
 - ✅ Used in CI/CD pipeline
 
-**Run with:** `make test-e2e-go-quick` or `cd container && go test -tags=integration ./integration -v`
+**Run with:** `make test-e2e-quick` or `cd container && go test -tags=integration ./integration -v`
 
 ### Quick Manual Debugging
 

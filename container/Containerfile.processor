@@ -1,0 +1,51 @@
+# Multi-stage build for Go log processor
+# Stage 1: Build the Go binary
+FROM registry.access.redhat.com/ubi9/go-toolset:9.7-1763633888 AS builder
+USER 0
+# Set working directory
+WORKDIR /opt/app-root/src
+
+# Copy go module files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY cmd/ cmd/
+COPY internal/ internal/
+
+# Fix permissions for copied files
+
+RUN chmod -R 755 cmd/ internal/
+USER 1001
+
+# Build the application
+# CGO_ENABLED=0 for static binary, GOOS=linux GOARCH=amd64 for Lambda compatibility
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /opt/app-root/src/log-processor \
+    ./cmd/log-processor
+
+# Stage 2: Create minimal runtime image
+FROM registry.access.redhat.com/ubi9-minimal:latest
+
+# Copy the binary from builder
+COPY --from=builder /opt/app-root/src/log-processor /usr/local/bin/log-processor
+
+# Create non-root user for security (UID 65532 is standard for nonroot)
+USER 65532:65532
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/log-processor"]
+
+# Default to Lambda mode (can be overridden with --mode flag)
+CMD [""]
+
+# Labels
+LABEL name="rosa-log-router-processor" \
+      version="1.0.0" \
+      description="Go-based log processor for multi-tenant logging pipeline" \
+      io.k8s.description="Processes logs from S3 and delivers to customer CloudWatch/S3" \
+      io.k8s.display-name="ROSA Log Router Processor" \
+      io.openshift.tags="logging,rosa,openshift"

@@ -7,7 +7,7 @@ variable "deploy_lambda" {
 }
 
 variable "lambda_image_tag" {
-  description = "Tag for Go Lambda container image"
+  description = "Tag for Lambda container image"
   type        = string
-  default     = "go"
+  default     = "local"
 }

@@ -104,7 +104,7 @@ source .env
 
 # Build and test Go log processor container
 cd container/
-podman build -f Containerfile.processor_go -t log-processor:latest .
+podman build -f Containerfile.processor -t log-processor:latest .
 podman run --rm -e AWS_PROFILE=your-profile log-processor:latest
 ```
 

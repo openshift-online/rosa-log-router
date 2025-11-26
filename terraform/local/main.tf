@@ -192,7 +192,7 @@ resource "aws_iam_role_policy" "central_lambda_log_processor_policy" {
   })
 }
 
-# Lambda function - Go container only (requires LocalStack Pro)
+# Lambda function - Container-based deployment (requires LocalStack Pro)
 resource "aws_lambda_function" "central_log_distributor" {
   count    = var.deploy_lambda ? 1 : 0
   provider = aws.central
@@ -200,7 +200,7 @@ resource "aws_lambda_function" "central_log_distributor" {
   function_name = "${local.project_name}-${local.environment}-log-distributor"
   role          = aws_iam_role.central_lambda_execution_role.arn
 
-  # Go container deployment
+  # Container-based deployment
   package_type = "Image"
   image_uri    = "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}"
 

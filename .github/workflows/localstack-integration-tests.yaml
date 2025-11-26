@@ -9,7 +9,7 @@ on:
 jobs:
   localstack-integration:
     runs-on: ubuntu-latest
-    name: LocalStack Integration (Go Lambda container)
+    name: LocalStack Integration Tests
 
     steps:
     - name: Checkout repository
@@ -61,10 +61,10 @@ jobs:
         make start
         echo "✅ LocalStack started"
 
-    - name: Deploy infrastructure to LocalStack (Go Lambda container)
+    - name: Deploy infrastructure to LocalStack
       run: |
-        make deploy-go
-        echo "✅ Infrastructure deployed with Go Lambda container"
+        make deploy
+        echo "✅ Infrastructure deployed with Lambda container"
 
     - name: Get LocalStack bucket name
       id: localstack-config
@@ -169,26 +169,26 @@ jobs:
         make validate-vector-flow
         echo "✅ Vector flow validation passed"
 
-    - name: Run Go integration tests (e2e)
+    - name: Run integration tests (e2e)
       run: |
-        echo "🧪 Running Go integration tests with Lambda warmup..."
-        make test-e2e-go-with-warmup
-        echo "✅ Go integration tests passed"
+        echo "🧪 Running integration tests with Lambda warmup..."
+        make test-e2e-with-warmup
+        echo "✅ Integration tests passed"
 
     - name: Show test summary
       run: |
-        echo "=== LocalStack Integration Test Summary (Go Lambda container) ==="
+        echo "=== LocalStack Integration Test Summary ==="
         echo "✅ LocalStack deployment: OK"
         echo "✅ Terraform infrastructure: OK"
-        echo "✅ Go Lambda container: OK"
+        echo "✅ Lambda container: OK"
         echo "✅ Minikube cluster: OK"
         echo "✅ Customer namespaces: OK"
         echo "✅ Fake log generators: OK"
         echo "✅ Vector deployment: OK"
         echo "✅ Vector flow validation: OK"
-        echo "✅ Go e2e tests: OK"
+        echo "✅ E2E tests: OK"
         echo ""
-        echo "🎉 All Go Lambda container integration tests passed!"
+        echo "🎉 All integration tests passed!"
 
     - name: Cleanup and debug (if test fails)
       if: failure()
