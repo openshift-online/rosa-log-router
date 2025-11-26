@@ -53,7 +53,7 @@ jobs:
         
         # Build processor container (depends on collector)
         echo "Building processor container..."
-        docker build -f container/Containerfile.processor -t log-processor:github-actions container/ 
+        docker build -f container/Containerfile.processor_go -t log-processor:github-actions container/ 
         
         # Build fake log generator container
         echo "Building fake log generator container..."

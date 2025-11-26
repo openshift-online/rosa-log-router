@@ -70,7 +70,7 @@ spec:
             command:
             - /bin/sh
             - -c
-            - "test -f /proc/1/cmdline && grep -q python3 /proc/1/cmdline"
+            - "test -f /proc/1/cmdline && grep -q log-processor /proc/1/cmdline"
           initialDelaySeconds: 30
           periodSeconds: 30
         readinessProbe:
@@ -78,6 +78,6 @@ spec:
             command:
             - /bin/sh
             - -c
-            - "test -f /proc/1/cmdline && grep -q python3 /proc/1/cmdline"
+            - "test -f /proc/1/cmdline && grep -q log-processor /proc/1/cmdline"
           initialDelaySeconds: 10
           periodSeconds: 10
