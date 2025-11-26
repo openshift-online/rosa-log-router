@@ -300,7 +300,7 @@ aws lambda get-function-configuration \
 # Test container build locally
 cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor -t log-processor:local .
+podman build -f Containerfile.processor_go -t log-processor:local .
 
 # Test container run locally
 podman run --rm log-processor:local /bin/bash -c "go version && vector --version"

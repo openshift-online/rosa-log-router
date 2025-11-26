@@ -59,7 +59,7 @@ chmod +x scripts/local-integration-test.sh
 ### Container Build Process
 1. **API Container**: Builds from `api/Containerfile.server` with uvicorn
 2. **Vector Collector**: Builds from `container/Containerfile.collector`
-3. **Log Processor**: Builds from `container/Containerfile.processor (depends on collector)
+3. **Log Processor**: Builds from `container/Containerfile.processor_go (depends on collector)
 4. **Fake Log Generator**: Builds from `test_container/Containerfile`
 
 ### Image Loading Strategy

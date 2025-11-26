@@ -29,7 +29,7 @@ logs: ## Show LocalStack logs
 
 build: ## Build log processor container
 	@echo "Building log processor container..."
-	cd container && docker build -f Containerfile.processor -t log-processor:local .
+	cd container && docker build -f Containerfile.processor_go -t log-processor:local .
 	@echo "✅ Container image built: log-processor:local"
 
 init: ## Initialize Terraform

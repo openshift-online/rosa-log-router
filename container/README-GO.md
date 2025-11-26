@@ -40,7 +40,7 @@ container/
 │       └── metrics.go             # CloudWatch metrics publishing
 ├── go.mod
 ├── go.sum
-├── Containerfile.processor     # Multi-stage build with UBI9 go-toolset 1.24
+├── Containerfile.processor_go     # Multi-stage build with UBI9 go-toolset 1.24
 └── README-GO.md                   # This file
 ```
 
@@ -110,10 +110,10 @@ go tool cover -html=coverage.out -o coverage.html
 
 ```bash
 # Build with UBI9 go-toolset 1.24
-podman build -f Containerfile.processor -t log-processor:local .
+podman build -f Containerfile.processor_go -t log-processor:local .
 
 # Build for Lambda (multi-arch)
-podman build -f Containerfile.processor \
+podman build -f Containerfile.processor_go \
   --platform linux/amd64 \
   -t log-processor:local .
 ```
