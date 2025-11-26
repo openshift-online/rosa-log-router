@@ -1,12 +1,6 @@
 # Makefile for local development with LocalStack
 
-# Configuration
-# Set to 'true' to use container image instead of zip (requires LocalStack Pro)
-USE_CONTAINER ?= false
-# Tag for Lambda container image
-LAMBDA_IMAGE_TAG ?= latest
-
-.PHONY: help start stop logs build build-py build-go build-zip build-lambda-image push-lambda-image init plan deploy deploy-pyzip deploy-py deploy-go deploy-go-wo-lambda deploy-container outputs destroy test-e2e-go test-e2e-go-quick warmup-lambda test-e2e-go-with-warmup validate-vector-flow clean reset run-go-scan run-go-scan-background
+.PHONY: help start stop logs build build-go deploy-go deploy-go-wo-lambda init plan outputs destroy test-e2e-go test-e2e-go-quick warmup-lambda test-e2e-go-with-warmup validate-vector-flow clean reset run-go-scan run-go-scan-background
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -33,31 +27,12 @@ stop: ## Stop LocalStack
 logs: ## Show LocalStack logs
 	docker compose logs -f localstack
 
-build: build-py ## Build Python container image (default)
-
-build-py: ## Build Python container image
-	@echo "Building Python log processor container..."
-	cd container && docker build -f Containerfile.processor -t log-processor:local-py .
-	@echo "✅ Container image built: log-processor:local-py"
+build: build-go ## Build Go container image (default)
 
 build-go: ## Build Go container image
 	@echo "Building Go log processor container..."
 	cd container && docker build -f Containerfile.processor_go -t log-processor:local-go .
 	@echo "✅ Go container image built: log-processor:local-go"
-
-build-zip: ## Build Python Lambda zip file for local testing
-	@echo "Building Lambda deployment package..."
-	@bash terraform/modules/regional/modules/lambda-stack/build_zip.sh terraform/local/log-processor.zip
-	@echo "✅ Lambda zip built: terraform/local/log-processor.zip"
-
-build-lambda-image: ## Build Lambda container image locally (doesn't push)
-	@echo "Building Lambda container image..."
-	cd container && docker build -f Containerfile.processor -t log-processor:$(LAMBDA_IMAGE_TAG) .
-	@echo "✅ Container image built: log-processor:$(LAMBDA_IMAGE_TAG)"
-
-push-lambda-image: ## Push Lambda container to LocalStack ECR (run after terraform apply)
-	@echo "Pushing Lambda container to LocalStack ECR..."
-	@bash scripts/build-and-push-lambda.sh $(LAMBDA_IMAGE_TAG)
 
 init: ## Initialize Terraform
 	@echo "Initializing Terraform..."
@@ -66,54 +41,6 @@ init: ## Initialize Terraform
 plan: init ## Plan Terraform deployment
 	@echo "Planning Terraform deployment..."
 	cd terraform/local && terraform plan
-
-deploy: init ## Deploy full infrastructure with Lambda (Python zip or container)
-ifeq ($(USE_CONTAINER),true)
-	@echo "Deploying to LocalStack with Lambda (container image)..."
-	@echo "Step 1: Building container image..."
-	@$(MAKE) build-lambda-image
-	@echo "Step 2: Creating ECR repository..."
-	cd terraform/local && terraform apply -auto-approve -target=aws_ecr_repository.lambda_processor
-	@echo "Step 3: Pushing container image to ECR..."
-	@$(MAKE) push-lambda-image
-	@echo "Step 4: Deploying full infrastructure..."
-	cd terraform/local && terraform apply -auto-approve -var="use_container_image=true" -var="lambda_image_tag=$(LAMBDA_IMAGE_TAG)"
-else
-	@echo "Deploying to LocalStack with Lambda (zip)..."
-	@$(MAKE) build-zip
-	cd terraform/local && terraform apply -auto-approve
-endif
-	@echo ""
-	@echo "✅ Infrastructure deployed!"
-	@echo ""
-	@cd terraform/local && terraform output test_commands
-
-deploy-container: ## Deploy with container image (shortcut for USE_CONTAINER=true)
-	@$(MAKE) deploy USE_CONTAINER=true
-
-deploy-pyzip: build-zip init ## Deploy full infrastructure with Python Lambda zip file
-	@echo "Deploying to LocalStack with Python Lambda zip file..."
-	cd terraform/local && terraform apply -auto-approve
-	@echo ""
-	@echo "✅ Infrastructure deployed with Python Lambda zip!"
-	@echo ""
-	@cd terraform/local && terraform output test_commands
-
-deploy-py: build-py init ## Deploy full infrastructure with Python Lambda container
-	@echo "Deploying to LocalStack with Python Lambda container..."
-	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
-	@echo "Step 1: Creating ECR repository..."
-	cd terraform/local && terraform apply -auto-approve -target=aws_ecr_repository.lambda_processor
-	@echo "Step 2: Tagging and pushing Python container to ECR..."
-	@ECR_URL=$$(cd terraform/local && terraform output -raw ecr_repository_url 2>/dev/null); \
-	docker tag log-processor:local-py $$ECR_URL:py && \
-	docker push $$ECR_URL:py
-	@echo "Step 3: Deploying infrastructure..."
-	cd terraform/local && terraform apply -auto-approve -var="use_container_image=true" -var="lambda_image_tag=py"
-	@echo ""
-	@echo "✅ Infrastructure deployed with Python Lambda container!"
-	@echo ""
-	@cd terraform/local && terraform output test_commands
 
 deploy-go: build-go init ## Deploy infrastructure with Go Lambda container
 	@echo "Deploying to LocalStack with Go Lambda container..."
@@ -151,10 +78,9 @@ test-e2e-go: ## Run Go integration tests (with prerequisite check)
 	@echo ""
 	@echo "Prerequisites:"
 	@echo "  1. LocalStack running (make start)"
-	@echo "  2. Infrastructure deployed:"
-	@echo "     - For Python Lambda: make deploy"
-	@echo "     - For Go rewrite (scan mode): make deploy-go + make run-go-scan"
-	@echo "        Note: Go container mode requires LocalStack Pro (Lambda containers)"
+	@echo "  2. Infrastructure deployed with Go Lambda container:"
+	@echo "     - make deploy-go"
+	@echo "        Note: Requires LocalStack Pro (Lambda containers)"
 	@echo ""
 	@read -p "Press Enter to continue if prerequisites are met (Ctrl+C to cancel)..."
 	@echo ""
