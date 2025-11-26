@@ -87,7 +87,7 @@ Complete serverless processing with Lambda containers:
 # First, build and push container images
 cd ../container/
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor-t log-processor:latest .
+podman build -f Containerfile.processor -t log-processor:local .
 
 # Push to ECR
 aws ecr get-login-password --region us-east-2 | \

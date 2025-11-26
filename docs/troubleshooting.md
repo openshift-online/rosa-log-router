@@ -300,10 +300,10 @@ aws lambda get-function-configuration \
 # Test container build locally
 cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor-t log-processor:latest .
+podman build -f Containerfile.processor -t log-processor:local .
 
 # Test container run locally
-podman run --rm log-processor:latest /bin/bash -c "python3 --version && vector --version"
+podman run --rm log-processor:local /bin/bash -c "go version && vector --version"
 ```
 
 #### Common Solutions
@@ -311,10 +311,10 @@ podman run --rm log-processor:latest /bin/bash -c "python3 --version && vector -
 **Build Dependencies**
 ```bash
 # Ensure base images are accessible
-podman pull public.ecr.aws/lambda/python:3.13
+podman pull golang:1.24-alpine
 
 # Clear build cache if needed
-podman build --no-cache -f Containerfile.processor-t log-processor:latest .
+podman build --no-cache -f Containerfile.processor -t log-processor:local .
 ```
 
 **ECR Authentication**

@@ -82,7 +82,7 @@ cd container/
 podman build -f Containerfile.collector -t log-collector:latest .
 
 # Build processor container (includes Vector from collector)
-podman build -f Containerfile.processor-t log-processor:latest .
+podman build -f Containerfile.processor -t log-processor:local .
 ```
 
 #### Run with AWS Profile
@@ -98,7 +98,7 @@ podman run --rm \
   -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
   -e EXECUTION_MODE="sqs" \
   -v ~/.aws:/home/logprocessor/.aws:ro \
-  log-processor:latest
+  log-processor:local
 ```
 
 #### Run with Explicit Credentials
@@ -119,7 +119,7 @@ podman run --rm \
   -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
   -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
   -e EXECUTION_MODE="manual" \
-  log-processor:latest
+  log-processor:local
 ```
 
 #### Manual Testing with Container
@@ -131,7 +131,7 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
   -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
   -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
   -e EXECUTION_MODE=manual \
-  log-processor:latest
+  log-processor:local
 ```
 
 ### Container Registry Management
@@ -142,13 +142,13 @@ cd container/
 
 # Build containers with multi-stage build
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor-t log-processor:latest .
+podman build -f Containerfile.processor -t log-processor:local .
 
 # Tag and push to ECR (for Lambda deployment)
 aws ecr get-login-password --region "$AWS_REGION" | \
   podman login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-podman tag log-processor:latest "$ECR_IMAGE_URI"
+podman tag log-processor:local "$ECR_IMAGE_URI"
 podman push "$ECR_IMAGE_URI"
 ```
 
@@ -397,7 +397,7 @@ aws cloudwatch get-metric-statistics \
 ### Container Build Failures
 ```bash
 # Force rebuild without cache
-podman build --no-cache -f Containerfile.processor-t log-processor:latest .
+podman build --no-cache -f Containerfile.processor -t log-processor:local .
 
 # Check base image availability
 podman pull public.ecr.aws/lambda/python:3.13
