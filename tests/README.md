@@ -257,7 +257,7 @@ RETRY_ATTEMPTS=3
 
 **Container build failures:**
 - Ensure podman/docker is installed and running
-- Build manually: `cd container && podman build -f Containerfile.processor -t log-processor:test .`
+- Build manually: `cd container && podman build -f Containerfile.processor_go-t log-processor:test .`
 
 **DynamoDB Local connection failures:**
 - Verify minikube is running and DynamoDB Local pod is ready

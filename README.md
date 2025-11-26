@@ -102,12 +102,9 @@ aws dynamodb put-item \
 # Source environment variables
 source .env
 
-# Test log processor directly
+# Build and test Go log processor container
 cd container/
-python3 log_processor.py --mode sqs
-
-# Test with containers
-podman build -f Containerfile.processor -t log-processor:latest .
+podman build -f Containerfile.processor_go -t log-processor:latest .
 podman run --rm -e AWS_PROFILE=your-profile log-processor:latest
 ```
 

@@ -47,7 +47,7 @@ This Terraform configuration **reuses your existing modules** and sets up a mult
 2. **Container image built**:
    ```bash
    cd container
-   docker build -f Containerfile.processor -t log-processor:local .
+   docker build -f Containerfile.processor_go-t log-processor:local .
    ```
 
 3. **Terraform installed**
