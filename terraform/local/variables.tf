@@ -7,7 +7,7 @@ variable "deploy_lambda" {
 }
 
 variable "lambda_image_tag" {
-  description = "Tag for Lambda container image"
+  description = "Tag for Lambda container image (LocalStack uses local images)"
   type        = string
   default     = "local"
 }

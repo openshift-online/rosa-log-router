@@ -200,7 +200,7 @@ resource "aws_lambda_function" "central_log_distributor" {
   function_name = "${local.project_name}-${local.environment}-log-distributor"
   role          = aws_iam_role.central_lambda_execution_role.arn
 
-  # Container-based deployment
+  # Container-based deployment - uses ECR image
   package_type = "Image"
   image_uri    = "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}"
 
