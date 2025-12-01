@@ -43,6 +43,7 @@ provider "aws" {
 
   endpoints {
     s3         = local.localstack_endpoint
+    s3control  = local.localstack_endpoint
     sqs        = local.localstack_endpoint
     sns        = local.localstack_endpoint
     dynamodb   = local.localstack_endpoint
@@ -77,6 +78,7 @@ provider "aws" {
 
   endpoints {
     s3         = local.localstack_endpoint
+    s3control  = local.localstack_endpoint
     sqs        = local.localstack_endpoint
     sns        = local.localstack_endpoint
     dynamodb   = local.localstack_endpoint
@@ -111,6 +113,7 @@ provider "aws" {
 
   endpoints {
     s3         = local.localstack_endpoint
+    s3control  = local.localstack_endpoint
     sqs        = local.localstack_endpoint
     sns        = local.localstack_endpoint
     dynamodb   = local.localstack_endpoint
@@ -141,6 +144,7 @@ provider "aws" {
 
   endpoints {
     s3         = local.localstack_endpoint
+    s3control  = local.localstack_endpoint
     sqs        = local.localstack_endpoint
     sns        = local.localstack_endpoint
     dynamodb   = local.localstack_endpoint
