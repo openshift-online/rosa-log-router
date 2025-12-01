@@ -134,6 +134,9 @@ provider "aws" {
   skip_requesting_account_id  = true
   skip_region_validation      = true
 
+  # LocalStack S3 requires path-style access
+  s3_use_path_style = true
+
   # Disable default tags for LocalStack (causes timeout issues)
   default_tags {
     tags = {}

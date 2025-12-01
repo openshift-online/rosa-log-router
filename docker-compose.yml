@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # LocalStack - emulates ALL AWS services
   localstack:
-    image: localstack/localstack-pro:latest
+    image: localstack/localstack-pro:4.10.0
     container_name: rosa-localstack
     ports:
       - "4566:4566"  # LocalStack gateway
