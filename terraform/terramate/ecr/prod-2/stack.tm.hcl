@@ -12,7 +12,6 @@ globals "aws" {
     "us-east-2",
     "us-west-2"
   ]
-  prod-account-id = "859037107838"
   default_tags = {
     "app-code"               = "OSD-002"
     "cost-center"            = "148"
