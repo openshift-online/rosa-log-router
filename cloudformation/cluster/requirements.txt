@@ -1,2 +1,0 @@
-# Requirements for cluster template generation
-jinja2>=3.0.0
