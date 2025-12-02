@@ -40,7 +40,7 @@ container/
 │       └── metrics.go             # CloudWatch metrics publishing
 ├── go.mod
 ├── go.sum
-├── Containerfile.processor.go     # Multi-stage build with UBI9 go-toolset 1.24
+├── Containerfile.processor_go     # Multi-stage build with UBI9 go-toolset 1.24
 └── README-GO.md                   # This file
 ```
 
@@ -110,12 +110,12 @@ go tool cover -html=coverage.out -o coverage.html
 
 ```bash
 # Build with UBI9 go-toolset 1.24
-podman build -f Containerfile.processor.go -t log-processor-go:latest .
+podman build -f Containerfile.processor_go -t log-processor:local .
 
 # Build for Lambda (multi-arch)
-podman build -f Containerfile.processor.go \
+podman build -f Containerfile.processor_go \
   --platform linux/amd64 \
-  -t log-processor-go:latest-amd64 .
+  -t log-processor:local .
 ```
 
 ### Push to ECR
@@ -127,7 +127,7 @@ aws ecr get-login-password --region $AWS_REGION | \
   "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 # Tag and push
-podman tag log-processor-go:latest "$ECR_IMAGE_URI"
+podman tag log-processor:local "$ECR_IMAGE_URI"
 podman push "$ECR_IMAGE_URI"
 ```
 

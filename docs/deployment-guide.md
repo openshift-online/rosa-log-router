@@ -92,7 +92,7 @@ cd container/
 
 # Build multi-stage containers
 podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor -t log-processor:latest .
+podman build -f Containerfile.processor_go -t log-processor:local .
 
 # Push to ECR
 aws ecr get-login-password --region "$AWS_REGION" | \
