@@ -1,6 +1,6 @@
 # Makefile for local development with LocalStack
 
-.PHONY: help start stop logs build deploy deploy-wo-lambda init plan outputs destroy test-e2e test-e2e-quick warmup-lambda test-e2e-with-warmup validate-vector-flow clean reset run-scan run-scan-background
+.PHONY: help start stop logs build build-api build-all deploy deploy-wo-lambda deploy-api init plan outputs test-api destroy test-e2e test-e2e-quick warmup-lambda test-e2e-with-warmup validate-vector-flow clean reset run-scan run-scan-background
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -31,6 +31,14 @@ build: ## Build log processor container
 	@echo "Building log processor container..."
 	cd container && docker build -f Containerfile.processor_go -t log-processor:local .
 	@echo "✅ Container image built: log-processor:local"
+
+build-api: ## Build API service and authorizer containers
+	@echo "Building API containers..."
+	cd api && docker build -f Containerfile.api -t api-service:local .
+	cd api && docker build -f Containerfile.authorizer -t api-authorizer:local .
+	@echo "✅ API container images built: api-service:local, api-authorizer:local"
+
+build-all: build build-api ## Build all containers (processor + API)
 
 init: ## Initialize Terraform
 	@echo "Initializing Terraform..."
@@ -69,8 +77,48 @@ deploy-wo-lambda: build init ## Deploy infrastructure without Lambda (for scan m
 	@echo ""
 	@echo "Run 'make run-scan' to start the processor in scan mode"
 
+deploy-api: build build-api init ## Deploy infrastructure with API containers
+	@echo "Deploying API to LocalStack..."
+	@echo "⚠️  Note: LocalStack Pro required for Lambda container support"
+	@echo "Step 1: Creating ECR repositories..."
+	cd terraform/local && terraform apply -auto-approve \
+		-target=aws_ecr_repository.lambda_processor \
+		-target=aws_ecr_repository.api_service \
+		-target=aws_ecr_repository.api_authorizer
+	@echo "Step 2: Tagging and pushing processor container to ECR..."
+	@ECR_PROCESSOR=$$(cd terraform/local && terraform output -raw ecr_repository_url 2>/dev/null); \
+	docker tag log-processor:local $$ECR_PROCESSOR:local && \
+	if docker info 2>&1 | grep -qi podman; then \
+		docker push $$ECR_PROCESSOR:local --format docker --tls-verify=false --remove-signatures; \
+	else \
+		docker push $$ECR_PROCESSOR:local; \
+	fi
+	@echo "Step 3: Tagging and pushing API containers to ECR..."
+	@ECR_API_SERVICE=$$(cd terraform/local && terraform output -raw ecr_api_service_url 2>/dev/null); \
+	ECR_API_AUTHORIZER=$$(cd terraform/local && terraform output -raw ecr_api_authorizer_url 2>/dev/null); \
+	docker tag api-service:local $$ECR_API_SERVICE:local && \
+	docker tag api-authorizer:local $$ECR_API_AUTHORIZER:local && \
+	if docker info 2>&1 | grep -qi podman; then \
+		docker push $$ECR_API_SERVICE:local --format docker --tls-verify=false --remove-signatures && \
+		docker push $$ECR_API_AUTHORIZER:local --format docker --tls-verify=false --remove-signatures; \
+	else \
+		docker push $$ECR_API_SERVICE:local && \
+		docker push $$ECR_API_AUTHORIZER:local; \
+	fi
+	@echo "Step 4: Deploying full infrastructure..."
+	cd terraform/local && terraform apply -auto-approve
+	@echo ""
+	@echo "✅ Infrastructure deployed with API!"
+	@echo ""
+	@cd terraform/local && terraform output test_commands
+
 outputs: ## Show Terraform outputs
 	@cd terraform/local && terraform output
+
+test-api: ## Test API health endpoint
+	@echo "Testing API health endpoint..."
+	@API_ENDPOINT=$$(cd terraform/local && terraform output -raw api_gateway_endpoint 2>/dev/null); \
+	curl -v "$$API_ENDPOINT/api/v1/health"
 
 destroy: ## Destroy Terraform infrastructure
 	@echo "Destroying infrastructure..."

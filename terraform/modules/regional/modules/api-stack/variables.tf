@@ -58,3 +58,9 @@ variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
 }
+
+variable "enable_custom_domain" {
+  description = "Enable custom domain with Route53 and ACM (disable for LocalStack)"
+  type        = bool
+  default     = true
+}

@@ -42,17 +42,19 @@ provider "aws" {
   }
 
   endpoints {
-    s3         = local.localstack_endpoint
-    sqs        = local.localstack_endpoint
-    sns        = local.localstack_endpoint
-    dynamodb   = local.localstack_endpoint
-    lambda     = local.localstack_endpoint
-    iam        = local.localstack_endpoint
-    sts        = local.localstack_endpoint
-    cloudwatch = local.localstack_endpoint
-    logs       = local.localstack_endpoint
-    kms        = local.localstack_endpoint
-    ecr        = local.localstack_endpoint
+    s3              = local.localstack_endpoint
+    sqs             = local.localstack_endpoint
+    sns             = local.localstack_endpoint
+    dynamodb        = local.localstack_endpoint
+    lambda          = local.localstack_endpoint
+    iam             = local.localstack_endpoint
+    sts             = local.localstack_endpoint
+    cloudwatch      = local.localstack_endpoint
+    logs            = local.localstack_endpoint
+    kms             = local.localstack_endpoint
+    ecr             = local.localstack_endpoint
+    apigateway      = local.localstack_endpoint
+    secretsmanager  = local.localstack_endpoint
   }
 }
 
@@ -76,17 +78,19 @@ provider "aws" {
   }
 
   endpoints {
-    s3         = local.localstack_endpoint
-    sqs        = local.localstack_endpoint
-    sns        = local.localstack_endpoint
-    dynamodb   = local.localstack_endpoint
-    lambda     = local.localstack_endpoint
-    iam        = local.localstack_endpoint
-    sts        = local.localstack_endpoint
-    cloudwatch = local.localstack_endpoint
-    logs       = local.localstack_endpoint
-    kms        = local.localstack_endpoint
-    ecr        = local.localstack_endpoint
+    s3              = local.localstack_endpoint
+    sqs             = local.localstack_endpoint
+    sns             = local.localstack_endpoint
+    dynamodb        = local.localstack_endpoint
+    lambda          = local.localstack_endpoint
+    iam             = local.localstack_endpoint
+    sts             = local.localstack_endpoint
+    cloudwatch      = local.localstack_endpoint
+    logs            = local.localstack_endpoint
+    kms             = local.localstack_endpoint
+    ecr             = local.localstack_endpoint
+    apigateway      = local.localstack_endpoint
+    secretsmanager  = local.localstack_endpoint
   }
 }
 
@@ -110,17 +114,19 @@ provider "aws" {
   }
 
   endpoints {
-    s3         = local.localstack_endpoint
-    sqs        = local.localstack_endpoint
-    sns        = local.localstack_endpoint
-    dynamodb   = local.localstack_endpoint
-    lambda     = local.localstack_endpoint
-    iam        = local.localstack_endpoint
-    sts        = local.localstack_endpoint
-    cloudwatch = local.localstack_endpoint
-    logs       = local.localstack_endpoint
-    kms        = local.localstack_endpoint
-    ecr        = local.localstack_endpoint
+    s3              = local.localstack_endpoint
+    sqs             = local.localstack_endpoint
+    sns             = local.localstack_endpoint
+    dynamodb        = local.localstack_endpoint
+    lambda          = local.localstack_endpoint
+    iam             = local.localstack_endpoint
+    sts             = local.localstack_endpoint
+    cloudwatch      = local.localstack_endpoint
+    logs            = local.localstack_endpoint
+    kms             = local.localstack_endpoint
+    ecr             = local.localstack_endpoint
+    apigateway      = local.localstack_endpoint
+    secretsmanager  = local.localstack_endpoint
   }
 }
 
@@ -140,16 +146,18 @@ provider "aws" {
   }
 
   endpoints {
-    s3         = local.localstack_endpoint
-    sqs        = local.localstack_endpoint
-    sns        = local.localstack_endpoint
-    dynamodb   = local.localstack_endpoint
-    lambda     = local.localstack_endpoint
-    iam        = local.localstack_endpoint
-    sts        = local.localstack_endpoint
-    cloudwatch = local.localstack_endpoint
-    logs       = local.localstack_endpoint
-    kms        = local.localstack_endpoint
-    ecr        = local.localstack_endpoint
+    s3              = local.localstack_endpoint
+    sqs             = local.localstack_endpoint
+    sns             = local.localstack_endpoint
+    dynamodb        = local.localstack_endpoint
+    lambda          = local.localstack_endpoint
+    iam             = local.localstack_endpoint
+    sts             = local.localstack_endpoint
+    cloudwatch      = local.localstack_endpoint
+    logs            = local.localstack_endpoint
+    kms             = local.localstack_endpoint
+    ecr             = local.localstack_endpoint
+    apigateway      = local.localstack_endpoint
+    secretsmanager  = local.localstack_endpoint
   }
 }

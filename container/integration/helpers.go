@@ -47,10 +47,11 @@ type E2ETestHelper struct {
 	localstackURL string
 
 	// Terraform outputs (fetched dynamically)
-	centralBucket     string
-	customer1Bucket   string
-	customer2Bucket   string
-	customer2LogGroup string
+	centralBucket      string
+	customer1Bucket    string
+	customer2Bucket    string
+	customer2LogGroup  string
+	apiGatewayEndpoint string
 }
 
 // NewE2ETestHelper creates a new test helper with LocalStack-configured AWS clients
@@ -342,6 +343,21 @@ func (h *E2ETestHelper) WaitForCloudWatchDelivery(t *testing.T, accountID, logGr
 	}
 
 	require.Fail(t, "timeout waiting for CloudWatch delivery", "UUID %s not found in log group %s, stream %s after %v", testID, logGroup, logStream, timeout)
+}
+
+// APIGatewayEndpoint retrieves the API Gateway endpoint from Terraform outputs
+func (h *E2ETestHelper) APIGatewayEndpoint() string {
+	if h.apiGatewayEndpoint == "" {
+		output := h.terraformOutput("api_gateway_endpoint")
+		h.apiGatewayEndpoint = strings.TrimSpace(output)
+	}
+	return h.apiGatewayEndpoint
+}
+
+// APIPSK retrieves the API PSK from Terraform outputs
+func (h *E2ETestHelper) APIPSK() string {
+	// Use the default test PSK
+	return "test-psk-localstack-do-not-use-in-production"
 }
 
 // Cleanup performs any necessary cleanup after tests (currently a no-op but provided for future use)
