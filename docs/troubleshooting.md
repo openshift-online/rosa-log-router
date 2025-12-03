@@ -4,19 +4,35 @@ This guide covers common issues, debugging techniques, and solutions for the mul
 
 ## Quick Diagnostic Commands
 
-### Infrastructure Health Check
+### LocalStack Health Check (Development)
 ```bash
-# Check CloudFormation stack status
-aws cloudformation describe-stacks \
-  --stack-name multi-tenant-logging-${ENVIRONMENT}
+# Check LocalStack status
+curl http://localhost:4566/_localstack/health
 
-# Verify all stack resources are healthy
-aws cloudformation describe-stack-resources \
-  --stack-name multi-tenant-logging-${ENVIRONMENT} \
-  --query 'StackResources[?ResourceStatus!=`CREATE_COMPLETE`]'
+# View LocalStack logs
+make logs
+
+# Check Terraform state
+cd terraform/local && terraform show
+
+# Verify deployed resources
+cd terraform/local && terraform state list
 ```
 
-### Vector Health Check
+### Infrastructure Health Check (Production)
+```bash
+# Check S3 bucket
+aws s3 ls s3://YOUR-CENTRAL-BUCKET/
+
+# Check DynamoDB table
+aws dynamodb describe-table \
+  --table-name YOUR-TENANT-CONFIG-TABLE
+
+# List IAM roles
+aws iam list-roles --query 'Roles[?contains(RoleName, `log`)].RoleName'
+```
+
+### Vector Health Check (Cluster Deployments)
 ```bash
 # Check Vector pod status
 kubectl get pods -n logging
@@ -30,20 +46,18 @@ kubectl port-forward -n logging daemonset/vector-logs 8686:8686
 curl http://localhost:8686/metrics
 ```
 
-### Processing Pipeline Health Check
+### Processing Pipeline Health Check (LocalStack)
 ```bash
-# Check SQS queue depth
-aws sqs get-queue-attributes \
-  --queue-url "$SQS_QUEUE_URL" \
-  --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible
+# Check tenant configurations
+TABLE_NAME=$(cd terraform/local && terraform output -raw central_dynamodb_table)
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name $TABLE_NAME
 
-# Check Lambda function status
-aws lambda get-function \
-  --function-name multi-tenant-logging-${ENVIRONMENT}-log-distributor
+# List S3 buckets and contents
+aws --endpoint-url=http://localhost:4566 s3 ls
+aws --endpoint-url=http://localhost:4566 s3 ls s3://central-source-logs/ --recursive
 
-# Check recent Lambda executions
-aws logs describe-log-groups \
-  --log-group-name-prefix "/aws/lambda/multi-tenant-logging-${ENVIRONMENT}"
+# Run integration tests
+make test-e2e
 ```
 
 ## Common Issues and Solutions
@@ -551,8 +565,11 @@ AWS Region: $AWS_REGION
 Environment: $ENVIRONMENT
 Stack Name: multi-tenant-logging-${ENVIRONMENT}
 
-=== Infrastructure Status ===
-$(aws cloudformation describe-stacks --stack-name multi-tenant-logging-${ENVIRONMENT} --query 'Stacks[0].StackStatus')
+=== Infrastructure Status (LocalStack) ===
+$(curl -s http://localhost:4566/_localstack/health | jq -r '.services')
+
+=== Infrastructure Status (Production) ===
+$(aws dynamodb describe-table --table-name YOUR-TENANT-CONFIG-TABLE --query 'Table.TableStatus' 2>/dev/null || echo "N/A")
 
 === Vector Status ===
 $(kubectl get pods -n logging)

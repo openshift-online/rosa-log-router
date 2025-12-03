@@ -38,31 +38,36 @@ graph LR
 - **💻 [Development Guide](CLAUDE.md)** - Local development and testing
 
 ### Component Guides
-- **☁️ [Infrastructure Deployment](cloudformation/README.md)** - CloudFormation templates
+- **☁️ [Terraform Infrastructure](terraform/local/README.md)** - LocalStack development environment
 - **🚢 [Kubernetes Deployment](k8s/README.md)** - Vector and processor deployment
 - **🔌 [API Management](api/README.md)** - Tenant configuration API
 - **🐛 [Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
 
 ## 🎯 Quick Start
 
-### Prerequisites
-- AWS CLI configured with appropriate permissions
-- S3 bucket for storing CloudFormation templates  
-- kubectl configured for your Kubernetes clusters
-- Python 3.13+ and Podman for local development
+### Prerequisites for Local Development
+- **Podman** for container builds and LocalStack
+- **Go 1.21+** for log processor development
+- **Terraform** for infrastructure as code
+- **Make** for development workflow automation
+- **kubectl** (optional, for cluster deployments)
 
-### 1. Deploy Infrastructure
+### 1. Local Development with LocalStack
 ```bash
-# Deploy global infrastructure (one-time)
-cd cloudformation/
-./deploy.sh -t global
+# Start LocalStack
+make start
 
-# Deploy regional infrastructure with processing
-./deploy.sh -t regional \
-  -b your-cloudformation-templates-bucket \
-  --central-role-arn arn:aws:iam::123456789012:role/ROSA-CentralLogDistributionRole-abcd1234 \
-  --include-sqs --include-lambda \
-  --ecr-image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/log-processor:latest
+# Build the log processor container
+make build
+
+# Deploy infrastructure to LocalStack
+make deploy
+
+# Run integration tests
+make test-e2e
+
+# View all available commands
+make help
 ```
 
 ### 2. Deploy Vector to Kubernetes
@@ -77,43 +82,42 @@ kubectl apply -k k8s/collector/overlays/cuppett
 kubectl get pods -n logging
 ```
 
-### 3. Configure Tenants
+### 3. Configure Tenants (LocalStack)
 ```bash
-# Add tenant configuration to DynamoDB
-aws dynamodb put-item \
-  --table-name multi-tenant-logging-development-tenant-configs \
-  --item '{
-    "tenant_id": {"S": "acme-corp"},
-    "type": {"S": "cloudwatch"},
-    "log_distribution_role_arn": {"S": "arn:aws:iam::123456789012:role/LogDistributionRole"},
-    "log_group_name": {"S": "/aws/logs/acme-corp"},
-    "target_region": {"S": "us-east-1"},
-    "enabled": {"BOOL": true},
-    "groups": {"SS": ["API", "Authentication"]}
-  }'
+# Tenant configurations are automatically created by Terraform
+# View tenant configs in LocalStack
+TABLE_NAME=$(cd terraform/local && terraform output -raw central_dynamodb_table)
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name $TABLE_NAME
 ```
 
-**📖 [Complete Deployment Guide](docs/deployment-guide.md)**
+**📖 [Complete Deployment Guide](docs/deployment-guide.md)** | **🔧 [Development Guide](CLAUDE.md)**
 
 ## 🔧 Development
 
-### Local Testing
+### Local Testing with Make
 ```bash
-# Source environment variables
-source .env
+# View all available commands
+make help
 
-# Build and test Go log processor container
-cd container/
-podman build -f Containerfile.processor -t log-processor:latest .
-podman run --rm -e AWS_PROFILE=your-profile log-processor:latest
+# Full workflow: start LocalStack, build, deploy, test
+make start
+make build
+make deploy
+make test-e2e
+
+# Run processor in scan mode
+make run-scan
+
+# Validate Vector log flow
+make validate-vector-flow
 ```
 
 ### Container Architecture
-- **Collector Container**: Base container with Vector binary
-- **Processor Container**: Multi-stage build including Vector for CloudWatch delivery
-- **Multi-Mode Support**: Lambda runtime, SQS polling, and manual testing
+- **Collector Container**: Vector binary for log collection
+- **Processor Container**: Go-based processor with multi-stage build
+- **Multi-Mode Support**: Lambda, scan mode, and manual testing
 
-**💻 [Full Development Guide](CLAUDE.md)**
+**💻 [Full Development Guide](CLAUDE.md)** | **📦 [Makefile Reference](Makefile)**
 
 ## 🎛️ Current Capabilities
 

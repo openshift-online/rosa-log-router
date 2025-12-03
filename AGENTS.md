@@ -4,11 +4,11 @@ This guide provides comprehensive instructions for local development and testing
 
 ## Prerequisites
 
-- **Python 3.13+** with pip
+- **Go 1.21+** for log processor development
+- **Python 3.13+** for API development only (optional)
 - **Podman** for containerized testing
-- **AWS CLI** configured with your AWS profile
-- **kubectl** configured for your Kubernetes clusters
-- **Access to deployed infrastructure** (see [Deployment Guide](docs/deployment-guide.md))
+- **AWS CLI** configured with LocalStack testing
+- **kubectl** configured for your Kubernetes clusters (for cluster deployments)
 
 ## Environment Setup
 
@@ -17,59 +17,47 @@ This guide provides comprehensive instructions for local development and testing
 The project uses a `.env` file for centralized environment variable management:
 
 ```bash
-# Copy the sample environment file and customize with your values
-cp .env.sample .env
+# For local development with LocalStack, most configuration is handled by the Makefile
+# See Makefile targets for common development tasks
 
-# Edit the .env file with your AWS configuration
-vim .env  # or use your preferred editor
-
-# Source the environment variables for the current session
-source .env
-
-# Verify configuration
-echo "AWS Profile: $AWS_PROFILE"
-echo "AWS Region: $AWS_REGION"
-echo "Template Bucket: $TEMPLATE_BUCKET"
+# For production deployments, configure AWS credentials
+export AWS_PROFILE=your-profile
+export AWS_REGION=us-east-1
 ```
 
-**Key Environment Variables:**
+**Key Environment Variables for Production:**
 - `AWS_PROFILE`: Your AWS CLI profile name
-- `AWS_REGION`: Target AWS region for deployment
+- `AWS_REGION`: Target AWS region
 - `AWS_ACCOUNT_ID`: Your AWS account ID
-- `TEMPLATE_BUCKET`: S3 bucket for CloudFormation templates
-- `ENVIRONMENT`: Environment name (development, staging, production)
-- `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN`: ARN of the global central role
-- `ECR_IMAGE_URI`: Container image URI for Lambda deployment
 
-**Security Note**: Never commit the `.env` file to version control. It's included in `.gitignore`.
+**LocalStack Development:**
+- Use `make start` to start LocalStack
+- Use `make deploy` to deploy infrastructure locally
+- See Makefile for all available targets
+
+**Security Note**: Never commit credentials to version control.
 
 ## Local Development
 
-### Direct Python Execution
+### Quick Start with Make
 
-#### Install Dependencies
+The easiest way to get started is using the Makefile:
+
 ```bash
-cd container/
-pip3 install --user -r requirements.txt
-```
+# Start LocalStack
+make start
 
-#### SQS Polling Mode
-Test against live SQS queue:
-```bash
-cd container/
-source ../.env
+# Build the log processor container
+make build
 
-python3 log_processor.py --mode sqs
-```
+# Deploy infrastructure to LocalStack
+make deploy
 
-#### Manual Testing Mode
-Test with sample S3 event data:
-```bash
-cd container/
-source ../.env
+# Run integration tests
+make test-e2e
 
-# Test with sample S3 event
-echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | python3 log_processor.py --mode manual
+# View all available targets
+make help
 ```
 
 ### Container-Based Development
@@ -78,195 +66,75 @@ echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket
 ```bash
 cd container/
 
-# Build collector container first (contains Vector)
+# Build collector container (contains Vector for log collection)
 podman build -f Containerfile.collector -t log-collector:latest .
 
-# Build processor container (includes Vector from collector)
-podman build -f Containerfile.processor -t log-processor:local .
+# Build Go-based processor container
+podman build -f Containerfile.processor_go -t log-processor:local .
+
+# Or use Make from project root
+cd ..
+make build
 ```
 
-#### Run with AWS Profile
+#### Run in LocalStack Environment
 ```bash
-# Source environment variables
-source .env
+# Using Make (recommended)
+make run-scan
 
-podman run --rm \
-  -e AWS_PROFILE="$AWS_PROFILE" \
-  -e AWS_REGION="$AWS_REGION" \
-  -e SQS_QUEUE_URL="$SQS_QUEUE_URL" \
-  -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
-  -e EXECUTION_MODE="sqs" \
-  -v ~/.aws:/home/logprocessor/.aws:ro \
-  log-processor:local
+# Or manually with Podman (after make deploy)
+# Get configuration from terraform outputs
+S3_BUCKET=$(cd terraform/local && terraform output -raw central_source_bucket)
+DYNAMODB_TABLE=$(cd terraform/local && terraform output -raw central_dynamodb_table)
+ROLE_ARN=$(cd terraform/local && terraform output -raw central_log_distribution_role_arn)
+
+podman run --rm -it --network rosa-log-router_rosa-network \
+  -e AWS_ACCESS_KEY_ID=111111111111 \
+  -e AWS_SECRET_ACCESS_KEY=test \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ENDPOINT_URL=http://localstack:4566 \
+  -e AWS_S3_USE_PATH_STYLE=true \
+  -e SOURCE_BUCKET=$S3_BUCKET \
+  -e TENANT_CONFIG_TABLE=$DYNAMODB_TABLE \
+  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN=$ROLE_ARN \
+  -e SCAN_INTERVAL=10 \
+  -e LOG_LEVEL=DEBUG \
+  log-processor:local \
+  --mode scan
 ```
 
-#### Run with Explicit Credentials
-```bash
-# Source environment variables
-source .env
-
-# Extract credentials (do not save these in files!)
-export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile "$AWS_PROFILE")
-export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile "$AWS_PROFILE")
-
-# Run container with explicit credentials
-podman run --rm \
-  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-  -e AWS_REGION="$AWS_REGION" \
-  -e SQS_QUEUE_URL="$SQS_QUEUE_URL" \
-  -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
-  -e EXECUTION_MODE="manual" \
-  log-processor:local
-```
-
-#### Manual Testing with Container
-```bash
-echo '{"Message": "{\"Records\": [{\"s3\": {\"bucket\": {\"name\": \"test-bucket\"}, \"object\": {\"key\": \"test-customer/test-cluster/test-app/test-pod/20240101-test.json.gz\"}}}]}"}' | podman run --rm -i \
-  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-  -e AWS_REGION="$AWS_REGION" \
-  -e TENANT_CONFIG_TABLE="$TENANT_CONFIG_TABLE" \
-  -e CENTRAL_LOG_DISTRIBUTION_ROLE_ARN="$CENTRAL_LOG_DISTRIBUTION_ROLE_ARN" \
-  -e EXECUTION_MODE=manual \
-  log-processor:local
-```
-
-### Container Registry Management
-
-#### Build and Push to ECR
-```bash
-cd container/
-
-# Build containers with multi-stage build
-podman build -f Containerfile.collector -t log-collector:latest .
-podman build -f Containerfile.processor -t log-processor:local .
-
-# Tag and push to ECR (for Lambda deployment)
-aws ecr get-login-password --region "$AWS_REGION" | \
-  podman login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-podman tag log-processor:local "$ECR_IMAGE_URI"
-podman push "$ECR_IMAGE_URI"
-```
+#### Production Deployment
+For production AWS deployments, see the deployment documentation. Local development uses LocalStack for testing.
 
 ## Testing and Validation
 
+### Integration Testing with LocalStack
+
+The project uses Go-based integration tests that run against LocalStack:
+
+#### Run Integration Tests
+```bash
+# Using Make (recommended)
+make test-e2e
+
+# Or manually with Go
+cd container
+go test -count=1 -tags=integration ./integration -v -timeout 5m
+```
+
+#### Validate Vector Flow
+```bash
+# Test Vector log routing to customer buckets
+make validate-vector-flow
+```
+
 ### Vector Pipeline Testing
 
-#### Test Environment Setup
-```bash
-cd tests/integration/
+For Vector testing in production environments, ensure:
+- Namespace labels are correctly configured
+- IRSA roles are properly set up
+- S3 bucket permissions are validated
 
-# Set up environment for Vector role assumption
-chmod +x test-vector.sh
-source ./test-vector.sh
-
-# Install fake log generator dependencies
-cd ../../test_container/
-pip3 install -r requirements.txt
-```
-
-#### Basic Vector Testing
-```bash
-# Basic Vector test with realistic fake logs
-python3 fake_log_generator.py --total-batches 10 | \
-  vector --config ../tests/vector-local-test.yaml
-
-# High-volume Vector performance test
-python3 fake_log_generator.py \
-  --min-batch-size 50 --max-batch-size 100 \
-  --min-sleep 0.1 --max-sleep 0.5 \
-  --total-batches 100 | \
-  vector --config ../tests/vector-local-test.yaml
-
-# Multi-tenant Vector test
-python3 fake_log_generator.py \
-  --customer-id acme-corp \
-  --cluster-id prod-cluster-1 \
-  --application payment-service \
-  --total-batches 20 | \
-  vector --config ../tests/vector-local-test.yaml
-```
-
-#### Container-Based Vector Testing
-```bash
-# Build and test fake log generator container
-cd test_container/
-podman build -f Containerfile -t fake-log-generator .
-podman run --rm fake-log-generator --total-batches 10 | \
-  vector --config ../tests/vector-local-test.yaml
-```
-
-#### Manual Vector Role Assumption
-```bash
-# Alternative to test-vector.sh script
-export AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile "$AWS_PROFILE")
-export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key --profile "$AWS_PROFILE")
-export S3_WRITER_ROLE_ARN=arn:aws:iam::641875867446:role/multi-tenant-logging-development-central-s3-writer-role
-export S3_BUCKET_NAME=multi-tenant-logging-development-central-12345678
-export AWS_REGION=us-east-2
-```
-
-### Unit Testing
-
-The project includes comprehensive unit tests (126 total tests):
-
-#### Install Test Dependencies
-```bash
-# From project root
-pip3 install -r tests/requirements.txt
-```
-
-#### Run All Tests
-```bash
-# Run all unit tests
-pytest tests/unit/ -v
-
-# With coverage report
-pytest tests/unit/ --cov=container --cov=api/src --cov-report=html --cov-report=term-missing
-```
-
-#### Run Specific Tests
-```bash
-# Test log processor only
-pytest tests/unit/test_log_processor.py -v
-
-# Test API components only
-pytest tests/unit/test_api_*.py -v
-
-# Run with specific markers
-pytest tests/unit/ -m "unit" -v
-```
-
-#### Test Structure Overview
-- **`test_log_processor.py`**: Container processing logic, S3 parsing, DynamoDB access, Vector integration
-- **`test_api_*.py`**: FastAPI endpoints, authentication, tenant management
-- **`conftest.py`**: Shared fixtures with AWS service mocking
-
-### Infrastructure Testing
-
-#### Validate CloudFormation Templates
-```bash
-cd cloudformation/
-
-# Validate templates without deployment
-./deploy.sh --validate-only -b "$TEMPLATE_BUCKET"
-./deploy.sh --validate-only -b "$TEMPLATE_BUCKET" --include-sqs --include-lambda
-```
-
-#### Test Modular Deployments
-```bash
-# Test different deployment patterns
-./deploy.sh --validate-only -b "$TEMPLATE_BUCKET" --include-sqs
-./deploy.sh --validate-only -b "$TEMPLATE_BUCKET" --include-api
-```
-
-## Health Checks and Debugging
-
-### Vector Status
 ```bash
 # Check Vector pod status
 kubectl get pods -n logging
@@ -278,74 +146,82 @@ kubectl port-forward -n logging daemonset/vector-logs 8686:8686
 curl http://localhost:8686/metrics
 ```
 
-### SQS Queue Status
+### Infrastructure Testing
+
+#### Validate Terraform Configuration
 ```bash
-# Check queue metrics
-aws sqs get-queue-attributes \
-  --queue-url "$SQS_QUEUE_URL" \
-  --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible
+cd terraform/local
+
+# Initialize Terraform
+terraform init
+
+# Validate configuration
+terraform validate
+
+# Plan deployment
+terraform plan
 ```
 
-### Lambda Function Status
+## Health Checks and Debugging
+
+### LocalStack Health
 ```bash
-# Check function configuration
-aws lambda get-function \
-  --function-name multi-tenant-logging-${ENVIRONMENT}-log-distributor
+# Check LocalStack status
+curl http://localhost:4566/_localstack/health
 
-# Check recent logs
-aws logs describe-log-streams \
-  --log-group-name "/aws/lambda/multi-tenant-logging-${ENVIRONMENT}-log-distributor" \
-  --order-by LastEventTime --descending
-
-# Filter for errors
-aws logs filter-log-events \
-  --log-group-name "/aws/lambda/multi-tenant-logging-${ENVIRONMENT}-log-distributor" \
-  --filter-pattern "ERROR" \
-  --start-time $(date -d '1 hour ago' +%s)000
+# View LocalStack logs
+make logs
 ```
 
-### Tenant Configuration Management
+### Vector Status (Production Deployments)
 ```bash
-# Check tenant configuration
-aws dynamodb get-item \
-  --table-name multi-tenant-logging-${ENVIRONMENT}-tenant-configs \
-  --key '{"tenant_id":{"S":"TENANT_ID"},"type":{"S":"cloudwatch"}}'
+# Check Vector pod status
+kubectl get pods -n logging
+kubectl describe daemonset vector-logs -n logging
+kubectl logs -n logging daemonset/vector-logs --tail=50
 
-# List all tenants
-aws dynamodb scan \
-  --table-name multi-tenant-logging-${ENVIRONMENT}-tenant-configs \
-  --projection-expression "tenant_id, #t, enabled" \
-  --expression-attribute-names '{"#t": "type"}'
+# Check Vector metrics endpoint
+kubectl port-forward -n logging daemonset/vector-logs 8686:8686
+curl http://localhost:8686/metrics
+```
 
-# Enable/disable a tenant
-aws dynamodb update-item \
-  --table-name multi-tenant-logging-${ENVIRONMENT}-tenant-configs \
-  --key '{"tenant_id":{"S":"TENANT_ID"},"type":{"S":"cloudwatch"}}' \
-  --update-expression "SET enabled = :val" \
-  --expression-attribute-values '{":val":{"BOOL":true}}'
+### Tenant Configuration Management (LocalStack)
+```bash
+# Get table name from terraform
+TABLE_NAME=$(cd terraform/local && terraform output -raw central_dynamodb_table)
+
+# List all tenants in LocalStack
+aws --endpoint-url=http://localhost:4566 dynamodb scan \
+  --table-name $TABLE_NAME
+
+# Check specific tenant configuration
+aws --endpoint-url=http://localhost:4566 dynamodb get-item \
+  --table-name $TABLE_NAME \
+  --key '{"tenant_id":{"S":"customer1"},"type":{"S":"cloudwatch"}}'
 ```
 
 ## Development Workflow
 
 ### Code Development
-1. **Make changes** to container code or infrastructure
-2. **Run unit tests** to verify functionality
-3. **Test locally** with manual or SQS polling mode
-4. **Build containers** and test with Podman
-5. **Validate infrastructure** changes with CloudFormation
-6. **Deploy to development environment** for integration testing
+1. **Make changes** to Go code in `container/`
+2. **Run unit tests** to verify functionality (if applicable)
+3. **Build container** with `make build`
+4. **Deploy to LocalStack** with `make deploy`
+5. **Run integration tests** with `make test-e2e`
+6. **Iterate** on changes as needed
 
 ### Container Development
-1. **Build locally** with Podman
-2. **Test multi-mode execution** (Lambda, SQS, manual)
-3. **Push to ECR** for Lambda deployment testing
-4. **Deploy and validate** in development environment
+1. **Build locally** with `make build`
+2. **Test with LocalStack** using `make deploy` and `make run-scan`
+3. **Validate integration** with `make test-e2e`
+4. **Review logs** and debug as needed
 
 ### Infrastructure Development
-1. **Validate templates** locally
-2. **Test modular deployment** patterns
-3. **Deploy to development** environment
-4. **Verify resource creation** and configuration
+1. **Edit Terraform** in `terraform/local/`
+2. **Validate changes** with `terraform validate`
+3. **Plan deployment** with `make plan`
+4. **Deploy changes** with `make deploy`
+5. **Verify resources** in LocalStack
 
 ## Performance Optimization
 
@@ -361,74 +237,58 @@ buffer:
   when_full: "block"     # Ensure no log loss
 ```
 
-### Lambda Memory Optimization
-```bash
-# Monitor Lambda performance
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Duration \
-  --dimensions Name=FunctionName,Value=multi-tenant-logging-${ENVIRONMENT}-log-distributor \
-  --start-time $(date -d '1 hour ago' --iso-8601) \
-  --end-time $(date --iso-8601) \
-  --period 300 \
-  --statistics Average,Maximum
-```
-
-### Cost Monitoring
-```bash
-# Check S3 storage costs
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/S3 \
-  --metric-name BucketSizeBytes \
-  --dimensions Name=BucketName,Value="$S3_BUCKET_NAME" Name=StorageType,Value=StandardStorage \
-  --start-time $(date -d '24 hours ago' --iso-8601) \
-  --end-time $(date --iso-8601) \
-  --period 86400 \
-  --statistics Average
-```
+### Go Processor Tuning
+For production deployments, consider:
+- Adjusting scan intervals based on log volume
+- Tuning batch sizes for S3 operations
+- Monitoring memory usage and adjusting container limits
+- Optimizing concurrent processing of log files
 
 ## Common Development Issues
 
-### Vector Not Collecting Logs
-- **Check namespace labels**: Ensure namespaces have `hypershift.openshift.io/hosted-control-plane=true`
-- **Verify IRSA configuration**: Check service account annotations and trust policies
-- **Test S3 access**: Manually verify S3WriterRole permissions
+### LocalStack Not Starting
+```bash
+# Check Podman socket
+systemctl --user status podman.socket
+systemctl --user enable --now podman.socket
+
+# Clean and restart
+make clean
+make start
+```
 
 ### Container Build Failures
 ```bash
 # Force rebuild without cache
-podman build --no-cache -f Containerfile.processor -t log-processor:local .
+podman build --no-cache -f Containerfile.processor_go -t log-processor:local .
 
 # Check base image availability
-podman pull public.ecr.aws/lambda/python:3.13
+podman pull registry.access.redhat.com/ubi9/go-toolset:9.7-1763633888
 ```
 
-### Lambda Deployment Issues
-- **Check ECR image**: Verify image exists and is accessible
-- **Validate permissions**: Ensure Lambda execution role has required permissions
-- **Test locally first**: Always test with manual mode before deploying
+### Integration Tests Failing
+- **Verify LocalStack is running**: `make start`
+- **Check infrastructure is deployed**: `make deploy`
+- **Review LocalStack logs**: `make logs`
+- **Warm up Lambda** (if using Lambda mode): `make warmup-lambda`
 
-### Cross-Account Access Issues
-```bash
-# Test role assumption manually
-aws sts assume-role \
-  --role-arn "arn:aws:iam::CUSTOMER-ACCOUNT:role/CustomerLogDistribution-us-east-1" \
-  --role-session-name "test-assumption" \
-  --external-id "$AWS_ACCOUNT_ID"
-```
+### Vector Not Collecting Logs (Production)
+- **Check namespace labels**: Ensure namespaces have `hypershift.openshift.io/hosted-control-plane=true`
+- **Verify IRSA configuration**: Check service account annotations and trust policies
+- **Test S3 access**: Manually verify S3WriterRole permissions
 
 ## Security Best Practices
 
 ### Credential Management
 - **Never commit credentials** to version control
-- **Use environment variables** for temporary credential passthrough
-- **Volume mount ~/.aws** for local development only
-- **Prefer IAM roles** over access keys in production
+- **Use LocalStack** for local testing (no real AWS credentials needed)
+- **Use IAM roles** for production deployments
+- **Implement least privilege** access for all components
 
 ### Testing Security
-- **Use mocked AWS services** for unit tests (via `moto`)
+- **Use LocalStack** for local testing (isolated environment)
 - **Test with minimal permissions** to verify least privilege
-- **Validate ExternalId** requirements in cross-account scenarios
+- **Validate role assumptions** in cross-account scenarios
 
 ## Documentation and Resources
 
@@ -438,32 +298,33 @@ aws sts assume-role \
 - **[Troubleshooting Guide](docs/troubleshooting.md)**: Common issues and solutions
 
 ### Component-Specific Guides
-- **[CloudFormation Infrastructure](cloudformation/README.md)**
-- **[Kubernetes Deployment](k8s/README.md)**
-- **[API Management](api/README.md)**
+- **[Terraform Infrastructure](terraform/local/README.md)**: LocalStack development environment
+- **[Kubernetes Deployment](k8s/README.md)**: Vector and processor deployment
+- **[API Management](api/README.md)**: Tenant configuration API
+- **[Makefile](Makefile)**: Development workflow automation
 
 ### External Documentation
-- **[Vector Documentation](https://vector.dev/docs/)**
-- **[AWS Lambda Container Images](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html)**
-- **[OpenShift SecurityContextConstraints](https://docs.openshift.com/container-platform/latest/authentication/managing-security-context-constraints.html)**
+- **[Vector Documentation](https://vector.dev/docs/)**: Log collection and routing
+- **[LocalStack Documentation](https://docs.localstack.cloud/)**: Local AWS testing
+- **[OpenShift SecurityContextConstraints](https://docs.openshift.com/container-platform/latest/authentication/managing-security-context-constraints.html)**: Production deployments
 
 ## Contributing
 
 ### Code Standards
-- **Follow existing patterns** in container and infrastructure code
-- **Add unit tests** for new functionality
+- **Follow existing patterns** in Go code and infrastructure
+- **Write integration tests** for new functionality
 - **Update documentation** for any changes
-- **Test in development environment** before production deployment
+- **Test with LocalStack** before submitting changes
 
 ### Testing Requirements
-- **Unit tests must pass**: `pytest tests/unit/ -v`
-- **Container builds must succeed**: Test with Podman locally
-- **Infrastructure validation**: Validate CloudFormation templates
-- **Integration testing**: Test end-to-end functionality in development
+- **Integration tests must pass**: `make test-e2e`
+- **Container builds must succeed**: `make build`
+- **Infrastructure validation**: `terraform validate` in terraform/local/
+- **LocalStack deployment**: Test end-to-end with `make deploy`
 
 ### Pull Request Process
 1. **Create feature branch** from main
 2. **Implement changes** with tests
-3. **Validate locally** with full test suite
+3. **Validate locally** with `make test-e2e`
 4. **Update documentation** as needed
 5. **Submit PR** with detailed description of changes
