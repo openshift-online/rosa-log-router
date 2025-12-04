@@ -54,11 +54,15 @@ def generate_policy(principal_id: str, effect: str, resource: str, context: Dict
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     Lambda authorizer handler for API Gateway
-    
+
+    NOTE: This API has a single trusted client (OCM). We authenticate OCM's identity,
+    but do NOT enforce per-tenant authorization. See api/README.md "Single Trusted
+    Client Architecture" section for why this is the correct design.
+
     Args:
         event: API Gateway authorizer event
         context: Lambda context
-        
+
     Returns:
         IAM policy response allowing or denying the request
     """

@@ -198,38 +198,46 @@ graph LR
 
 ### 5. API Security Boundary (Authentication and Authorization)
 
-**Security Control**: Multi-layer API security with JWT authentication, tenant-based authorization, and request validation.
+**Security Control**: Multi-layer API security with HMAC-SHA256 PSK authentication, OCM-only access, tenant-based authorization, and request validation.
+
+**Access Restriction**: The Tenant Management API is exclusively accessible via OpenShift Cluster Manager (OCM). The pre-shared key (PSK) required for HMAC-SHA256 authentication is only distributed to OCM services, preventing unauthorized third-party access.
 
 **Authentication Flow**:
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant OCM as OCM (Authorized Client)
     participant AG as API Gateway
     participant Auth as Lambda Authorizer
+    participant SM as Secrets Manager
     participant API as FastAPI Backend
     participant DB as DynamoDB
-    
-    C->>AG: 1. Request with JWT Token
-    AG->>Auth: 2. Validate Token
-    Auth->>Auth: 3. Extract tenant_id<br/>Validate permissions
-    Auth-->>AG: 4. Allow/Deny + Context
-    AG->>API: 5. Request + tenant_id
-    API->>API: 6. Tenant-scoped operations
-    API->>DB: 7. Query with tenant_id filter
-    DB-->>API: 8. Tenant-specific data only
-    API-->>AG: 9. Response
-    AG-->>C: 10. Filtered response
+
+    OCM->>AG: 1. Request with HMAC-SHA256 Signature<br/>(Authorization Header + Timestamp)
+    AG->>Auth: 2. Invoke Authorizer
+    Auth->>SM: 3. Retrieve PSK
+    SM-->>Auth: 4. PSK (OCM-only)
+    Auth->>Auth: 5. Validate HMAC Signature<br/>Check Timestamp (5min window)
+    Auth-->>AG: 6. Allow/Deny + Context
+    AG->>API: 7. Authenticated Request
+    API->>API: 8. Tenant-scoped operations
+    API->>DB: 9. Query with tenant_id filter
+    DB-->>API: 10. Tenant-specific data only
+    API-->>AG: 11. Response
+    AG-->>OCM: 12. Filtered response
 ```
 
 **Risk Mitigation**:
-- **JWT token validation**: Lambda authorizer validates all API requests
+- **OCM-only access**: PSK authentication restricted to OpenShift Cluster Manager only
+- **HMAC-SHA256 signature validation**: Lambda authorizer validates all API requests with PSK from Secrets Manager
+- **Time-based replay protection**: 5-minute timestamp window prevents replay attacks
 - **Tenant-scoped operations**: All API operations filtered by tenant_id
 - **Input validation**: Pydantic models for request/response validation
 - **Rate limiting**: API Gateway throttling and quotas
 - **Request logging**: CloudWatch logs for all API operations
 
 **Implementation**:
-- JWT validation: `api/src/handlers/authorizer.py`
+- HMAC-SHA256 validation: `api/src/handlers/authorizer.py`
+- PSK storage: AWS Secrets Manager (OCM-only access)
 - Tenant filtering: `api/src/services/dynamo.py` DynamoDB operations
 - Input validation: `api/src/models/` Pydantic models
 

@@ -6,6 +6,8 @@ REST API service for managing multi-tenant logging delivery configurations in Dy
 
 The Tenant Management API provides a secure, REST-based interface for managing tenant delivery configurations in the multi-tenant logging system. Each tenant can have multiple delivery configurations (CloudWatch Logs and S3) with independent settings and filtering. The API uses HMAC-SHA256 signature authentication with a pre-shared key (PSK) stored in AWS Secrets Manager.
 
+**Access Control**: This API is exclusively accessible via OpenShift Cluster Manager (OCM). The PSK used for authentication is only shared with OCM, ensuring that only authorized OCM services can manage tenant configurations.
+
 ## Architecture
 
 - **API Gateway**: REST API with custom Lambda authorizer
@@ -14,6 +16,43 @@ The Tenant Management API provides a secure, REST-based interface for managing t
 - **Authentication**: PSK-based request signing (no API keys required)
 - **Storage**: DynamoDB with composite key structure (`tenant_id` + `type`)
 - **Multi-Delivery Model**: Each tenant can have separate CloudWatch and S3 delivery configurations
+
+### Single Trusted Client Architecture (OCM-Only Access)
+
+⚠️ **IMPORTANT**: This API is NOT a multi-user interface. It is designed for exclusive access by a single trusted client.
+
+**Access Model:**
+- **Single Client**: OpenShift Cluster Manager (OCM) is the ONLY authorized caller
+- **Client Role**: OCM is the management plane for ALL tenants
+- **Authentication**: Validates client identity (HMAC-SHA256 PSK), not per-tenant permissions
+- **Authorization**: OCM is trusted to manage all tenant configurations it stores
+
+**Why No Per-Tenant Authorization in the API?**
+
+This API does NOT implement per-tenant authorization checks (e.g., "can this caller access tenant X?") because:
+
+1. **OCM needs to manage ALL tenants**: OCM is the centralized management service that creates, reads, updates, and deletes configurations for any tenant it manages
+2. **This is expected behavior**: A management plane is SUPPOSED to have access to all resources it manages
+3. **Tenant isolation is enforced elsewhere**: Security boundaries exist at different layers:
+   - **PSK distribution**: Only OCM services have the PSK (stored in AWS Secrets Manager)
+   - **OCM's own authorization**: OCM implements its own access control for which users can modify which tenants
+   - **Log delivery layer**: Tenant isolation is enforced during actual log delivery through separate IAM roles, ExternalId validation, and cross-account access controls
+
+**Security Model:**
+- **Authentication boundary**: API validates "Is this OCM?" via HMAC-SHA256 signature
+- **Authorization boundary**: OCM controls which users can access which tenant configurations
+- **Data isolation boundary**: Separate IAM roles and customer AWS accounts enforce tenant isolation during log delivery
+
+**Comparison with Multi-User APIs:**
+
+| Aspect | Multi-User API | This API (OCM-Only) |
+|--------|----------------|---------------------|
+| **Clients** | Multiple users/services | Single client (OCM) |
+| **Authorization** | Per-user, per-resource | Client identity only |
+| **Tenant access** | Restricted by user permissions | All tenants (management plane) |
+| **Example** | "Can Alice access tenant X?" | "Is this OCM?" |
+
+If you are evaluating security controls, note that the absence of per-tenant authorization in this API is **by design**, not a security gap. Multi-tenant data storage does not imply multi-user access control when the only client is a trusted management service.
 
 ## Data Model
 
@@ -54,6 +93,10 @@ The Tenant Management API provides a secure, REST-based interface for managing t
 ```
 
 ## Authentication
+
+### Access Restrictions
+
+**IMPORTANT**: This API is designed for exclusive access by OpenShift Cluster Manager (OCM). The pre-shared key (PSK) required for authentication is only distributed to OCM services. Third-party access is not supported.
 
 ### HMAC-SHA256 Request Signing
 
