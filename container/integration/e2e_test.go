@@ -290,13 +290,13 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 	// Test 1: Create CloudWatch delivery config
 	t.Run("CreateCloudWatchConfig", func(t *testing.T) {
 		config := map[string]interface{}{
-			"tenant_id":                   tenantID,
-			"type":                        "cloudwatch",
-			"log_distribution_role_arn":   "arn:aws:iam::999999999999:role/E2ETestRole",
-			"log_group_name":              "/aws/logs/e2e-api-test",
-			"target_region":               "us-east-1",
-			"enabled":                     true,
-			"groups":                      []string{"api-test-group"},
+			"tenant_id":                 tenantID,
+			"type":                      "cloudwatch",
+			"log_distribution_role_arn": "arn:aws:iam::999999999999:role/E2ETestRole",
+			"log_group_name":            "/aws/logs/e2e-api-test",
+			"target_region":             "us-east-1",
+			"enabled":                   true,
+			"groups":                    []string{"api-test-group"},
 		}
 
 		created := helper.APICreateDeliveryConfig(t, tenantID, config)
@@ -316,13 +316,13 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 	// Test 3: Update the config
 	t.Run("UpdateCloudWatchConfig", func(t *testing.T) {
 		updateData := map[string]interface{}{
-			"tenant_id":                   tenantID,
-			"type":                        "cloudwatch",
-			"log_distribution_role_arn":   "arn:aws:iam::999999999999:role/E2ETestRole",
-			"log_group_name":              "/aws/logs/e2e-api-test-updated",
-			"target_region":               "us-west-2",
-			"enabled":                     false,
-			"groups":                      []string{"updated-group"},
+			"tenant_id":                 tenantID,
+			"type":                      "cloudwatch",
+			"log_distribution_role_arn": "arn:aws:iam::999999999999:role/E2ETestRole",
+			"log_group_name":            "/aws/logs/e2e-api-test-updated",
+			"target_region":             "us-west-2",
+			"enabled":                   false,
+			"groups":                    []string{"updated-group"},
 		}
 
 		updated := helper.APIUpdateDeliveryConfig(t, tenantID, "cloudwatch", updateData)
