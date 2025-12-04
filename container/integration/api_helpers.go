@@ -19,9 +19,10 @@ import (
 )
 
 // generateHMACSignature generates HMAC-SHA256 signature for API authentication
-func generateHMACSignature(psk, method, path, timestamp, body string) string {
-	// Signature format: HMAC-SHA256(PSK, "METHOD|PATH|TIMESTAMP|BODY")
-	message := fmt.Sprintf("%s|%s|%s|%s", method, path, timestamp, body)
+// Signature format matches the authorizer: METHODURITIMESTAMP (no separators, no body)
+func generateHMACSignature(psk, method, path, timestamp string) string {
+	// Signature format: HMAC-SHA256(PSK, "METHODURITIMESTAMP")
+	message := fmt.Sprintf("%s%s%s", method, path, timestamp)
 	h := hmac.New(sha256.New, []byte(psk))
 	h.Write([]byte(message))
 	return hex.EncodeToString(h.Sum(nil))
@@ -45,17 +46,14 @@ func (h *E2ETestHelper) makeAPIRequest(t *testing.T, method, path string, body i
 	require.NoError(t, err, "failed to create HTTP request")
 
 	// Add HMAC authentication headers
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	bodyStr := ""
-	if body != nil {
-		bodyStr = string(bodyBytes)
-	}
+	// Use ISO 8601 timestamp format as expected by authorizer
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 
-	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp, bodyStr)
+	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp)
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Timestamp", timestamp)
-	req.Header.Set("X-Auth-Signature", signature)
+	req.Header.Set("X-API-Timestamp", timestamp)
+	req.Header.Set("Authorization", fmt.Sprintf("HMAC-SHA256 %s", signature))
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	return client.Do(req)
@@ -92,11 +90,15 @@ func (h *E2ETestHelper) APICreateDeliveryConfig(t *testing.T, tenantID string, c
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "create should return 201 Created")
 
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	var wrapper map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&wrapper)
 	require.NoError(t, err, "failed to decode create response")
 
-	return result
+	// Extract the "data" field from the API response
+	data, ok := wrapper["data"].(map[string]interface{})
+	require.True(t, ok, "response should have 'data' field")
+
+	return data
 }
 
 // APIGetDeliveryConfig retrieves a delivery configuration via API
@@ -110,11 +112,15 @@ func (h *E2ETestHelper) APIGetDeliveryConfig(t *testing.T, tenantID, configType 
 
 	require.Equal(t, http.StatusOK, resp.StatusCode, "get should return 200 OK")
 
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	var wrapper map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&wrapper)
 	require.NoError(t, err, "failed to decode get response")
 
-	return result
+	// Extract the "data" field from the API response
+	data, ok := wrapper["data"].(map[string]interface{})
+	require.True(t, ok, "response should have 'data' field")
+
+	return data
 }
 
 // APIGetDeliveryConfigRaw retrieves a delivery configuration and returns raw response (for error checking)
@@ -149,11 +155,15 @@ func (h *E2ETestHelper) APIUpdateDeliveryConfig(t *testing.T, tenantID, configTy
 
 	require.Equal(t, http.StatusOK, resp.StatusCode, "update should return 200 OK")
 
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	var wrapper map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&wrapper)
 	require.NoError(t, err, "failed to decode update response")
 
-	return result
+	// Extract the "data" field from the API response
+	data, ok := wrapper["data"].(map[string]interface{})
+	require.True(t, ok, "response should have 'data' field")
+
+	return data
 }
 
 // APIDeleteDeliveryConfig deletes a delivery configuration via API
@@ -179,9 +189,13 @@ func (h *E2ETestHelper) APIListTenantConfigs(t *testing.T, tenantID string) map[
 
 	require.Equal(t, http.StatusOK, resp.StatusCode, "list should return 200 OK")
 
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	var wrapper map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&wrapper)
 	require.NoError(t, err, "failed to decode list response")
 
-	return result
+	// Extract the "data" field from the API response
+	data, ok := wrapper["data"].(map[string]interface{})
+	require.True(t, ok, "response should have 'data' field")
+
+	return data
 }

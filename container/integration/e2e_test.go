@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -332,7 +335,7 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 	// Test 4: List tenant configs
 	t.Run("ListTenantConfigs", func(t *testing.T) {
 		configs := helper.APIListTenantConfigs(t, tenantID)
-		require.Len(t, configs["items"].([]interface{}), 1, "Should have 1 config for tenant")
+		require.Len(t, configs["configurations"].([]interface{}), 1, "Should have 1 config for tenant")
 		t.Logf("✅ Listed configs for tenant: %s", tenantID)
 	})
 

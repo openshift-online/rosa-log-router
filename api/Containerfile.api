@@ -23,4 +23,7 @@ RUN uv sync --frozen --no-dev
 COPY src/ ./src/
 
 # Set the Lambda handler using AWS Lambda Runtime Interface Client
-CMD ["/var/task/.venv/bin/python", "-m", "awslambdaric", "src.app.lambda_handler"]
+ENTRYPOINT ["/var/task/.venv/bin/python", "-m", "awslambdaric", "src.app.lambda_handler"]
+
+# Default to Lambda mode
+CMD [""]

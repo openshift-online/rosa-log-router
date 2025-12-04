@@ -33,8 +33,9 @@ FROM registry.access.redhat.com/ubi9-minimal:latest
 # Copy the binary from builder
 COPY --from=builder /opt/app-root/src/log-processor /usr/local/bin/log-processor
 
-# Create non-root user for security (UID 65532 is standard for nonroot)
-USER 65532:65532
+# Run as root for Lambda/LocalStack compatibility
+# LocalStack needs to copy runtime files to / which requires root permissions with Podman
+# For production Kubernetes deployments, use SecurityContext in pod specs to restrict permissions
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/log-processor"]

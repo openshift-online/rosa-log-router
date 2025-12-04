@@ -133,7 +133,6 @@ test-e2e: ## Run integration tests (with prerequisite check)
 	@echo "     - make deploy"
 	@echo "        Note: Requires LocalStack Pro (Lambda containers)"
 	@echo ""
-	@read -p "Press Enter to continue if prerequisites are met (Ctrl+C to cancel)..."
 	@echo ""
 	cd container && go test -count=1 -tags=integration ./integration -v -timeout 5m
 
