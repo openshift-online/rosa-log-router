@@ -30,7 +30,7 @@ variable "authorizer_execution_role_arn" {
 }
 
 variable "authorizer_image" {
-  description = "ECR image for the Lambda authorizer container image"
+  description = "Full ECR image URI for the Lambda authorizer container image (e.g., account.dkr.ecr.region.amazonaws.com/repo:tag)"
   type        = string
 }
 
@@ -40,7 +40,7 @@ variable "api_execution_role_arn" {
 }
 
 variable "api_image" {
-  description = "ECR image for the API service container image"
+  description = "Full ECR image URI for the API service container image (e.g., account.dkr.ecr.region.amazonaws.com/repo:tag)"
   type        = string
 }
 
@@ -57,4 +57,10 @@ variable "api_gateway_cloudwatch_role_arn" {
 variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
+}
+
+variable "enable_custom_domain" {
+  description = "Enable custom domain with Route53 and ACM (disable for LocalStack)"
+  type        = bool
+  default     = true
 }

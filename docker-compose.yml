@@ -9,7 +9,7 @@ services:
       - "4566:4566"  # LocalStack gateway
       - "4510-4559:4510-4559"  # External service port range
     environment:
-      - SERVICES=s3,sqs,sns,dynamodb,sts,cloudwatch,lambda,logs,iam,kms,ec2,ecr
+      - SERVICES=s3,sqs,sns,dynamodb,sts,cloudwatch,lambda,logs,iam,kms,ec2,ecr,secretsmanager,apigateway
       - DEBUG=1
       - PERSISTENCE=0
       - AWS_DEFAULT_REGION=us-east-1
@@ -20,6 +20,7 @@ services:
       - DISABLE_CORS_CHECKS=1
       - EAGER_SERVICE_LOADING=1
       - LOCALSTACK_AUTH_TOKEN=$LOCALSTACK_AUTH_TOKEN
+      - S3_SKIP_VALIDATION=1
     volumes:
       # Mount Docker/Podman socket so LocalStack can run Lambda containers
       # Default: Podman socket for local development (/run/user/1000/podman/podman.sock)
