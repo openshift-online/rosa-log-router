@@ -407,7 +407,7 @@ resource "aws_iam_role_policy" "invoke_authorizer_function" {
       {
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${var.environment}-api-authorizer"
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${var.environment}-api-authorizer:live"
       }
     ]
   })
