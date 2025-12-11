@@ -42,10 +42,23 @@ Install and use the Red Hat AWS SAML login tool:
 rh-aws-saml-login log-delivery-prod
 ```
 
+#### Set customer values
+
+```bash
+# Set cluster ID - can be any one of internal ID, uuid, etc
+CLUSTER_ID="<cluster ID>"
+# Set the customer's log distribution role ARN
+CUSTOMER_LOG_DISTRIBUTION_ROLE_ARN="<get value from OHSS>"
+# Set the customer's log group name
+# NOTE: the OHSS may contain the full ARN for the log group - make sure you're only setting the name (value after *:log-group:<log group name>) here
+CUSTOMER_LOG_GROUP_NAME="<get value from OHSS>"
+```
+
 ### 2. Set Customer Cluster Region
 
 ```bash
-export AWS_REGION=$(ocm get cluster <cluster_id> | jq .region.id | tr -d '"')
+INTERNAL_ID="$(ocm describe cluster $CLUSTER_ID | grep "^ID:" | awk '{print $2}')"
+export AWS_REGION=$(ocm get cluster $INTERNAL_ID | jq .region.id | tr -d '"')
 echo "Using region: $AWS_REGION"
 ```
 
@@ -70,14 +83,14 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 # Test customer's log distribution role assumption
 export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
 $(aws sts assume-role \
---role-arn <log_distribution_role_arn> \
+--role-arn $CUSTOMER_LOG_DISTRIBUTION_ROLE_ARN \
 --role-session-name RHVerify \
 --external-id $ACCOUNT_ID \
 --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
 --output text))
 
 # Verify CloudWatch log group exists and check region
-aws logs describe-log-groups --log-group-name-prefix <log_group_name>
+aws logs describe-log-groups --log-group-name-prefix $CUSTOMER_LOG_GROUP_NAME
 ```
 
 **CloudWatch Log Group Response Interpretation:**
@@ -168,6 +181,25 @@ The tenant configurations table uses a composite primary key:
 | `enabled` | Yes | Configuration active status | `true` |
 | `desired_logs` | Yes | Application filter list | `["kube-apiserver", "openshift-apiserver"]` |
 
+
+### Update the table
+
+```bash
+CLUSTER_NAME="$(ocm get cluster $INTERNAL_ID  | jq -r '.name')"
+
+aws dynamodb put-item
+--table-name hcp-log-prod-tenant-configs
+--item "{
+    \"tenant_id\": {\"S\": \"ocm-production-$INTERNAL_ID-$CLUSTER_NAME\"},
+    \"type\": {\"S\": \"cloudwatch\"},
+    \"log_distribution_role_arn\": {\"S\": \"$CUSTOMER_LOG_DISTRIBUTION_ROLE_ARN\"},
+    \"log_group_name\": {\"S\": \"$CUSTOMER_LOG_GROUP_NAME\"},
+    \"target_region\": {\"S\": \"$AWS_REGION\"},
+    \"enabled\": {\"BOOL\": true},
+    \"desired_logs\": {\"SS\": [<populate from OHSS>]}
+}"
+```
+
 ### Example Configuration
 
 ```bash
@@ -197,6 +229,25 @@ aws dynamodb put-item \
 | `target_region` | Yes | AWS region for S3 bucket | `us-east-1` |
 | `enabled` | Yes | Configuration active status | `true` |
 | `desired_logs` | Yes | Application filter list | `["kube-apiserver", "openshift-apiserver"]` |
+
+### Update the table
+
+```bash
+CLUSTER_NAME="$(ocm get cluster $INTERNAL_ID  | jq -r '.name')"
+
+aws dynamodb put-item \
+  --table-name hcp-log-prod-tenant-configs \
+  --item '{
+    "tenant_id": {"S": "ocm-production-$INTERNAL_ID-$CLUSTER_NAME"},
+    "type": {"S": "s3"},
+    "bucket_name": {"S": "<populate from OHSS>"},
+    "bucket_prefix": {"S": "<populate from OHSS>"},
+    "target_region": {"S": "$AWS_REGION"},
+    "enabled": {"BOOL": true},
+    "desired_logs": {"SS": [<populate from OHSS>]}
+  }'
+```
+
 
 ### Example Configuration
 
