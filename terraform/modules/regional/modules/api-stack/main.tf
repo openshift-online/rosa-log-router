@@ -637,6 +637,8 @@ resource "aws_api_gateway_deployment" "api_deployment" {
       aws_api_gateway_integration_response.redoc_options_integration_response.id,
       aws_api_gateway_integration_response.openapi_options_integration_response.id,
       aws_api_gateway_integration_response.proxy_options_integration_response.id,
+      aws_lambda_alias.authorizer_function_live.id,
+      aws_lambda_alias.api_function_live.id,
     ]))
   }
 
