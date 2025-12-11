@@ -34,6 +34,11 @@ resource "aws_lambda_function" "authorizer_function" {
   tags = local.common_tags
 }
 
+resource "aws_lambda_provisioned_concurrency_config" "authorizer_function" {
+  function_name                     = aws_lambda_function.authorizer_function.function_name
+  provisioned_concurrent_executions = 1
+  qualifier                         = aws_lambda_function.authorizer_function.version
+}
 
 # Main API Lambda Function
 resource "aws_lambda_function" "api_function" {
@@ -53,6 +58,12 @@ resource "aws_lambda_function" "api_function" {
   }
 
   tags = local.common_tags
+}
+
+resource "aws_lambda_provisioned_concurrency_config" "api_function" {
+  function_name                     = aws_lambda_function.api_function.function_name
+  provisioned_concurrent_executions = 1
+  qualifier                         = aws_lambda_function.api_function.version
 }
 
 resource "aws_api_gateway_rest_api" "tenant_management_api" {
