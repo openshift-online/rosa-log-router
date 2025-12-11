@@ -23,6 +23,7 @@ resource "aws_lambda_function" "authorizer_function" {
   role          = var.authorizer_execution_role_arn
   timeout       = 30
   memory_size   = 256
+  publish       = true
 
   environment {
     variables = {
@@ -34,10 +35,16 @@ resource "aws_lambda_function" "authorizer_function" {
   tags = local.common_tags
 }
 
+resource "aws_lambda_alias" "authorizer_function_live" {
+  name             = "live"
+  function_name    = aws_lambda_function.authorizer_function.function_name
+  function_version = aws_lambda_function.authorizer_function.version
+}
+
 resource "aws_lambda_provisioned_concurrency_config" "authorizer_function" {
   function_name                     = aws_lambda_function.authorizer_function.function_name
   provisioned_concurrent_executions = 1
-  qualifier                         = aws_lambda_function.authorizer_function.version
+  qualifier                         = aws_lambda_alias.authorizer_function_live.name
 }
 
 # Main API Lambda Function
@@ -48,6 +55,7 @@ resource "aws_lambda_function" "api_function" {
   role          = var.api_execution_role_arn
   timeout       = 30
   memory_size   = 512
+  publish       = true
 
   environment {
     variables = {
@@ -60,10 +68,16 @@ resource "aws_lambda_function" "api_function" {
   tags = local.common_tags
 }
 
+resource "aws_lambda_alias" "api_function_live" {
+  name             = "live"
+  function_name    = aws_lambda_function.api_function.function_name
+  function_version = aws_lambda_function.api_function.version
+}
+
 resource "aws_lambda_provisioned_concurrency_config" "api_function" {
   function_name                     = aws_lambda_function.api_function.function_name
   provisioned_concurrent_executions = 1
-  qualifier                         = aws_lambda_function.api_function.version
+  qualifier                         = aws_lambda_alias.api_function_live.name
 }
 
 resource "aws_api_gateway_rest_api" "tenant_management_api" {
@@ -93,7 +107,7 @@ resource "aws_api_gateway_authorizer" "api_authorizer" {
   name                             = "${var.project_name}-${var.environment}-hmac-authorizer"
   rest_api_id                      = aws_api_gateway_rest_api.tenant_management_api.id
   type                             = "REQUEST"
-  authorizer_uri                   = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer_function.arn}/invocations"
+  authorizer_uri                   = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.authorizer_function_live.arn}/invocations"
   authorizer_credentials           = var.api_gateway_authorizer_role_arn
   authorizer_result_ttl_in_seconds = 300
   identity_source                  = "method.request.header.Authorization,method.request.header.X-API-Timestamp"
@@ -118,14 +132,14 @@ resource "aws_api_gateway_gateway_response" "access_denied" {
 
 # Lambda permissions for API Gateway
 resource "aws_lambda_permission" "authorizer_invoke_permission" {
-  function_name = aws_lambda_function.authorizer_function.arn
+  function_name = aws_lambda_alias.authorizer_function_live.arn
   action        = "lambda:InvokeFunction"
   principal     = "apigateway.amazonaws.com"
   source_arn    = "arn:aws:execute-api:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${aws_api_gateway_rest_api.tenant_management_api.id}/authorizers/${aws_api_gateway_authorizer.api_authorizer.id}"
 }
 
 resource "aws_lambda_permission" "api_invoke_permission" {
-  function_name = aws_lambda_function.api_function.arn
+  function_name = aws_lambda_alias.api_function_live.arn
   action        = "lambda:InvokeFunction"
   principal     = "apigateway.amazonaws.com"
   source_arn    = "arn:aws:execute-api:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${aws_api_gateway_rest_api.tenant_management_api.id}/*/*"
@@ -212,7 +226,7 @@ resource "aws_api_gateway_integration" "health_integration" {
   http_method             = aws_api_gateway_method.health_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.api_function_live.arn}/invocations"
 }
 
 resource "aws_api_gateway_integration" "docs_integration" {
@@ -221,7 +235,7 @@ resource "aws_api_gateway_integration" "docs_integration" {
   http_method             = aws_api_gateway_method.docs_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.api_function_live.arn}/invocations"
 }
 
 resource "aws_api_gateway_integration" "redoc_integration" {
@@ -230,7 +244,7 @@ resource "aws_api_gateway_integration" "redoc_integration" {
   http_method             = aws_api_gateway_method.redoc_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.api_function_live.arn}/invocations"
 }
 
 resource "aws_api_gateway_integration" "openapi_integration" {
@@ -239,7 +253,7 @@ resource "aws_api_gateway_integration" "openapi_integration" {
   http_method             = aws_api_gateway_method.openapi_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.api_function_live.arn}/invocations"
 }
 
 resource "aws_api_gateway_method_response" "health_response" {
@@ -317,7 +331,7 @@ resource "aws_api_gateway_integration" "proxy_integration" {
   http_method             = aws_api_gateway_method.proxy_method.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_function.api_function.arn}/invocations"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.api_function_live.arn}/invocations"
 }
 
 resource "aws_api_gateway_method_response" "proxy_response" {
