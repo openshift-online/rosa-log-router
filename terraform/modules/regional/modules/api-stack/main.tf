@@ -1,6 +1,15 @@
 # Regional API Stack Terraform Module
 # Converted from CloudFormation template
 
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
 # Data sources for current AWS context
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
@@ -18,7 +27,7 @@ locals {
 # Lambda Authorizer Function
 resource "aws_lambda_function" "authorizer_function" {
   function_name = "${var.project_name}-${var.environment}-api-authorizer"
-  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.id}.amazonaws.com/${var.authorizer_image}"
+  image_uri     = var.authorizer_image_uri != "" ? var.authorizer_image_uri : "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.id}.amazonaws.com/${var.authorizer_image}"
   package_type  = "Image"
   role          = var.authorizer_execution_role_arn
   timeout       = 30
@@ -50,7 +59,7 @@ resource "aws_lambda_provisioned_concurrency_config" "authorizer_function" {
 # Main API Lambda Function
 resource "aws_lambda_function" "api_function" {
   function_name = "${var.project_name}-${var.environment}-api-service"
-  image_uri     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.id}.amazonaws.com/${var.api_image}"
+  image_uri     = var.api_image_uri != "" ? var.api_image_uri : "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.id}.amazonaws.com/${var.api_image}"
   package_type  = "Image"
   role          = var.api_execution_role_arn
   timeout       = 30
@@ -750,6 +759,8 @@ resource "aws_cloudwatch_log_group" "api_authorizer_log_group" {
 }
 
 resource "aws_acm_certificate" "cert" {
+  count = var.enable_custom_domain ? 1 : 0
+
   domain_name       = local.domain_name
   validation_method = "DNS"
 
@@ -760,13 +771,13 @@ resource "aws_acm_certificate" "cert" {
 }
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cert.domain_validation_options : dvo.domain_name => {
+  for_each = var.enable_custom_domain ? {
+    for dvo in aws_acm_certificate.cert[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-  }
+  } : {}
 
   allow_overwrite = true
   name            = each.value.name
@@ -777,13 +788,17 @@ resource "aws_route53_record" "cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "cert" {
-  certificate_arn         = aws_acm_certificate.cert.arn
+  count = var.enable_custom_domain ? 1 : 0
+
+  certificate_arn         = aws_acm_certificate.cert[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
 resource "aws_api_gateway_domain_name" "domain" {
+  count = var.enable_custom_domain ? 1 : 0
+
   domain_name              = local.domain_name
-  regional_certificate_arn = aws_acm_certificate_validation.cert.certificate_arn
+  regional_certificate_arn = aws_acm_certificate_validation.cert[0].certificate_arn
 
   endpoint_configuration {
     types = ["REGIONAL"]
@@ -791,18 +806,22 @@ resource "aws_api_gateway_domain_name" "domain" {
 }
 
 resource "aws_route53_record" "api" {
+  count = var.enable_custom_domain ? 1 : 0
+
   name    = local.domain_name
   type    = "A"
   zone_id = var.route53_zone_id
 
   alias {
     evaluate_target_health = true
-    name                   = aws_api_gateway_domain_name.domain.regional_domain_name
-    zone_id                = aws_api_gateway_domain_name.domain.regional_zone_id
+    name                   = aws_api_gateway_domain_name.domain[0].regional_domain_name
+    zone_id                = aws_api_gateway_domain_name.domain[0].regional_zone_id
   }
 }
 
 resource "aws_api_gateway_base_path_mapping" "api" {
+  count = var.enable_custom_domain ? 1 : 0
+
   api_id      = aws_api_gateway_rest_api.tenant_management_api.id
   stage_name  = aws_api_gateway_stage.api_stage.stage_name
   domain_name = local.domain_name

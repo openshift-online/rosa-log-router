@@ -45,6 +45,45 @@ output "ecr_repository_url" {
 }
 
 ##############################################################################
+# API Outputs
+##############################################################################
+
+output "api_gateway_endpoint" {
+  description = "API Gateway endpoint URL for tenant configuration API"
+  value       = module.central_api_stack.api_endpoint
+}
+
+output "api_gateway_id" {
+  description = "API Gateway REST API ID"
+  value       = module.central_api_stack.api_id
+}
+
+output "api_authorizer_function_arn" {
+  description = "API authorizer Lambda function ARN"
+  value       = module.central_api_stack.authorizer_function_arn
+}
+
+output "api_service_function_arn" {
+  description = "API service Lambda function ARN"
+  value       = module.central_api_stack.api_function_arn
+}
+
+output "api_psk_secret_name" {
+  description = "Secrets Manager secret name for API PSK"
+  value       = aws_secretsmanager_secret.api_psk.name
+}
+
+output "ecr_api_service_url" {
+  description = "ECR repository URL for API service container"
+  value       = aws_ecr_repository.api_service.repository_url
+}
+
+output "ecr_api_authorizer_url" {
+  description = "ECR repository URL for API authorizer container"
+  value       = aws_ecr_repository.api_authorizer.repository_url
+}
+
+##############################################################################
 # Customer Account Outputs
 ##############################################################################
 
@@ -89,6 +128,7 @@ output "customer2_log_group" {
 
 output "test_commands" {
   description = "Commands for testing the setup"
+  sensitive   = true
   value       = <<-EOT
 
   # Upload test log to central bucket (triggers S3 → SNS → SQS → Lambda)
@@ -111,6 +151,14 @@ output "test_commands" {
     --role-arn ${module.customer1_acme_corp.log_distribution_role_arn} \
     --role-session-name test \
     --external-id ${local.central_account_id}
+
+  # Test API health endpoint
+  curl -v "${module.central_api_stack.api_endpoint}/api/v1/health"
+
+  # Set environment for API integration tests
+  export API_BASE_URL="${module.central_api_stack.api_endpoint}"
+  export API_PSK="${var.api_psk_value}"
+  export AWS_ENDPOINT_URL="http://localhost:4566"
 
   EOT
 }

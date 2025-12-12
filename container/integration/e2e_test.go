@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -255,5 +258,94 @@ func TestE2EConcurrentCustomers(t *testing.T) {
 		// Note: In a complete implementation, you'd track all testIDs and verify each delivery
 		// For this demo, we just verify the uploads completed without errors
 		t.Logf("Multi-upload test completed (uploaded 3 logs successfully)")
+	})
+}
+
+// TestE2EAPIHealth tests the API health endpoint
+func TestE2EAPIHealth(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+
+	apiEndpoint := helper.APIGatewayEndpoint()
+	if apiEndpoint == "" {
+		t.Skip("API Gateway endpoint not available - API not deployed")
+	}
+
+	// Test health endpoint (no auth required)
+	resp := helper.APIHealthCheck(t)
+	require.Contains(t, resp["status"], "healthy", "API health check should return healthy status")
+	t.Logf("✅ API health check passed: %v", resp)
+}
+
+// TestE2EAPITenantConfigCRUD tests full CRUD cycle for tenant delivery configurations via API
+func TestE2EAPITenantConfigCRUD(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+
+	apiEndpoint := helper.APIGatewayEndpoint()
+	if apiEndpoint == "" {
+		t.Skip("API Gateway endpoint not available - API not deployed")
+	}
+
+	tenantID := fmt.Sprintf("e2e-api-test-%s", uuid.New().String()[:8])
+
+	// Test 1: Create CloudWatch delivery config
+	t.Run("CreateCloudWatchConfig", func(t *testing.T) {
+		config := map[string]interface{}{
+			"tenant_id":                 tenantID,
+			"type":                      "cloudwatch",
+			"log_distribution_role_arn": "arn:aws:iam::999999999999:role/E2ETestRole",
+			"log_group_name":            "/aws/logs/e2e-api-test",
+			"target_region":             "us-east-1",
+			"enabled":                   true,
+			"groups":                    []string{"api-test-group"},
+		}
+
+		created := helper.APICreateDeliveryConfig(t, tenantID, config)
+		require.Equal(t, tenantID, created["tenant_id"], "Created config should have correct tenant_id")
+		require.Equal(t, "cloudwatch", created["type"], "Created config should have correct type")
+		t.Logf("✅ Created CloudWatch config for tenant: %s", tenantID)
+	})
+
+	// Test 2: Get the created config
+	t.Run("GetCloudWatchConfig", func(t *testing.T) {
+		retrieved := helper.APIGetDeliveryConfig(t, tenantID, "cloudwatch")
+		require.Equal(t, tenantID, retrieved["tenant_id"], "Retrieved config should match")
+		require.Equal(t, "/aws/logs/e2e-api-test", retrieved["log_group_name"], "Log group should match")
+		t.Logf("✅ Retrieved CloudWatch config for tenant: %s", tenantID)
+	})
+
+	// Test 3: Update the config
+	t.Run("UpdateCloudWatchConfig", func(t *testing.T) {
+		updateData := map[string]interface{}{
+			"tenant_id":                 tenantID,
+			"type":                      "cloudwatch",
+			"log_distribution_role_arn": "arn:aws:iam::999999999999:role/E2ETestRole",
+			"log_group_name":            "/aws/logs/e2e-api-test-updated",
+			"target_region":             "us-west-2",
+			"enabled":                   false,
+			"groups":                    []string{"updated-group"},
+		}
+
+		updated := helper.APIUpdateDeliveryConfig(t, tenantID, "cloudwatch", updateData)
+		require.Equal(t, "/aws/logs/e2e-api-test-updated", updated["log_group_name"], "Log group should be updated")
+		require.Equal(t, "us-west-2", updated["target_region"], "Region should be updated")
+		require.Equal(t, false, updated["enabled"], "Enabled should be updated to false")
+		t.Logf("✅ Updated CloudWatch config for tenant: %s", tenantID)
+	})
+
+	// Test 4: List tenant configs
+	t.Run("ListTenantConfigs", func(t *testing.T) {
+		configs := helper.APIListTenantConfigs(t, tenantID)
+		require.Len(t, configs["configurations"].([]interface{}), 1, "Should have 1 config for tenant")
+		t.Logf("✅ Listed configs for tenant: %s", tenantID)
+	})
+
+	// Test 5: Delete the config
+	t.Run("DeleteCloudWatchConfig", func(t *testing.T) {
+		helper.APIDeleteDeliveryConfig(t, tenantID, "cloudwatch")
+
+		// Verify deletion - should return 404
+		_, err := helper.APIGetDeliveryConfigRaw(t, tenantID, "cloudwatch")
+		require.Error(t, err, "Getting deleted config should return error")
+		t.Logf("✅ Deleted CloudWatch config for tenant: %s", tenantID)
 	})
 }

@@ -74,6 +74,14 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         path = event.get('path', '')
         headers = event.get('headers', {})
         body = event.get('body', '') or ''
+
+        # Strip stage from path if present (LocalStack includes it, but AWS doesn't)
+        # Path format from LocalStack: /int/api/v1/... -> /api/v1/...
+        request_context = event.get('requestContext', {})
+        stage = request_context.get('stage', '')
+        if stage and path.startswith(f'/{stage}/'):
+            path = path[len(stage) + 1:]  # Remove /{stage} prefix
+            print(f"AUTHORIZER: Stripped stage '{stage}' from path, new path={path}")
         
         # For proxy integrations, the actual HTTP method may be in the requestContext
         request_context = event.get('requestContext', {})

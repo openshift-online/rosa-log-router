@@ -28,6 +28,30 @@ resource "aws_ecr_repository" "lambda_processor" {
   tags = local.common_tags
 }
 
+# ECR repository for API service Lambda
+resource "aws_ecr_repository" "api_service" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-api-service"
+
+  image_scanning_configuration {
+    scan_on_push = false # Disable for LocalStack
+  }
+
+  tags = local.common_tags
+}
+
+# ECR repository for API authorizer Lambda
+resource "aws_ecr_repository" "api_authorizer" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-api-authorizer"
+
+  image_scanning_configuration {
+    scan_on_push = false # Disable for LocalStack
+  }
+
+  tags = local.common_tags
+}
+
 # Central account role for cross-account access (create this first, needed by core-infrastructure)
 resource "aws_iam_role" "central_log_distribution_role" {
   provider = aws.central
@@ -192,6 +216,185 @@ resource "aws_iam_role_policy" "central_lambda_log_processor_policy" {
   })
 }
 
+##############################################################################
+# API IAM ROLES
+##############################################################################
+
+# API Service Lambda execution role
+resource "aws_iam_role" "api_service_execution_role" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-api-service-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "api_service_basic" {
+  provider   = aws.central
+  role       = aws_iam_role.api_service_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "api_service_policy" {
+  provider = aws.central
+  name     = "APIServicePolicy"
+  role     = aws_iam_role.api_service_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # DynamoDB access for tenant configurations
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = "arn:aws:dynamodb:*:${local.central_account_id}:table/${local.project_name}-*"
+      }
+    ]
+  })
+}
+
+# API Authorizer Lambda execution role
+resource "aws_iam_role" "api_authorizer_execution_role" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-api-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "api_authorizer_basic" {
+  provider   = aws.central
+  role       = aws_iam_role.api_authorizer_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "api_authorizer_policy" {
+  provider = aws.central
+  name     = "APIAuthorizerPolicy"
+  role     = aws_iam_role.api_authorizer_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # Secrets Manager access for PSK
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = "arn:aws:secretsmanager:*:${local.central_account_id}:secret:${local.project_name}-*"
+      }
+    ]
+  })
+}
+
+# API Gateway authorizer invocation role
+resource "aws_iam_role" "api_gateway_authorizer_role" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-apigw-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "apigateway.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "api_gateway_authorizer_policy" {
+  provider = aws.central
+  name     = "APIGatewayAuthorizerPolicy"
+  role     = aws_iam_role.api_gateway_authorizer_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = "*" # Will be set to authorizer Lambda ARN after creation
+      }
+    ]
+  })
+}
+
+# API Gateway CloudWatch Logs role
+resource "aws_iam_role" "api_gateway_cloudwatch_role" {
+  provider = aws.central
+  name     = "${local.project_name}-${local.environment}-apigw-cloudwatch-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "apigateway.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch_policy" {
+  provider   = aws.central
+  role       = aws_iam_role.api_gateway_cloudwatch_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+##############################################################################
+# API SECRETS
+##############################################################################
+
+# Secrets Manager secret for API authentication PSK
+resource "aws_secretsmanager_secret" "api_psk" {
+  provider    = aws.central
+  name        = "${local.project_name}-${local.environment}-psk"
+  description = "PSK for API HMAC authentication (LocalStack testing)"
+
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "api_psk" {
+  provider      = aws.central
+  secret_id     = aws_secretsmanager_secret.api_psk.id
+  secret_string = var.api_psk_value
+}
+
 # Lambda function - Container-based deployment (requires LocalStack Pro)
 resource "aws_lambda_function" "central_log_distributor" {
   count    = var.deploy_lambda ? 1 : 0
@@ -232,6 +435,31 @@ resource "aws_lambda_event_source_mapping" "central_sqs_to_lambda" {
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5
   function_response_types            = ["ReportBatchItemFailures"]
+}
+
+##############################################################################
+# API STACK - Tenant Management API
+##############################################################################
+
+module "central_api_stack" {
+  source = "../modules/regional/modules/api-stack"
+
+  providers = {
+    aws = aws.central
+  }
+
+  project_name                    = local.project_name
+  environment                     = local.environment
+  tenant_config_table_name        = module.central_core_infrastructure.tenant_config_table_name
+  api_auth_secret_name            = aws_secretsmanager_secret.api_psk.name
+  authorizer_execution_role_arn   = aws_iam_role.api_authorizer_execution_role.arn
+  authorizer_image_uri            = "${aws_ecr_repository.api_authorizer.repository_url}:${var.api_image_tag}"
+  api_execution_role_arn          = aws_iam_role.api_service_execution_role.arn
+  api_image_uri                   = "${aws_ecr_repository.api_service.repository_url}:${var.api_image_tag}"
+  api_gateway_authorizer_role_arn = aws_iam_role.api_gateway_authorizer_role.arn
+  api_gateway_cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch_role.arn
+  route53_zone_id                 = ""                        # Not used in LocalStack
+  enable_custom_domain            = false                      # Disable Route53/ACM for LocalStack
 }
 
 ##############################################################################

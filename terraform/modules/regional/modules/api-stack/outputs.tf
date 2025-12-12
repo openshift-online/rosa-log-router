@@ -1,6 +1,6 @@
 output "api_endpoint" {
   description = "API Gateway endpoint URL"
-  value       = local.domain_name
+  value       = var.enable_custom_domain ? "https://${local.domain_name}" : aws_api_gateway_stage.api_stage.invoke_url
 }
 
 output "api_id" {
