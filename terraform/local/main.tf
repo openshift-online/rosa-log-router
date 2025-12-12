@@ -453,9 +453,9 @@ module "central_api_stack" {
   tenant_config_table_name        = module.central_core_infrastructure.tenant_config_table_name
   api_auth_secret_name            = aws_secretsmanager_secret.api_psk.name
   authorizer_execution_role_arn   = aws_iam_role.api_authorizer_execution_role.arn
-  authorizer_image                = "${aws_ecr_repository.api_authorizer.repository_url}:${var.api_image_tag}"
+  authorizer_image_uri            = "${aws_ecr_repository.api_authorizer.repository_url}:${var.api_image_tag}"
   api_execution_role_arn          = aws_iam_role.api_service_execution_role.arn
-  api_image                       = "${aws_ecr_repository.api_service.repository_url}:${var.api_image_tag}"
+  api_image_uri                   = "${aws_ecr_repository.api_service.repository_url}:${var.api_image_tag}"
   api_gateway_authorizer_role_arn = aws_iam_role.api_gateway_authorizer_role.arn
   api_gateway_cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch_role.arn
   route53_zone_id                 = ""                        # Not used in LocalStack
