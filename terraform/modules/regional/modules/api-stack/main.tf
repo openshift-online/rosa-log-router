@@ -93,6 +93,8 @@ resource "aws_api_gateway_rest_api" "tenant_management_api" {
   name        = "${var.project_name}-${var.environment}-tenant-api"
   description = "REST API for tenant configuration management"
 
+  disable_execute_api_endpoint = var.enable_custom_domain
+
   endpoint_configuration {
     types = ["REGIONAL"]
   }
