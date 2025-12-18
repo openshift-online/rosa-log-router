@@ -11,3 +11,16 @@ variable "lambda_image_tag" {
   type        = string
   default     = "local"
 }
+
+variable "api_image_tag" {
+  description = "Tag for API container images (service and authorizer)"
+  type        = string
+  default     = "local"
+}
+
+variable "api_psk_value" {
+  description = "PSK value for API HMAC authentication (testing only - DO NOT use in production)"
+  type        = string
+  default     = "test-psk-localstack-do-not-use-in-production"
+  sensitive   = true
+}

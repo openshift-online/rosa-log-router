@@ -47,10 +47,11 @@ type E2ETestHelper struct {
 	localstackURL string
 
 	// Terraform outputs (fetched dynamically)
-	centralBucket     string
-	customer1Bucket   string
-	customer2Bucket   string
-	customer2LogGroup string
+	centralBucket      string
+	customer1Bucket    string
+	customer2Bucket    string
+	customer2LogGroup  string
+	apiGatewayEndpoint string
 }
 
 // NewE2ETestHelper creates a new test helper with LocalStack-configured AWS clients
@@ -95,16 +96,52 @@ func NewE2ETestHelper(t *testing.T) *E2ETestHelper {
 	customer2Bucket := getTerraformOutput(t, "customer2_bucket")
 	customer2LogGroup := getTerraformOutput(t, "customer2_log_group")
 
-	return &E2ETestHelper{
-		ctx:               ctx,
-		s3Client:          s3Client,
-		cwLogsClient:      cwLogsClient,
-		localstackURL:     LocalStackEndpoint,
-		centralBucket:     centralBucket,
-		customer1Bucket:   customer1Bucket,
-		customer2Bucket:   customer2Bucket,
-		customer2LogGroup: customer2LogGroup,
+	// Fetch optional API Gateway endpoint (may not be deployed)
+	apiGatewayEndpoint := getTerraformOutputOptional(t, "api_gateway_endpoint")
+
+	// Convert AWS-style API Gateway URL to LocalStack format
+	// From: https://reuozwkfnn.execute-api.us-east-1.amazonaws.com/int
+	// To:   http://localhost:4566/restapis/reuozwkfnn/int/_user_request_
+	if apiGatewayEndpoint != "" && strings.Contains(apiGatewayEndpoint, "amazonaws.com") {
+		apiGatewayEndpoint = convertToLocalStackAPIGatewayURL(apiGatewayEndpoint)
 	}
+
+	return &E2ETestHelper{
+		ctx:                ctx,
+		s3Client:           s3Client,
+		cwLogsClient:       cwLogsClient,
+		localstackURL:      LocalStackEndpoint,
+		centralBucket:      centralBucket,
+		customer1Bucket:    customer1Bucket,
+		customer2Bucket:    customer2Bucket,
+		customer2LogGroup:  customer2LogGroup,
+		apiGatewayEndpoint: apiGatewayEndpoint,
+	}
+}
+
+// convertToLocalStackAPIGatewayURL converts an AWS-style API Gateway URL to LocalStack format
+// From: https://reuozwkfnn.execute-api.us-east-1.amazonaws.com/int
+// To:   http://localhost:4566/restapis/reuozwkfnn/int/_user_request_
+func convertToLocalStackAPIGatewayURL(awsURL string) string {
+	// Parse the AWS URL to extract API ID and stage
+	// Format: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+	parts := strings.Split(strings.TrimPrefix(awsURL, "https://"), "/")
+	if len(parts) < 2 {
+		return awsURL // Return original if format doesn't match
+	}
+
+	// Extract API ID from subdomain
+	apiIDParts := strings.Split(parts[0], ".")
+	if len(apiIDParts) == 0 {
+		return awsURL
+	}
+	apiID := apiIDParts[0]
+
+	// Extract stage (everything after first /)
+	stage := strings.Join(parts[1:], "/")
+
+	// Build LocalStack URL
+	return fmt.Sprintf("%s/restapis/%s/%s/_user_request_", LocalStackEndpoint, apiID, stage)
 }
 
 // getTerraformOutput fetches a terraform output value by shelling out to terraform
@@ -120,6 +157,26 @@ func getTerraformOutput(t *testing.T, outputName string) string {
 	require.NotEmpty(t, value, "terraform output '%s' is empty", outputName)
 
 	t.Logf("Terraform output %s = %s", outputName, value)
+	return value
+}
+
+// getTerraformOutputOptional fetches a terraform output value that may not exist (returns empty string if not found)
+func getTerraformOutputOptional(t *testing.T, outputName string) string {
+	t.Helper()
+
+	cmd := exec.Command("terraform", "output", "-raw", outputName)
+	cmd.Dir = "../../terraform/local" // Relative to container/integration directory
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Output doesn't exist or terraform failed - this is OK for optional outputs
+		t.Logf("Terraform output %s not found (optional): %s", outputName, string(output))
+		return ""
+	}
+
+	value := strings.TrimSpace(string(output))
+	if value != "" {
+		t.Logf("Terraform output %s = %s", outputName, value)
+	}
 	return value
 }
 
@@ -342,6 +399,17 @@ func (h *E2ETestHelper) WaitForCloudWatchDelivery(t *testing.T, accountID, logGr
 	}
 
 	require.Fail(t, "timeout waiting for CloudWatch delivery", "UUID %s not found in log group %s, stream %s after %v", testID, logGroup, logStream, timeout)
+}
+
+// APIGatewayEndpoint retrieves the API Gateway endpoint from cached Terraform outputs
+func (h *E2ETestHelper) APIGatewayEndpoint() string {
+	return h.apiGatewayEndpoint
+}
+
+// APIPSK retrieves the API PSK from Terraform outputs
+func (h *E2ETestHelper) APIPSK() string {
+	// Use the default test PSK
+	return "test-psk-localstack-do-not-use-in-production"
 }
 
 // Cleanup performs any necessary cleanup after tests (currently a no-op but provided for future use)

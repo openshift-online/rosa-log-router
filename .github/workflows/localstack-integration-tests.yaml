@@ -61,10 +61,10 @@ jobs:
         make start
         echo "✅ LocalStack started"
 
-    - name: Deploy infrastructure to LocalStack
+    - name: Deploy infrastructure to LocalStack with API
       run: |
-        make deploy
-        echo "✅ Infrastructure deployed with Lambda container"
+        make deploy-api
+        echo "✅ Infrastructure deployed with Lambda container and API"
 
     - name: Get LocalStack bucket name
       id: localstack-config
