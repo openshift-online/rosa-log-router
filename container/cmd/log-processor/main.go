@@ -37,7 +37,11 @@ func main() {
 	logger.Info("log processor starting", "log_level", logLevel.String())
 
 	// Load configuration from environment
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		logger.Error("failed to load configuration", "error", err)
+		os.Exit(99)
+	}
 
 	// Determine execution mode
 	executionMode := cfg.ExecutionMode
@@ -105,21 +109,25 @@ func main() {
 }
 
 // loadConfig loads configuration from environment variables
-func loadConfig() *models.Config {
+func loadConfig() (*models.Config, error) {
 	cfg := models.DefaultConfig()
 
 	if v := os.Getenv("TENANT_CONFIG_TABLE"); v != "" {
 		cfg.TenantConfigTable = v
 	}
 	if v := os.Getenv("MAX_BATCH_SIZE"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.MaxBatchSize = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'MAX_BATCH_SIZE' to integer: %w", err)
 		}
+		cfg.MaxBatchSize = i
 	}
 	if v := os.Getenv("RETRY_ATTEMPTS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.RetryAttempts = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'RETRY_ATTEMPTS' to integer: %w", err)
 		}
+		cfg.RetryAttempts = i
 	}
 	if v := os.Getenv("CENTRAL_LOG_DISTRIBUTION_ROLE_ARN"); v != "" {
 		cfg.CentralLogDistributionRoleArn = v
@@ -137,9 +145,11 @@ func loadConfig() *models.Config {
 		cfg.SourceBucket = v
 	}
 	if v := os.Getenv("SCAN_INTERVAL"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.ScanInterval = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'SCAN_INTERVAL' to integer: %w", err)
 		}
+		cfg.ScanInterval = i
 	}
 	if v := os.Getenv("AWS_S3_USE_PATH_STYLE"); v != "" {
 		cfg.S3UsePathStyle = v == "true" || v == "1"
@@ -148,7 +158,7 @@ func loadConfig() *models.Config {
 		cfg.AWSEndpointURL = v
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // sqsPollingMode continuously polls SQS queue and processes messages

@@ -125,6 +125,12 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 		return nil, models.NewInvalidS3NotificationError(fmt.Sprintf("invalid S3 event format: %v", err))
 	}
 
+	// Extract the processing metadata from message body
+	metadata, err := ExtractProcessingMetadata(messageBody)
+	if err != nil {
+		return deliveryStats, models.NewInvalidS3NotificationError(fmt.Sprintf("failed to extract metadata from SQS message body: %v", err))
+	}
+
 	// Process each S3 record
 	for _, s3Record := range s3Event.Records {
 		bucketName := s3Record.S3.Bucket.Name
@@ -137,7 +143,7 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 			"bucket", bucketName,
 			"key", objectKey)
 
-		if err := p.processS3Object(ctx, bucketName, objectKey, messageBody, receiptHandle, deliveryStats); err != nil {
+		if err := p.processS3Object(ctx, bucketName, objectKey, messageBody, receiptHandle, metadata, deliveryStats); err != nil {
 			// Check if error is non-recoverable
 			if models.IsNonRecoverable(err) {
 				p.logger.Warn("non-recoverable error processing S3 object, continuing",
@@ -153,7 +159,7 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 }
 
 // processS3Object processes a single S3 object
-func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, messageBody, receiptHandle string, deliveryStats *models.DeliveryStats) error {
+func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, messageBody, receiptHandle string, metadata *models.ProcessingMetadata, deliveryStats *models.DeliveryStats) error {
 	// Extract tenant information from object key
 	tenantInfo, err := ExtractTenantInfoFromKey(objectKey, p.logger)
 	if err != nil {
@@ -185,7 +191,7 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 			"application", tenantInfo.Application)
 
 		// Deliver logs based on delivery type
-		if err := p.deliverLogs(ctx, bucketName, objectKey, deliveryType, deliveryConfig, tenantInfo, messageBody); err != nil {
+		if err := p.deliverLogs(ctx, bucketName, objectKey, deliveryType, deliveryConfig, tenantInfo, metadata); err != nil {
 			p.logger.Error("failed to deliver logs",
 				"tenant_id", tenantInfo.TenantID,
 				"delivery_type", deliveryType,
@@ -194,7 +200,6 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 
 			// For CloudWatch failures, try to re-queue with offset if possible
 			if deliveryType == "cloudwatch" && receiptHandle != "" && p.config.SQSQueueURL != "" {
-				metadata, _ := ExtractProcessingMetadata(messageBody)
 				if err := RequeueSQSMessageWithOffset(ctx, p.sqsClient, p.config.SQSQueueURL, messageBody, receiptHandle, metadata.Offset, 3, p.logger); err != nil {
 					p.logger.Error("failed to re-queue message", "error", err)
 				} else {
@@ -213,7 +218,7 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 }
 
 // deliverLogs handles log delivery based on type
-func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deliveryType string, deliveryConfig *models.DeliveryConfig, tenantInfo *models.TenantInfo, messageBody string) error {
+func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deliveryType string, deliveryConfig *models.DeliveryConfig, tenantInfo *models.TenantInfo, metadata *models.ProcessingMetadata) error {
 	s3Obj, uploadTime, err := GetS3Object(ctx, p.s3Client, bucketName, objectKey, p.logger)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve object %q from S3 bucket %q: %w", objectKey, bucketName, err)
@@ -229,8 +234,6 @@ func (p *Processor) deliverLogs(ctx context.Context, bucketName, objectKey, deli
 			return err
 		}
 
-		// Check for processing offset and skip already processed events
-		metadata, _ := ExtractProcessingMetadata(messageBody)
 		if metadata.Offset > 0 {
 			p.logger.Info("found processing offset, skipping already processed events", "offset", metadata.Offset)
 			logEvents = ShouldSkipProcessedEvents(logEvents, metadata.Offset, p.logger)

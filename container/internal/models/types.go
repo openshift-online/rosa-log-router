@@ -44,8 +44,8 @@ func (c *DeliveryConfig) ApplicationEnabled(applicationName string) bool {
 
 // LogEvent represents a CloudWatch Logs event
 type LogEvent struct {
-	Timestamp interface{} `json:"timestamp"` // Can be int64, float64, or ISO string
-	Message   interface{} `json:"message"`   // Can be string or map[string]interface{}
+	Timestamp any `json:"timestamp"` // Can be int64, float64, or ISO string
+	Message   any `json:"message"`   // Can be string or map[string]interface{}
 }
 
 // ProcessingMetadata contains SQS message processing metadata

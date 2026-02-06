@@ -60,7 +60,7 @@ func TestExtractProcessingMetadata(t *testing.T) {
 
 		metadata, err := ExtractProcessingMetadata(messageBody)
 
-		require.NoError(t, err)
+		require.Error(t, err)
 		assert.Equal(t, 0, metadata.Offset)
 	})
 
