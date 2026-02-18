@@ -18,7 +18,6 @@ locals {
 
 # ECR repository for Lambda container images
 resource "aws_ecr_repository" "lambda_processor" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-log-processor"
 
@@ -31,7 +30,6 @@ resource "aws_ecr_repository" "lambda_processor" {
 
 # ECR repository for API service Lambda
 resource "aws_ecr_repository" "api_service" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-api-service"
 
@@ -44,7 +42,6 @@ resource "aws_ecr_repository" "api_service" {
 
 # ECR repository for API authorizer Lambda
 resource "aws_ecr_repository" "api_authorizer" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-api-authorizer"
 
@@ -225,7 +222,6 @@ resource "aws_iam_role_policy" "central_lambda_log_processor_policy" {
 
 # API Service Lambda execution role
 resource "aws_iam_role" "api_service_execution_role" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-api-service-role"
 
@@ -244,17 +240,15 @@ resource "aws_iam_role" "api_service_execution_role" {
 }
 
 resource "aws_iam_role_policy_attachment" "api_service_basic" {
-  count      = var.deploy_api ? 1 : 0
   provider   = aws.central
-  role       = aws_iam_role.api_service_execution_role[0].name
+  role       = aws_iam_role.api_service_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy" "api_service_policy" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "APIServicePolicy"
-  role     = aws_iam_role.api_service_execution_role[0].id
+  role     = aws_iam_role.api_service_execution_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -278,7 +272,6 @@ resource "aws_iam_role_policy" "api_service_policy" {
 
 # API Authorizer Lambda execution role
 resource "aws_iam_role" "api_authorizer_execution_role" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-api-authorizer-role"
 
@@ -297,17 +290,15 @@ resource "aws_iam_role" "api_authorizer_execution_role" {
 }
 
 resource "aws_iam_role_policy_attachment" "api_authorizer_basic" {
-  count      = var.deploy_api ? 1 : 0
   provider   = aws.central
-  role       = aws_iam_role.api_authorizer_execution_role[0].name
+  role       = aws_iam_role.api_authorizer_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy" "api_authorizer_policy" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "APIAuthorizerPolicy"
-  role     = aws_iam_role.api_authorizer_execution_role[0].id
+  role     = aws_iam_role.api_authorizer_execution_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -326,7 +317,6 @@ resource "aws_iam_role_policy" "api_authorizer_policy" {
 
 # API Gateway authorizer invocation role
 resource "aws_iam_role" "api_gateway_authorizer_role" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-apigw-authorizer-role"
 
@@ -345,10 +335,9 @@ resource "aws_iam_role" "api_gateway_authorizer_role" {
 }
 
 resource "aws_iam_role_policy" "api_gateway_authorizer_policy" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "APIGatewayAuthorizerPolicy"
-  role     = aws_iam_role.api_gateway_authorizer_role[0].id
+  role     = aws_iam_role.api_gateway_authorizer_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -364,7 +353,6 @@ resource "aws_iam_role_policy" "api_gateway_authorizer_policy" {
 
 # API Gateway CloudWatch Logs role
 resource "aws_iam_role" "api_gateway_cloudwatch_role" {
-  count    = var.deploy_api ? 1 : 0
   provider = aws.central
   name     = "${local.project_name}-${local.environment}-apigw-cloudwatch-role"
 
@@ -383,9 +371,8 @@ resource "aws_iam_role" "api_gateway_cloudwatch_role" {
 }
 
 resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch_policy" {
-  count      = var.deploy_api ? 1 : 0
   provider   = aws.central
-  role       = aws_iam_role.api_gateway_cloudwatch_role[0].name
+  role       = aws_iam_role.api_gateway_cloudwatch_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
 }
 
@@ -395,7 +382,6 @@ resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch_policy" {
 
 # Secrets Manager secret for API authentication PSK
 resource "aws_secretsmanager_secret" "api_psk" {
-  count       = var.deploy_api ? 1 : 0
   provider    = aws.central
   name        = "${local.project_name}-${local.environment}-psk"
   description = "PSK for API HMAC authentication (LocalStack testing)"
@@ -404,15 +390,14 @@ resource "aws_secretsmanager_secret" "api_psk" {
 }
 
 resource "aws_secretsmanager_secret_version" "api_psk" {
-  count         = var.deploy_api ? 1 : 0
   provider      = aws.central
-  secret_id     = aws_secretsmanager_secret.api_psk[0].id
+  secret_id     = aws_secretsmanager_secret.api_psk.id
   secret_string = var.api_psk_value
 }
 
 # Lambda function - Container-based deployment (requires LocalStack Pro)
 resource "aws_lambda_function" "central_log_distributor" {
-  count    = var.deploy_lambda && var.deploy_api ? 1 : 0
+  count    = var.deploy_lambda ? 1 : 0
   provider = aws.central
 
   function_name = "${local.project_name}-${local.environment}-log-distributor"
@@ -420,7 +405,7 @@ resource "aws_lambda_function" "central_log_distributor" {
 
   # Container-based deployment - uses ECR image
   package_type = "Image"
-  image_uri    = "${aws_ecr_repository.lambda_processor[0].repository_url}:${var.lambda_image_tag}"
+  image_uri    = "${aws_ecr_repository.lambda_processor.repository_url}:${var.lambda_image_tag}"
 
   timeout     = 300
   memory_size = 512
@@ -442,7 +427,7 @@ resource "aws_lambda_function" "central_log_distributor" {
 
 # Event source mapping: SQS -> Lambda (from your lambda-stack module pattern)
 resource "aws_lambda_event_source_mapping" "central_sqs_to_lambda" {
-  count    = var.deploy_lambda && var.deploy_api ? 1 : 0
+  count    = var.deploy_lambda ? 1 : 0
   provider = aws.central
 
   event_source_arn                   = module.central_sqs_stack.log_delivery_queue_arn
@@ -457,7 +442,6 @@ resource "aws_lambda_event_source_mapping" "central_sqs_to_lambda" {
 ##############################################################################
 
 module "central_api_stack" {
-  count  = var.deploy_api ? 1 : 0
   source = "../modules/regional/modules/api-stack"
 
   providers = {
@@ -467,13 +451,13 @@ module "central_api_stack" {
   project_name                    = local.project_name
   environment                     = local.environment
   tenant_config_table_name        = module.central_core_infrastructure.tenant_config_table_name
-  api_auth_secret_name            = aws_secretsmanager_secret.api_psk[0].name
-  authorizer_execution_role_arn   = aws_iam_role.api_authorizer_execution_role[0].arn
-  authorizer_image_uri            = "${aws_ecr_repository.api_authorizer[0].repository_url}:${var.api_image_tag}"
-  api_execution_role_arn          = aws_iam_role.api_service_execution_role[0].arn
-  api_image_uri                   = "${aws_ecr_repository.api_service[0].repository_url}:${var.api_image_tag}"
-  api_gateway_authorizer_role_arn = aws_iam_role.api_gateway_authorizer_role[0].arn
-  api_gateway_cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch_role[0].arn
+  api_auth_secret_name            = aws_secretsmanager_secret.api_psk.name
+  authorizer_execution_role_arn   = aws_iam_role.api_authorizer_execution_role.arn
+  authorizer_image_uri            = "${aws_ecr_repository.api_authorizer.repository_url}:${var.api_image_tag}"
+  api_execution_role_arn          = aws_iam_role.api_service_execution_role.arn
+  api_image_uri                   = "${aws_ecr_repository.api_service.repository_url}:${var.api_image_tag}"
+  api_gateway_authorizer_role_arn = aws_iam_role.api_gateway_authorizer_role.arn
+  api_gateway_cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch_role.arn
   route53_zone_id                 = ""                        # Not used in LocalStack
   enable_custom_domain            = false                      # Disable Route53/ACM for LocalStack
 }

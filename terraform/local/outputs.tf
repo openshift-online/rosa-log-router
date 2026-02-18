@@ -26,7 +26,7 @@ output "central_dynamodb_table" {
 
 output "central_lambda_function" {
   description = "Lambda function name (empty if not deployed)"
-  value       = var.deploy_lambda && var.deploy_api ? aws_lambda_function.central_log_distributor[0].function_name : ""
+  value       = var.deploy_lambda ? aws_lambda_function.central_log_distributor[0].function_name : ""
 }
 
 output "central_sns_topic" {
@@ -41,7 +41,7 @@ output "central_log_distribution_role_arn" {
 
 output "ecr_repository_url" {
   description = "ECR repository URL for Lambda container images"
-  value       = var.deploy_api ? aws_ecr_repository.lambda_processor[0].repository_url : ""
+  value       = aws_ecr_repository.lambda_processor.repository_url
 }
 
 ##############################################################################
@@ -50,37 +50,37 @@ output "ecr_repository_url" {
 
 output "api_gateway_endpoint" {
   description = "API Gateway endpoint URL for tenant configuration API"
-  value       = var.deploy_api ? module.central_api_stack[0].api_endpoint : ""
+  value       = module.central_api_stack.api_endpoint
 }
 
 output "api_gateway_id" {
   description = "API Gateway REST API ID"
-  value       = var.deploy_api ? module.central_api_stack[0].api_id : ""
+  value       = module.central_api_stack.api_id
 }
 
 output "api_authorizer_function_arn" {
   description = "API authorizer Lambda function ARN"
-  value       = var.deploy_api ? module.central_api_stack[0].authorizer_function_arn : ""
+  value       = module.central_api_stack.authorizer_function_arn
 }
 
 output "api_service_function_arn" {
   description = "API service Lambda function ARN"
-  value       = var.deploy_api ? module.central_api_stack[0].api_function_arn : ""
+  value       = module.central_api_stack.api_function_arn
 }
 
 output "api_psk_secret_name" {
   description = "Secrets Manager secret name for API PSK"
-  value       = var.deploy_api ? aws_secretsmanager_secret.api_psk[0].name : ""
+  value       = aws_secretsmanager_secret.api_psk.name
 }
 
 output "ecr_api_service_url" {
   description = "ECR repository URL for API service container"
-  value       = var.deploy_api ? aws_ecr_repository.api_service[0].repository_url : ""
+  value       = aws_ecr_repository.api_service.repository_url
 }
 
 output "ecr_api_authorizer_url" {
   description = "ECR repository URL for API authorizer container"
-  value       = var.deploy_api ? aws_ecr_repository.api_authorizer[0].repository_url : ""
+  value       = aws_ecr_repository.api_authorizer.repository_url
 }
 
 ##############################################################################
@@ -136,7 +136,7 @@ output "test_commands" {
     s3://${module.central_core_infrastructure.central_logging_bucket_name}/test-cluster/acme-corp/payment-service/pod-1/test.json.gz
 
   # Check Lambda logs (if Lambda deployed)
-  ${var.deploy_lambda && var.deploy_api ? "aws --endpoint-url=http://localhost:4566 logs tail /aws/lambda/${aws_lambda_function.central_log_distributor[0].function_name} --follow" : "# Lambda not deployed - using container scan mode instead"}
+  ${var.deploy_lambda ? "aws --endpoint-url=http://localhost:4566 logs tail /aws/lambda/${aws_lambda_function.central_log_distributor[0].function_name} --follow" : "# Lambda not deployed - using container scan mode instead"}
 
   # Check customer buckets (cross-account!)
   AWS_ACCESS_KEY_ID=${local.customer1_account_id} aws --endpoint-url=http://localhost:4566 \
@@ -153,11 +153,11 @@ output "test_commands" {
     --external-id ${local.central_account_id}
 
   # Test API health endpoint
-  ${var.deploy_api ? "curl -v \"${module.central_api_stack[0].api_endpoint}/api/v1/health\"" : "# API not deployed"}
+  curl -v "${module.central_api_stack.api_endpoint}/api/v1/health"
 
   # Set environment for API integration tests
-  ${var.deploy_api ? "export API_BASE_URL=\"${module.central_api_stack[0].api_endpoint}\"" : "# API not deployed"}
-  ${var.deploy_api ? "export API_PSK=\"${var.api_psk_value}\"" : ""}
+  export API_BASE_URL="${module.central_api_stack.api_endpoint}"
+  export API_PSK="${var.api_psk_value}"
   export AWS_ENDPOINT_URL="http://localhost:4566"
 
   EOT
