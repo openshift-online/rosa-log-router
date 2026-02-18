@@ -22,6 +22,15 @@ import (
 	"github.com/openshift/rosa-log-router/internal/processor"
 )
 
+// Exit codes
+const (
+	_ = iota // skip; 0 exit code indicates success
+	ExitCodeExecutionFailed
+	ExitCodeInvalidExecutionMode
+	ExitCodeLoadConfigFailed
+	ExitCodeLoadAWSConfigFailed
+)
+
 func main() {
 	// Parse command-line flags
 	mode := flag.String("mode", "", "Execution mode: sqs, manual, or scan (default: lambda)")
@@ -37,7 +46,11 @@ func main() {
 	logger.Info("log processor starting", "log_level", logLevel.String())
 
 	// Load configuration from environment
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		logger.Error("failed to load configuration", "error", err)
+		os.Exit(ExitCodeLoadConfigFailed)
+	}
 
 	// Determine execution mode
 	executionMode := cfg.ExecutionMode
@@ -50,7 +63,7 @@ func main() {
 	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.AWSRegion))
 	if err != nil {
 		logger.Error("failed to load AWS config", "error", err)
-		os.Exit(1)
+		os.Exit(ExitCodeLoadAWSConfigFailed)
 	}
 
 	// Create AWS clients
@@ -79,7 +92,7 @@ func main() {
 		logger.Info("starting in SQS polling mode")
 		if err := sqsPollingMode(ctx, proc, sqsClient, cfg, logger); err != nil {
 			logger.Error("SQS polling mode failed", "error", err)
-			os.Exit(1)
+			os.Exit(ExitCodeExecutionFailed)
 		}
 
 	case "manual":
@@ -87,7 +100,7 @@ func main() {
 		logger.Info("starting in manual input mode")
 		if err := manualInputMode(ctx, proc, logger); err != nil {
 			logger.Error("manual input mode failed", "error", err)
-			os.Exit(1)
+			os.Exit(ExitCodeExecutionFailed)
 		}
 
 	case "scan":
@@ -95,31 +108,35 @@ func main() {
 		logger.Info("starting in scan mode")
 		if err := scanMode(ctx, proc, s3Client, cfg, logger); err != nil {
 			logger.Error("scan mode failed", "error", err)
-			os.Exit(1)
+			os.Exit(ExitCodeExecutionFailed)
 		}
 
 	default:
 		logger.Error("invalid execution mode", "mode", executionMode)
-		os.Exit(1)
+		os.Exit(ExitCodeInvalidExecutionMode)
 	}
 }
 
 // loadConfig loads configuration from environment variables
-func loadConfig() *models.Config {
+func loadConfig() (*models.Config, error) {
 	cfg := models.DefaultConfig()
 
 	if v := os.Getenv("TENANT_CONFIG_TABLE"); v != "" {
 		cfg.TenantConfigTable = v
 	}
 	if v := os.Getenv("MAX_BATCH_SIZE"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.MaxBatchSize = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'MAX_BATCH_SIZE' to integer: %w", err)
 		}
+		cfg.MaxBatchSize = i
 	}
 	if v := os.Getenv("RETRY_ATTEMPTS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.RetryAttempts = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'RETRY_ATTEMPTS' to integer: %w", err)
 		}
+		cfg.RetryAttempts = i
 	}
 	if v := os.Getenv("CENTRAL_LOG_DISTRIBUTION_ROLE_ARN"); v != "" {
 		cfg.CentralLogDistributionRoleArn = v
@@ -137,9 +154,11 @@ func loadConfig() *models.Config {
 		cfg.SourceBucket = v
 	}
 	if v := os.Getenv("SCAN_INTERVAL"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.ScanInterval = i
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert value of 'SCAN_INTERVAL' to integer: %w", err)
 		}
+		cfg.ScanInterval = i
 	}
 	if v := os.Getenv("AWS_S3_USE_PATH_STYLE"); v != "" {
 		cfg.S3UsePathStyle = v == "true" || v == "1"
@@ -148,7 +167,7 @@ func loadConfig() *models.Config {
 		cfg.AWSEndpointURL = v
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // sqsPollingMode continuously polls SQS queue and processes messages

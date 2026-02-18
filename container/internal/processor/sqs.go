@@ -26,7 +26,7 @@ func ExtractProcessingMetadata(sqsRecordBody string) (*models.ProcessingMetadata
 	}
 
 	if err := json.Unmarshal([]byte(sqsRecordBody), &message); err != nil {
-		return &models.ProcessingMetadata{}, nil // Return empty metadata on parse error
+		return &models.ProcessingMetadata{}, fmt.Errorf("failed to extract metadata from SQS record: %w", err)
 	}
 
 	if message.ProcessingMetadata == nil {
