@@ -1,6 +1,6 @@
 # Makefile for local development with LocalStack
 
-.PHONY: help start stop logs build build-api build-all deploy deploy-wo-lambda deploy-api init plan outputs test-api destroy test-e2e test-e2e-quick warmup-lambda test-e2e-with-warmup validate-vector-flow clean reset run-scan run-scan-background
+.PHONY: help start start-community stop logs build build-api build-all deploy deploy-wo-lambda deploy-community deploy-api init plan outputs test-api destroy test-e2e test-e2e-quick warmup-lambda test-e2e-with-warmup validate-vector-flow clean reset run-scan run-scan-background
 
 help: ## Show this help message
 	@echo "Rosa Log Router - Local Multi-Account Testing"
@@ -10,7 +10,7 @@ help: ## Show this help message
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
-start: ## Start LocalStack
+start: ## Start LocalStack Pro
 	@echo "Ensuring Podman socket is available..."
 	@systemctl --user enable --now podman.socket 2>/dev/null || true
 	@echo "Starting LocalStack..."
@@ -18,6 +18,16 @@ start: ## Start LocalStack
 	@echo "Waiting for LocalStack to be ready..."
 	@timeout 120 bash -c 'until curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; do echo "  Waiting for LocalStack health check..."; sleep 5; done' || { echo "❌ LocalStack failed to become healthy"; docker compose logs localstack | tail -50; exit 1; }
 	@echo "✅ LocalStack is healthy and ready"
+	@docker compose logs localstack | tail -20
+
+start-community: ## Start LocalStack Community (no auth token required)
+	@echo "Ensuring Podman socket is available..."
+	@systemctl --user enable --now podman.socket 2>/dev/null || true
+	@echo "Starting LocalStack Community..."
+	LOCALSTACK_IMAGE=localstack/localstack:latest docker compose up -d
+	@echo "Waiting for LocalStack to be ready..."
+	@timeout 120 bash -c 'until curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; do echo "  Waiting for LocalStack health check..."; sleep 5; done' || { echo "❌ LocalStack failed to become healthy"; docker compose logs localstack | tail -50; exit 1; }
+	@echo "✅ LocalStack Community is healthy and ready"
 	@docker compose logs localstack | tail -20
 
 stop: ## Stop LocalStack
@@ -72,6 +82,14 @@ deploy: build init ## Deploy infrastructure with Lambda container
 deploy-wo-lambda: build init ## Deploy infrastructure without Lambda (for scan mode)
 	@echo "Deploying to LocalStack without Lambda (for scan mode)..."
 	cd terraform/local && terraform apply -auto-approve -var="deploy_lambda=false"
+	@echo ""
+	@echo "✅ Infrastructure deployed! Ready for container scan mode."
+	@echo ""
+	@echo "Run 'make run-scan' to start the processor in scan mode"
+
+deploy-community: build init ## Deploy infrastructure for LocalStack Community (no Lambda, no API)
+	@echo "Deploying to LocalStack Community (no Lambda, no API)..."
+	cd terraform/local && terraform apply -auto-approve -var="deploy_lambda=false" -var="deploy_api=false"
 	@echo ""
 	@echo "✅ Infrastructure deployed! Ready for container scan mode."
 	@echo ""

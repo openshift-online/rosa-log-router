@@ -6,6 +6,12 @@ variable "deploy_lambda" {
   default     = true
 }
 
+variable "deploy_api" {
+  description = "Whether to deploy API stack (ECR, API Gateway, Lambda authorizer). Requires LocalStack Pro."
+  type        = bool
+  default     = true
+}
+
 variable "lambda_image_tag" {
   description = "Tag for Lambda container image (LocalStack uses local images)"
   type        = string
