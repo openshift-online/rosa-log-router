@@ -173,3 +173,35 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 **🏗️ POC Status**: This project demonstrates core functionality with minimal complexity. Advanced monitoring, alerting, and management features should be added incrementally after pipeline validation.
+
+## Usage
+
+### Log Processor
+
+The log processor runs as a container that scans S3 buckets for log files and routes them to tenant-specific destinations.
+
+```bash
+# Build and run locally
+make build-processor
+./log-processor scan --config config.yaml
+```
+
+### Vector Integration
+
+Vector collectors aggregate logs from cluster nodes and forward them to the log pipeline:
+
+```bash
+# Deploy Vector to a Kubernetes cluster
+kubectl apply -k k8s/vector/overlays/openshift
+```
+
+### Terraform Infrastructure
+
+Provision the log routing infrastructure:
+
+```bash
+cd api/terraform
+terraform init
+terraform plan
+terraform apply
+```
