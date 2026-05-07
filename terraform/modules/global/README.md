@@ -63,7 +63,7 @@ module "global_iam" {
 ### Central Log Distribution Role
 
 #### Inline Policy Permissions
-- **Cross-account role assumption**: `sts:AssumeRole` on `arn:aws:iam::*:role/CustomerLogDistribution-*` with external ID validation
+- **Cross-account role assumption**: `sts:AssumeRole` on `arn:aws:iam::*:role/*CustomerLogDistribution-*` with external ID validation (supports IAM path prefixes)
 - **Source S3 access**: `s3:GetObject`, `s3:GetBucketLocation`, `s3:ListBucket` on `hcp-log-*` buckets
 - **Target S3 access**: `s3:PutObject` on all S3 buckets for cross-region delivery
 - **KMS operations**: `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKey` on all KMS keys
