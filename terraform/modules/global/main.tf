@@ -59,7 +59,10 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
         Action = [
           "sts:AssumeRole"
         ]
-        Resource = "arn:aws:iam::*:role/CustomerLogDistribution-*"
+        Resource = [
+          "arn:aws:iam::*:role/CustomerLogDistribution-*",
+          "arn:aws:iam::*:role/*/CustomerLogDistribution-*"
+        ]
         Condition = {
           StringEquals = {
             "sts:ExternalId" = data.aws_caller_identity.current.account_id
