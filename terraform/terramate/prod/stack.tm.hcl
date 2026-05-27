@@ -31,7 +31,6 @@ globals "aws" {
     "eu-west-3",
     "il-central-1",
     "me-central-1",
-    "me-south-1",
     "mx-central-1",
     "sa-east-1",
     "us-east-1",
