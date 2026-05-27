@@ -107,15 +107,26 @@ jobs:
         env:
           DIFF_CONTENT: ${{ steps.verify-changed-files.outputs.diff_content }}
 
-      - name: Commit and push changes
+      - name: Create PR with changes
         if: ${{ github.event_name == 'push' && steps.verify-changed-files.outputs.changed == 'true' }}
         run: |
+          BRANCH="terramate-generate/$(date +%Y%m%d-%H%M%S)"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          git checkout -b "$BRANCH"
           git add .
           git commit -m "Auto-generate Terramate files
 
           🤖 Generated with terramate generate
 
           Co-Authored-By: GitHub Action <action@github.com>"
-          git push origin main
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "Auto-generate Terramate files" \
+            --body "Automated PR created by the Terramate Generate workflow.
+
+          This PR contains files updated by \`terramate generate\`." \
+            --base main \
+            --head "$BRANCH"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
