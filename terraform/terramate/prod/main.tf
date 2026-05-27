@@ -39,7 +39,6 @@ module "global" {
     "eu-west-3",
     "il-central-1",
     "me-central-1",
-    "me-south-1",
     "mx-central-1",
     "sa-east-1",
     "us-east-1",
@@ -602,28 +601,6 @@ module "regional-resource-me-central-1" {
   source = "../../modules/regional"
   providers = {
     aws = aws.me-central-1
-  }
-  project_name                      = var.project_name
-  environment                       = var.environment
-  random_suffix                     = local.random_suffix
-  s3_delete_after_days              = var.s3_delete_after_days
-  enable_s3_encryption              = var.enable_s3_encryption
-  central_log_distribution_role_arn = module.global.central_log_distribution_role_arn
-  processor_image                   = var.processor_image
-  lambda_execution_role_arn         = module.global.lambda_execution_role_arn
-  api_auth_secret_name              = module.global.api_auth_secret_name
-  authorizer_execution_role_arn     = module.global.authorizer_execution_role_arn
-  authorizer_image                  = var.authorizer_image
-  api_execution_role_arn            = module.global.api_execution_role_arn
-  api_image                         = var.api_image
-  api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
-  api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
-  route53_zone_id                   = var.route53_zone_id
-}
-module "regional-resource-me-south-1" {
-  source = "../../modules/regional"
-  providers = {
-    aws = aws.me-south-1
   }
   project_name                      = var.project_name
   environment                       = var.environment
