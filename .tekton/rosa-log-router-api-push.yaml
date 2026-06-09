@@ -119,7 +119,7 @@ spec:
         - name: name
           value: init
         - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-init:0.3@sha256:d7f119ec69bafe990eb320daa3df9f432427513c3289e113d584963854adf237
+          value: quay.io/konflux-ci/tekton-catalog/task-init:0.4@sha256:5a423246792ac501ea279229b42ee57da9927da441c04b5c9ff86817b0856b08
         - name: kind
           value: task
         resolver: bundles
@@ -149,6 +149,8 @@ spec:
       params:
       - name: input
         value: $(params.prefetch-input)
+      - name: enable-package-registry-proxy
+        value: "true"
       runAfter:
       - clone-repository
       taskRef:
@@ -156,7 +158,7 @@ spec:
         - name: name
           value: prefetch-dependencies
         - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-prefetch-dependencies:0.2@sha256:9fb4a1ee0e190d52e179c0b03f05e23aafc25b854a56efa97d07dcd94e273a56
+          value: quay.io/konflux-ci/tekton-catalog/task-prefetch-dependencies:0.3@sha256:39ef6f58c81b3c8b0d50acdc3750d30f7ee463375a176178918c2ceca9f010a2
         - name: kind
           value: task
         resolver: bundles
@@ -201,7 +203,7 @@ spec:
         - name: name
           value: buildah
         - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-buildah:0.8@sha256:9ea6eb59886140b16d9f580857699999eaab777b1d73f5e58bdd064212225fa6
+          value: quay.io/konflux-ci/tekton-catalog/task-buildah:0.10@sha256:ae597944d7792b2e5d5bc5afe52c61793bb68f57017abdd62c5eab2186946cf9
         - name: kind
           value: task
         resolver: bundles
@@ -230,7 +232,7 @@ spec:
         - name: name
           value: build-image-index
         - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-build-image-index:0.2@sha256:5b51ebe8076412bea2703249c0e92472e240d2a44d90b8768dfe076e918c4391
+          value: quay.io/konflux-ci/tekton-catalog/task-build-image-index:0.3@sha256:b33bfa8dc27dbf459f0779598ba45dcaa490bcc9f8efe1652bcf360ec8cb5582
         - name: kind
           value: task
         resolver: bundles
@@ -314,7 +316,7 @@ spec:
         - name: name
           value: ecosystem-cert-preflight-checks
         - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-ecosystem-cert-preflight-checks:0.2@sha256:88f4fd6d7812a3c46f120f3035974f5fb8cb06b5e3e927badf6e8370f1516a88
+          value: quay.io/konflux-ci/tekton-catalog/task-ecosystem-cert-preflight-checks:0.2@sha256:de2c3ca1c60145437b75c30bc04c2f30c8d8bd78bc19ec935a854f44fb988188
         - name: kind
           value: task
         resolver: bundles
