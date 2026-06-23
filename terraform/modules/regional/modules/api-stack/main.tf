@@ -143,14 +143,16 @@ resource "aws_api_gateway_gateway_response" "access_denied" {
 
 # Lambda permissions for API Gateway
 resource "aws_lambda_permission" "authorizer_invoke_permission" {
-  function_name = aws_lambda_alias.authorizer_function_live.arn
+  function_name = aws_lambda_function.authorizer_function.function_name
+  qualifier     = aws_lambda_alias.authorizer_function_live.name
   action        = "lambda:InvokeFunction"
   principal     = "apigateway.amazonaws.com"
   source_arn    = "arn:aws:execute-api:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${aws_api_gateway_rest_api.tenant_management_api.id}/authorizers/${aws_api_gateway_authorizer.api_authorizer.id}"
 }
 
 resource "aws_lambda_permission" "api_invoke_permission" {
-  function_name = aws_lambda_alias.api_function_live.arn
+  function_name = aws_lambda_function.api_function.function_name
+  qualifier     = aws_lambda_alias.api_function_live.name
   action        = "lambda:InvokeFunction"
   principal     = "apigateway.amazonaws.com"
   source_arn    = "arn:aws:execute-api:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${aws_api_gateway_rest_api.tenant_management_api.id}/*/*"
