@@ -56,7 +56,6 @@ jobs:
     - name: Start LocalStack
       env:
         DOCKER_SOCK: /var/run/docker.sock
-        LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
       run: |
         make start
         echo "✅ LocalStack started"
