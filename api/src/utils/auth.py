@@ -155,28 +155,7 @@ def validate_request_signature(
     try:
         # Generate expected signature
         expected_signature = generate_signature(psk, method, uri, timestamp, body, include_body)
-        
-        # Calculate message for detailed logging
-        if include_body:
-            body_hash = hashlib.sha256(body.encode('utf-8')).hexdigest()
-            message = f"{method.upper()}{uri}{timestamp}{body_hash}"
-        else:
-            body_hash = "N/A (excluded)"
-            message = f"{method.upper()}{uri}{timestamp}"
-        
-        # Log signature validation details
-        print(f"SIGNATURE VALIDATION:")
-        print(f"  Method: '{method}'")
-        print(f"  URI: '{uri}'")
-        print(f"  Timestamp: '{timestamp}'")
-        print(f"  Body: '{body}'")
-        print(f"  Body length: {len(body)}")
-        print(f"  Include body: {include_body}")
-        print(f"  Body hash: {body_hash}")
-        print(f"  Message: '{message}'")
-        print(f"  Expected signature: {expected_signature}")
-        print(f"  Provided signature: {provided_signature}")
-        
+
         # Use constant-time comparison to prevent timing attacks
         is_valid = hmac.compare_digest(expected_signature, provided_signature)
         logger.info(f"  Signature valid: {is_valid}")
@@ -253,8 +232,8 @@ def authenticate_request(
     # Get PSK from Secrets Manager
     psk = get_psk_from_secrets_manager(psk_secret_name, region)
     
-    # Validate signature (exclude body for API Gateway authorizers)
-    if not validate_request_signature(psk, method, uri, timestamp, signature, body, include_body=False):
+    # Validate signature (include body to prevent tampering)
+    if not validate_request_signature(psk, method, uri, timestamp, signature, body, include_body=True):
         logger.warning("Invalid request signature")
         return False
     

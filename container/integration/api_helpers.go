@@ -19,10 +19,11 @@ import (
 )
 
 // generateHMACSignature generates HMAC-SHA256 signature for API authentication
-// Signature format matches the authorizer: METHODURITIMESTAMP (no separators, no body)
-func generateHMACSignature(psk, method, path, timestamp string) string {
-	// Signature format: HMAC-SHA256(PSK, "METHODURITIMESTAMP")
-	message := fmt.Sprintf("%s%s%s", method, path, timestamp)
+// Signature format: HMAC-SHA256(PSK, "METHODURITIMESTAMPBODY_HASH")
+func generateHMACSignature(psk, method, path, timestamp, body string) string {
+	bodyHash := sha256.Sum256([]byte(body))
+	bodyHashHex := hex.EncodeToString(bodyHash[:])
+	message := fmt.Sprintf("%s%s%s%s", method, path, timestamp, bodyHashHex)
 	h := hmac.New(sha256.New, []byte(psk))
 	h.Write([]byte(message))
 	return hex.EncodeToString(h.Sum(nil))
@@ -49,7 +50,7 @@ func (h *E2ETestHelper) makeAPIRequest(t *testing.T, method, path string, body i
 	// Use ISO 8601 timestamp format as expected by authorizer
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 
-	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp)
+	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp, string(bodyBytes))
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Timestamp", timestamp)

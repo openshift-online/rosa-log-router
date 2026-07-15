@@ -202,32 +202,43 @@ class TestGenerateSignature:
         method = "GET"
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
-        
-        sig1 = generate_signature(psk, method, uri, timestamp, "", include_body=False)
-        sig2 = generate_signature(psk, method, uri, timestamp, "", include_body=False)
-        
+
+        sig1 = generate_signature(psk, method, uri, timestamp, "", include_body=True)
+        sig2 = generate_signature(psk, method, uri, timestamp, "", include_body=True)
+
         assert sig1 == sig2
-    
+
     def test_generate_signature_different_methods(self):
         """Test that different methods produce different signatures"""
         psk = "secret-key"
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
-        
-        get_sig = generate_signature(psk, "GET", uri, timestamp, "", include_body=False)
-        post_sig = generate_signature(psk, "POST", uri, timestamp, "", include_body=False)
-        
+
+        get_sig = generate_signature(psk, "GET", uri, timestamp, "", include_body=True)
+        post_sig = generate_signature(psk, "POST", uri, timestamp, "", include_body=True)
+
         assert get_sig != post_sig
-    
+
+    def test_generate_signature_different_bodies_produce_different_signatures(self):
+        """Test that different bodies produce different signatures"""
+        psk = "secret-key"
+        uri = "/api/v1/tenants"
+        timestamp = "2024-01-15T10:30:00Z"
+
+        sig1 = generate_signature(psk, "POST", uri, timestamp, '{"a": 1}', include_body=True)
+        sig2 = generate_signature(psk, "POST", uri, timestamp, '{"a": 2}', include_body=True)
+
+        assert sig1 != sig2
+
     def test_generate_signature_case_insensitive_method(self):
         """Test that method is normalized to uppercase"""
         psk = "secret-key"
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
-        
-        upper_sig = generate_signature(psk, "GET", uri, timestamp, "", include_body=False)
-        lower_sig = generate_signature(psk, "get", uri, timestamp, "", include_body=False)
-        
+
+        upper_sig = generate_signature(psk, "GET", uri, timestamp, "", include_body=True)
+        lower_sig = generate_signature(psk, "get", uri, timestamp, "", include_body=True)
+
         assert upper_sig == lower_sig
 
 
@@ -302,21 +313,19 @@ class TestValidateRequestSignature:
     """Test cases for request signature validation"""
     
     def test_validate_signature_success(self):
-        """Test successful signature validation"""
+        """Test successful signature validation with body included"""
         psk = "secret-key"
         method = "GET"
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
         body = ""
-        
-        # Generate expected signature
-        expected_signature = generate_signature(psk, method, uri, timestamp, body, include_body=False)
-        
-        # Validate should return True
+
+        expected_signature = generate_signature(psk, method, uri, timestamp, body, include_body=True)
+
         assert validate_request_signature(
-            psk, method, uri, timestamp, expected_signature, body, include_body=False
+            psk, method, uri, timestamp, expected_signature, body, include_body=True
         ) is True
-    
+
     def test_validate_signature_failure(self):
         """Test signature validation failure"""
         psk = "secret-key"
@@ -324,13 +333,13 @@ class TestValidateRequestSignature:
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
         body = ""
-        
+
         wrong_signature = "0123456789abcdef" * 4  # 64-char hex string but wrong
-        
+
         assert validate_request_signature(
-            psk, method, uri, timestamp, wrong_signature, body, include_body=False
+            psk, method, uri, timestamp, wrong_signature, body, include_body=True
         ) is False
-    
+
     def test_validate_signature_with_body(self):
         """Test signature validation with body included"""
         psk = "secret-key"
@@ -338,14 +347,28 @@ class TestValidateRequestSignature:
         uri = "/api/v1/tenants"
         timestamp = "2024-01-15T10:30:00Z"
         body = '{"tenant_id": "test"}'
-        
-        # Generate expected signature with body
+
         expected_signature = generate_signature(psk, method, uri, timestamp, body, include_body=True)
-        
+
         assert validate_request_signature(
             psk, method, uri, timestamp, expected_signature, body, include_body=True
         ) is True
-    
+
+    def test_validate_signature_body_tamper_detected(self):
+        """Test that body tampering is detected — signature over original body must not validate against modified body"""
+        psk = "secret-key"
+        method = "POST"
+        uri = "/api/v1/tenants"
+        timestamp = "2024-01-15T10:30:00Z"
+        original_body = '{"tenant_id": "legit-tenant"}'
+        tampered_body = '{"tenant_id": "attacker-tenant"}'
+
+        signature = generate_signature(psk, method, uri, timestamp, original_body, include_body=True)
+
+        assert validate_request_signature(
+            psk, method, uri, timestamp, signature, tampered_body, include_body=True
+        ) is False
+
     def test_validate_signature_wrong_psk(self):
         """Test signature validation with wrong PSK"""
         psk = "secret-key"
@@ -353,13 +376,11 @@ class TestValidateRequestSignature:
         method = "GET"
         uri = "/api/v1/health"
         timestamp = "2024-01-15T10:30:00Z"
-        
-        # Generate signature with correct PSK
-        signature = generate_signature(psk, method, uri, timestamp, "", include_body=False)
-        
-        # Validate with wrong PSK should fail
+
+        signature = generate_signature(psk, method, uri, timestamp, "", include_body=True)
+
         assert validate_request_signature(
-            wrong_psk, method, uri, timestamp, signature, "", include_body=False
+            wrong_psk, method, uri, timestamp, signature, "", include_body=True
         ) is False
 
 
@@ -791,7 +812,7 @@ class TestEdgeCases:
             timestamp="2024-01-15T10:30:00Z",
             provided_signature="",
             body="",
-            include_body=False
+            include_body=True
         ) is False
     
     def test_malformed_signature_header(self):
@@ -826,12 +847,10 @@ class TestEdgeCases:
         """Test handling of very long URIs"""
         psk = "secret-key"
         method = "GET"
-        # Create a very long URI with many query parameters
         long_uri = "/api/v1/tenants?" + "&".join([f"param{i}=value{i}" for i in range(100)])
         timestamp = "2024-01-15T10:30:00Z"
-        
-        # Should not raise an exception
-        signature = generate_signature(psk, method, long_uri, timestamp, "", include_body=False)
+
+        signature = generate_signature(psk, method, long_uri, timestamp, "", include_body=True)
         assert len(signature) == 64
     
     @patch('src.utils.auth.logger')
