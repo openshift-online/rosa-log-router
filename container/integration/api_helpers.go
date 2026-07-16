@@ -12,18 +12,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// generateHMACSignature generates HMAC-SHA256 signature for API authentication
-// Signature format: HMAC-SHA256(PSK, "METHODURITIMESTAMPBODY_HASH")
-func generateHMACSignature(psk, method, path, timestamp, body string) string {
-	bodyHash := sha256.Sum256([]byte(body))
-	bodyHashHex := hex.EncodeToString(bodyHash[:])
-	message := fmt.Sprintf("%s%s%s%s", method, path, timestamp, bodyHashHex)
+// generateHMACSignature generates HMAC-SHA256 signature for API authentication.
+// Signature format: HMAC-SHA256(PSK, UPPER(METHOD) + URI + TIMESTAMP + BODY_HASH)
+// where BODY_HASH is the hex SHA-256 of the request body (empty string for bodyless requests).
+func generateHMACSignature(psk, method, path, timestamp, bodyHash string) string {
+	message := fmt.Sprintf("%s%s%s%s", strings.ToUpper(method), path, timestamp, bodyHash)
 	h := hmac.New(sha256.New, []byte(psk))
 	h.Write([]byte(message))
 	return hex.EncodeToString(h.Sum(nil))
@@ -46,14 +46,18 @@ func (h *E2ETestHelper) makeAPIRequest(t *testing.T, method, path string, body i
 	req, err := http.NewRequest(method, url, bytes.NewReader(bodyBytes))
 	require.NoError(t, err, "failed to create HTTP request")
 
-	// Add HMAC authentication headers
-	// Use ISO 8601 timestamp format as expected by authorizer
+	// Add HMAC authentication headers.
+	// Body hash is sent as X-Body-SHA256 and included in the signed message so
+	// the REST API Gateway authorizer can verify body integrity without needing
+	// access to the raw request body (which authorizers don't receive).
 	timestamp := time.Now().UTC().Format(time.RFC3339)
-
-	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp, string(bodyBytes))
+	bodyHashArr := sha256.Sum256(bodyBytes)
+	bodyHash := hex.EncodeToString(bodyHashArr[:])
+	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp, bodyHash)
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Timestamp", timestamp)
+	req.Header.Set("X-Body-SHA256", bodyHash)
 	req.Header.Set("Authorization", fmt.Sprintf("HMAC-SHA256 %s", signature))
 
 	client := &http.Client{Timeout: 30 * time.Second}

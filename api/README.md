@@ -109,10 +109,24 @@ X-API-Timestamp: <ISO-8601-timestamp>
 
 ### Signature Generation
 
-1. **Create message**: `HTTP_METHOD + URI + TIMESTAMP`
-2. **Generate signature**: `HMAC-SHA256(PSK, message)`
+Required headers:
 
-**Note**: The signature does not include the request body hash due to API Gateway authorizer limitations. The body is validated by the API service after successful authentication.
+```
+Authorization: HMAC-SHA256 <signature>
+X-API-Timestamp: <ISO-8601-timestamp>
+X-Body-SHA256: <hex-sha256-of-request-body>
+```
+
+Steps:
+
+1. **Compute body hash**: `BODY_HASH = hex(SHA-256(request_body))` — use an empty string for bodyless requests (GET, DELETE)
+2. **Create message**: `UPPER(HTTP_METHOD) + URI + TIMESTAMP + BODY_HASH`
+3. **Generate signature**: `HMAC-SHA256(PSK, message)`
+4. **Send headers**: `Authorization`, `X-API-Timestamp`, and `X-Body-SHA256`
+
+The `X-Body-SHA256` header is included in the signed message so that the Lambda
+authorizer can verify body integrity. REST API Gateway REQUEST authorizers do not
+receive the raw request body, so the pre-computed hash travels as a signed header.
 
 ### Example (Python)
 
@@ -121,15 +135,17 @@ import hmac
 import hashlib
 from datetime import datetime, timezone
 
-def sign_request(psk, method, uri):
+def sign_request(psk, method, uri, body=""):
     timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-    message = f"{method.upper()}{uri}{timestamp}"
+    body_hash = hashlib.sha256(body.encode('utf-8')).hexdigest()
+    message = f"{method.upper()}{uri}{timestamp}{body_hash}"
     signature = hmac.new(psk.encode(), message.encode(), hashlib.sha256).hexdigest()
-    
+
     return {
         'Authorization': f'HMAC-SHA256 {signature}',
         'X-API-Timestamp': timestamp,
-        'Content-Type': 'application/json'
+        'X-Body-SHA256': body_hash,
+        'Content-Type': 'application/json',
     }
 
 # Usage
@@ -143,13 +159,16 @@ headers = sign_request('your-psk', 'GET', '/api/v1/tenants/acme-corp/delivery-co
 PSK="your-pre-shared-key"
 METHOD="GET"
 URI="/api/v1/tenants/acme-corp/delivery-configs"
+BODY=""
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-MESSAGE="${METHOD}${URI}${TIMESTAMP}"
+BODY_HASH=$(echo -n "$BODY" | openssl dgst -sha256 | cut -d' ' -f2)
+MESSAGE="${METHOD}${URI}${TIMESTAMP}${BODY_HASH}"
 SIGNATURE=$(echo -n "$MESSAGE" | openssl dgst -sha256 -hmac "$PSK" | cut -d' ' -f2)
 
 curl -X "$METHOD" "https://api.example.com${URI}" \
   -H "Authorization: HMAC-SHA256 $SIGNATURE" \
   -H "X-API-Timestamp: $TIMESTAMP" \
+  -H "X-Body-SHA256: $BODY_HASH" \
   -H "Content-Type: application/json"
 ```
 
