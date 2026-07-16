@@ -10,6 +10,7 @@ jobs:
   localstack-integration:
     runs-on: ubuntu-latest
     name: LocalStack Integration Tests
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
     - name: Checkout repository
@@ -56,6 +57,7 @@ jobs:
     - name: Start LocalStack
       env:
         DOCKER_SOCK: /var/run/docker.sock
+        LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
       run: |
         make start
         echo "✅ LocalStack started"
