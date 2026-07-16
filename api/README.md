@@ -186,6 +186,7 @@ import (
     "fmt"
     "io"
     "net/http"
+    "strings"
     "time"
 )
 
@@ -263,22 +264,27 @@ func NewTenantClient(baseURL, psk string) *TenantClient {
     }
 }
 
-// generateSignature creates HMAC-SHA256 signature for request authentication
-func (c *TenantClient) generateSignature(method, uri, timestamp string) string {
-    message := method + uri + timestamp
+// generateSignature creates HMAC-SHA256 signature for request authentication.
+// Signed message: UPPER(METHOD) + URI + TIMESTAMP + BODY_HASH
+// where BODY_HASH = hex(SHA-256(request_body)), empty string for bodyless requests.
+func (c *TenantClient) generateSignature(method, uri, timestamp, bodyHash string) string {
+    message := strings.ToUpper(method) + uri + timestamp + bodyHash
     h := hmac.New(sha256.New, []byte(c.PSK))
     h.Write([]byte(message))
-    signature := hex.EncodeToString(h.Sum(nil))
-    return signature
+    return hex.EncodeToString(h.Sum(nil))
 }
 
-// signRequest adds authentication headers to the request
+// signRequest adds authentication headers to the request.
+// Sends X-Body-SHA256 so the Lambda authorizer can verify body integrity
+// without needing direct access to the request body.
 func (c *TenantClient) signRequest(req *http.Request, body string) {
-    timestamp := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-    signature := c.generateSignature(req.Method, req.URL.RequestURI(), timestamp)
-    
+    timestamp := time.Now().UTC().Format(time.RFC3339)
+    bodyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
+    signature := c.generateSignature(req.Method, req.URL.RequestURI(), timestamp, bodyHash)
+
     req.Header.Set("Authorization", "HMAC-SHA256 "+signature)
     req.Header.Set("X-API-Timestamp", timestamp)
+    req.Header.Set("X-Body-SHA256", bodyHash)
     req.Header.Set("Content-Type", "application/json")
 }
 
