@@ -12,6 +12,9 @@ maintainers:
   - clcollins
   - Mhodesty
   - dustman9000
+  - nephomaniac
+  - aliceh
+  - anispate
 approvers:
   - jhjaggars
   - BumbleFeng
@@ -22,7 +25,6 @@ approvers:
   - aliceh
   - anispate
   - nephomaniac
-  - dkrause-redhat
   - dustman9000
 reviewers:
   - tnierman
@@ -31,5 +33,4 @@ reviewers:
   - aliceh
   - anispate
   - nephomaniac
-  - dkrause-redhat
   - dustman9000
