@@ -24,23 +24,11 @@ output "central_s3_writer_role_arn" {
 output "central_logging_bucket_name_af-south-1" {
   value = module.regional-resource-af-south-1.central_logging_bucket_name
 }
-output "central_logging_bucket_name_ap-east-1" {
-  value = module.regional-resource-ap-east-1.central_logging_bucket_name
-}
-output "central_logging_bucket_name_ap-northeast-1" {
-  value = module.regional-resource-ap-northeast-1.central_logging_bucket_name
-}
 output "central_logging_bucket_name_ap-northeast-2" {
   value = module.regional-resource-ap-northeast-2.central_logging_bucket_name
 }
 output "central_logging_bucket_name_ap-northeast-3" {
   value = module.regional-resource-ap-northeast-3.central_logging_bucket_name
-}
-output "central_logging_bucket_name_ap-south-1" {
-  value = module.regional-resource-ap-south-1.central_logging_bucket_name
-}
-output "central_logging_bucket_name_ap-south-2" {
-  value = module.regional-resource-ap-south-2.central_logging_bucket_name
 }
 output "central_logging_bucket_name_ap-southeast-1" {
   value = module.regional-resource-ap-southeast-1.central_logging_bucket_name
@@ -117,23 +105,11 @@ output "central_logging_bucket_name_us-west-2" {
 output "api_endpoint_af-south-1" {
   value = module.regional-resource-af-south-1.api_endpoint
 }
-output "api_endpoint_ap-east-1" {
-  value = module.regional-resource-ap-east-1.api_endpoint
-}
-output "api_endpoint_ap-northeast-1" {
-  value = module.regional-resource-ap-northeast-1.api_endpoint
-}
 output "api_endpoint_ap-northeast-2" {
   value = module.regional-resource-ap-northeast-2.api_endpoint
 }
 output "api_endpoint_ap-northeast-3" {
   value = module.regional-resource-ap-northeast-3.api_endpoint
-}
-output "api_endpoint_ap-south-1" {
-  value = module.regional-resource-ap-south-1.api_endpoint
-}
-output "api_endpoint_ap-south-2" {
-  value = module.regional-resource-ap-south-2.api_endpoint
 }
 output "api_endpoint_ap-southeast-1" {
   value = module.regional-resource-ap-southeast-1.api_endpoint

@@ -37,6 +37,35 @@ globals "aws" {
     "us-east-2",
     "us-west-2"
   ]
+  deploy_regions = [
+    "af-south-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ap-southeast-3",
+    "ap-southeast-4",
+    "ap-southeast-5",
+    "ap-southeast-6",
+    "ap-southeast-7",
+    "ca-central-1",
+    "ca-west-1",
+    "eu-central-1",
+    "eu-central-2",
+    "eu-north-1",
+    "eu-south-1",
+    "eu-south-2",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "il-central-1",
+    "me-central-1",
+    "mx-central-1",
+    "sa-east-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-2"
+  ]
   # In case of resources detection, terraform still need to have the provider.
   delete_regions = []
   default_tags = {
@@ -70,7 +99,7 @@ generate_hcl "main.tf" {
     }
 
     tm_dynamic "module" {
-      for_each = global.aws.regions
+      for_each = global.aws.deploy_regions
       iterator = region
       labels   = ["regional-resource-${region.value}"]
       attributes = {
@@ -175,7 +204,7 @@ generate_hcl "outputs.tf" {
     }
 
     tm_dynamic "output" {
-      for_each = global.aws.regions
+      for_each = global.aws.deploy_regions
       iterator = region
       labels   = ["central_logging_bucket_name_${region.value}"]
       attributes = {
@@ -184,7 +213,7 @@ generate_hcl "outputs.tf" {
     }
 
     tm_dynamic "output" {
-      for_each = global.aws.regions
+      for_each = global.aws.deploy_regions
       iterator = region
       labels   = ["api_endpoint_${region.value}"]
       attributes = {
