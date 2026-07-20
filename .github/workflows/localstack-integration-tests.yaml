@@ -10,6 +10,10 @@ jobs:
   localstack-integration:
     runs-on: ubuntu-latest
     name: LocalStack Integration Tests
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
     - name: Checkout repository
@@ -53,13 +57,13 @@ jobs:
         # Create logging namespace for Vector
         kubectl create namespace logging
 
-    - name: Start LocalStack
+    - name: Start LocalStack Pro
       env:
         DOCKER_SOCK: /var/run/docker.sock
         LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
       run: |
         make start
-        echo "✅ LocalStack started"
+        echo "✅ LocalStack Pro started"
 
     - name: Deploy infrastructure to LocalStack with API
       run: |
@@ -112,24 +116,24 @@ jobs:
 
         # Create a temporary patch to add hostAliases and update S3 bucket name
         cat > /tmp/vector-patch.yaml <<EOF
-        apiVersion: apps/v1
-        kind: DaemonSet
-        metadata:
-          name: vector-logs
-          namespace: logging
-        spec:
-          template:
-            spec:
-              hostAliases:
-              - ip: "$HOST_IP"
-                hostnames:
-                - "host.docker.internal"
-              containers:
-              - name: vector
-                env:
-                - name: S3_BUCKET_NAME
-                  value: "$CENTRAL_BUCKET"
-        EOF
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-logs
+  namespace: logging
+spec:
+  template:
+    spec:
+      hostAliases:
+      - ip: "$HOST_IP"
+        hostnames:
+        - "host.docker.internal"
+      containers:
+      - name: vector
+        env:
+        - name: S3_BUCKET_NAME
+          value: "$CENTRAL_BUCKET"
+EOF
 
         # Apply the LocalStack overlay
         kubectl apply -k k8s/collector/overlays/localstack
@@ -177,8 +181,8 @@ jobs:
 
     - name: Show test summary
       run: |
-        echo "=== LocalStack Integration Test Summary ==="
-        echo "✅ LocalStack deployment: OK"
+        echo "=== LocalStack Pro Integration Test Summary ==="
+        echo "✅ LocalStack Pro deployment: OK"
         echo "✅ Terraform infrastructure: OK"
         echo "✅ Lambda container: OK"
         echo "✅ Minikube cluster: OK"
