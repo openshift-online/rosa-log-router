@@ -120,7 +120,7 @@ resource "aws_api_gateway_authorizer" "api_authorizer" {
   type                             = "REQUEST"
   authorizer_uri                   = "arn:aws:apigateway:${data.aws_region.current.id}:lambda:path/2015-03-31/functions/${aws_lambda_alias.authorizer_function_live.arn}/invocations"
   authorizer_credentials           = var.api_gateway_authorizer_role_arn
-  authorizer_result_ttl_in_seconds = 300
+  authorizer_result_ttl_in_seconds = 0
   identity_source                  = "method.request.header.Authorization,method.request.header.X-API-Timestamp"
 }
 
