@@ -100,19 +100,22 @@ If you are evaluating security controls, note that the absence of per-tenant aut
 
 ### HMAC-SHA256 Request Signing
 
-All API endpoints (except `/health`) require HMAC-SHA256 signature authentication:
+All API endpoints (except `/health`) require three authentication headers:
 
 ```
 Authorization: HMAC-SHA256 <signature>
 X-API-Timestamp: <ISO-8601-timestamp>
+X-Body-SHA256: <hex-sha256-of-request-body-bytes>
 ```
 
 ### Signature Generation
 
-1. **Create message**: `HTTP_METHOD + URI + TIMESTAMP`
-2. **Generate signature**: `HMAC-SHA256(PSK, message)`
+1. **Compute body hash**: `BODY_HASH = hex(SHA-256(request_body_bytes))` — use empty-string bytes for bodyless requests (GET, DELETE)
+2. **Create message**: `UPPER(HTTP_METHOD) + URI + TIMESTAMP + BODY_HASH`
+3. **Generate signature**: `HMAC-SHA256(PSK, message)`
+4. **Send all three headers**: `Authorization`, `X-API-Timestamp`, `X-Body-SHA256`
 
-**Note**: The signature does not include the request body hash due to API Gateway authorizer limitations. The body is validated by the API service after successful authentication.
+The body hash is computed over the **raw request bytes** and sent as `X-Body-SHA256`. This lets the Lambda authorizer verify body integrity from headers, since REST API REQUEST authorizers do not receive the request body directly.
 
 ### Example (Python)
 
@@ -121,19 +124,26 @@ import hmac
 import hashlib
 from datetime import datetime, timezone
 
-def sign_request(psk, method, uri):
+def sign_request(psk, method, uri, body=b""):
     timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-    message = f"{method.upper()}{uri}{timestamp}"
+    body_hash = hashlib.sha256(body).hexdigest()
+    message = f"{method.upper()}{uri}{timestamp}{body_hash}"
     signature = hmac.new(psk.encode(), message.encode(), hashlib.sha256).hexdigest()
-    
+
     return {
         'Authorization': f'HMAC-SHA256 {signature}',
         'X-API-Timestamp': timestamp,
-        'Content-Type': 'application/json'
+        'X-Body-SHA256': body_hash,
+        'Content-Type': 'application/json',
     }
 
-# Usage
+# GET (no body)
 headers = sign_request('your-psk', 'GET', '/api/v1/tenants/acme-corp/delivery-configs')
+
+# POST with body
+import json
+body = json.dumps({"tenant_id": "acme-corp", "type": "cloudwatch"}).encode()
+headers = sign_request('your-psk', 'POST', '/api/v1/tenants/acme-corp/delivery-configs', body)
 ```
 
 ### Example (curl)
@@ -143,13 +153,16 @@ headers = sign_request('your-psk', 'GET', '/api/v1/tenants/acme-corp/delivery-co
 PSK="your-pre-shared-key"
 METHOD="GET"
 URI="/api/v1/tenants/acme-corp/delivery-configs"
+BODY=""
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-MESSAGE="${METHOD}${URI}${TIMESTAMP}"
+BODY_HASH=$(printf '%s' "$BODY" | openssl dgst -sha256 | cut -d' ' -f2)
+MESSAGE="${METHOD}${URI}${TIMESTAMP}${BODY_HASH}"
 SIGNATURE=$(echo -n "$MESSAGE" | openssl dgst -sha256 -hmac "$PSK" | cut -d' ' -f2)
 
 curl -X "$METHOD" "https://api.example.com${URI}" \
   -H "Authorization: HMAC-SHA256 $SIGNATURE" \
   -H "X-API-Timestamp: $TIMESTAMP" \
+  -H "X-Body-SHA256: $BODY_HASH" \
   -H "Content-Type: application/json"
 ```
 
@@ -167,6 +180,7 @@ import (
     "fmt"
     "io"
     "net/http"
+    "strings"
     "time"
 )
 
@@ -244,22 +258,28 @@ func NewTenantClient(baseURL, psk string) *TenantClient {
     }
 }
 
-// generateSignature creates HMAC-SHA256 signature for request authentication
-func (c *TenantClient) generateSignature(method, uri, timestamp string) string {
-    message := method + uri + timestamp
+// generateSignature creates HMAC-SHA256 signature: UPPER(METHOD)+URI+TIMESTAMP+BODY_HASH
+func (c *TenantClient) generateSignature(method, uri, timestamp string, bodyBytes []byte) string {
+    bodyHash := sha256.Sum256(bodyBytes)
+    bodyHashHex := hex.EncodeToString(bodyHash[:])
+    message := strings.ToUpper(method) + uri + timestamp + bodyHashHex
     h := hmac.New(sha256.New, []byte(c.PSK))
     h.Write([]byte(message))
-    signature := hex.EncodeToString(h.Sum(nil))
-    return signature
+    return hex.EncodeToString(h.Sum(nil))
 }
 
-// signRequest adds authentication headers to the request
-func (c *TenantClient) signRequest(req *http.Request, body string) {
-    timestamp := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-    signature := c.generateSignature(req.Method, req.URL.RequestURI(), timestamp)
-    
+// signRequest adds authentication headers to the request.
+// Sends X-Body-SHA256 (SHA-256 of raw body bytes) as a signed header so the
+// Lambda authorizer can verify body integrity without receiving the body directly.
+func (c *TenantClient) signRequest(req *http.Request, bodyBytes []byte) {
+    timestamp := time.Now().UTC().Format(time.RFC3339)
+    bodyHash := sha256.Sum256(bodyBytes)
+    bodyHashHex := hex.EncodeToString(bodyHash[:])
+    signature := c.generateSignature(req.Method, req.URL.RequestURI(), timestamp, bodyBytes)
+
     req.Header.Set("Authorization", "HMAC-SHA256 "+signature)
     req.Header.Set("X-API-Timestamp", timestamp)
+    req.Header.Set("X-Body-SHA256", bodyHashHex)
     req.Header.Set("Content-Type", "application/json")
 }
 

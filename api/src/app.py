@@ -2,6 +2,7 @@
 Main API handler for the tenant management service
 """
 
+import hashlib
 import os
 from typing import Dict, Any
 
@@ -13,7 +14,6 @@ from pydantic import ValidationError
 # Import our utilities
 from src.models.responses import success_response, error_response, not_found_response, validation_error_response
 from src.utils.logger import setup_logging
-from src.utils.auth import compute_body_hash
 from src.services.dynamo import TenantDeliveryConfigService, TenantNotFoundError, DynamoDBError
 from src.models.tenant import (
     TenantDeliveryConfigCreateRequest, TenantDeliveryConfigUpdateRequest, TenantDeliveryConfigPatchRequest,
@@ -40,23 +40,29 @@ app = FastAPI(
 @app.middleware("http")
 async def verify_body_hash(request: Request, call_next):
     """
-    Verify SHA-256(body) matches X-Body-SHA256 on every request that carries a body.
+    Verify SHA-256(raw body bytes) matches X-Body-SHA256 on every mutating request.
 
     The Lambda authorizer validates the HMAC signature covers X-Body-SHA256 but
     cannot see the raw body (REST API Gateway REQUEST authorizers don't receive it).
-    This middleware closes the gap: any in-transit body substitution is caught here
-    because SHA-256(actual_body) will not match the signed header value.
+    This middleware closes the gap: any in-transit body substitution is caught here.
+
+    X-Body-SHA256 is required on POST/PUT/PATCH — missing header returns 400.
+    Hash is computed over the raw bytes (not decoded text) to match clients exactly.
     """
     if request.method in ("POST", "PUT", "PATCH"):
         body_hash_header = request.headers.get("x-body-sha256")
-        if body_hash_header:
-            raw = await request.body()
-            actual = compute_body_hash(raw.decode("utf-8", errors="replace"))
-            if actual != body_hash_header:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "Body hash mismatch: request body does not match X-Body-SHA256"}
-                )
+        if not body_hash_header:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Missing required header: X-Body-SHA256"}
+            )
+        raw = await request.body()
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != body_hash_header:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Body hash mismatch: request body does not match X-Body-SHA256"}
+            )
     return await call_next(request)
 
 # Environment variables
