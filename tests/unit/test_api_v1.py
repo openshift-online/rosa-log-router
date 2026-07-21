@@ -108,8 +108,12 @@ class TestAPIEndpoints:
         
         mock_delivery_config_service.create_tenant_config.return_value = config_data
         
-        response = client.post("/api/v1/tenants/new-tenant/delivery-configs", json=config_data)
-        
+        import hashlib, json as _json
+        raw = _json.dumps(config_data).encode()
+        response = client.post("/api/v1/tenants/new-tenant/delivery-configs", content=raw,
+                               headers={"Content-Type": "application/json",
+                                        "X-Body-SHA256": hashlib.sha256(raw).hexdigest()})
+
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "success"
@@ -134,8 +138,12 @@ class TestAPIEndpoints:
         
         mock_delivery_config_service.update_tenant_config.return_value = updated_config
         
-        response = client.put("/api/v1/tenants/test-tenant/delivery-configs/cloudwatch", json=update_data)
-        
+        import hashlib, json as _json
+        raw = _json.dumps(update_data).encode()
+        response = client.put("/api/v1/tenants/test-tenant/delivery-configs/cloudwatch", content=raw,
+                              headers={"Content-Type": "application/json",
+                                       "X-Body-SHA256": hashlib.sha256(raw).hexdigest()})
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -162,8 +170,12 @@ class TestAPIEndpoints:
             "log_distribution_role_arn": "invalid-arn"
         }
         
-        response = client.post("/api/v1/tenants/test-tenant/delivery-configs", json=invalid_data)
-        
+        import hashlib, json as _json
+        raw = _json.dumps(invalid_data).encode()
+        response = client.post("/api/v1/tenants/test-tenant/delivery-configs", content=raw,
+                               headers={"Content-Type": "application/json",
+                                        "X-Body-SHA256": hashlib.sha256(raw).hexdigest()})
+
         assert response.status_code == 422
         data = response.json()
         assert "detail" in data
