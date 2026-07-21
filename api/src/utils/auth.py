@@ -192,12 +192,6 @@ def authenticate_request(
     """
     Complete request authentication workflow.
 
-    The body_hash is taken from the X-Body-SHA256 header rather than computed
-    from `body` directly. REST API Gateway REQUEST authorizers do not receive
-    the raw request body, so the client must pre-compute SHA-256(body) and send
-    it as X-Body-SHA256. Signing over this header value achieves body integrity
-    verification without requiring the body in the authorizer event.
-
     Args:
         headers: Request headers
         method: HTTP method
