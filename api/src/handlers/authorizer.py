@@ -86,10 +86,6 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Use the actual HTTP method from request context if available
         final_method = actual_method if actual_method != 'ANY' else method
 
-        # Check for auth headers (API Gateway lowercases headers)
-        auth_header = headers.get('Authorization', '') or headers.get('authorization', '')
-        timestamp_header = headers.get('X-API-Timestamp', '') or headers.get('x-api-timestamp', '')
-
         # API Gateway may provide query string parameters separately
         query_string_parameters = event.get('queryStringParameters') or {}
 
@@ -124,8 +120,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 logger.warning("Request authentication failed")
                 return generate_policy('unauthenticated', 'Deny', event['methodArn'])
 
-        except Exception as auth_error:
-            logger.error(f"Auth system error: {str(auth_error)}")
+        except Exception:
+            logger.exception("Auth system error")
             return generate_policy('auth-error', 'Deny', event['methodArn'])
             
     except Exception as e:
