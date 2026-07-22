@@ -67,8 +67,6 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         IAM policy response allowing or denying the request
     """
     try:
-        print(f"AUTHORIZER: Starting authorization for {event.get('methodArn', 'unknown')}")
-        
         # Extract request details from event
         method = event.get('httpMethod', '')
         path = event.get('path', '')
@@ -76,46 +74,31 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         body = event.get('body', '') or ''
 
         # Strip stage from path if present (LocalStack includes it, but AWS doesn't)
-        # Path format from LocalStack: /int/api/v1/... -> /api/v1/...
         request_context = event.get('requestContext', {})
         stage = request_context.get('stage', '')
         if stage and path.startswith(f'/{stage}/'):
-            path = path[len(stage) + 1:]  # Remove /{stage} prefix
-            print(f"AUTHORIZER: Stripped stage '{stage}' from path, new path={path}")
-        
+            path = path[len(stage) + 1:]
+
         # For proxy integrations, the actual HTTP method may be in the requestContext
         request_context = event.get('requestContext', {})
         actual_method = request_context.get('httpMethod', method)
-        
-        print(f"AUTHORIZER: Event method={method}, RequestContext method={actual_method}")
-        print(f"AUTHORIZER: Path={path}")
-        print(f"AUTHORIZER: Full event keys: {list(event.keys())}")
-        
+
         # Use the actual HTTP method from request context if available
         final_method = actual_method if actual_method != 'ANY' else method
-        
+
         # Check for auth headers (API Gateway lowercases headers)
         auth_header = headers.get('Authorization', '') or headers.get('authorization', '')
         timestamp_header = headers.get('X-API-Timestamp', '') or headers.get('x-api-timestamp', '')
-        
-        print(f"AUTHORIZER: Final method={final_method}")
-        print(f"AUTHORIZER: Auth header={auth_header}")
-        print(f"AUTHORIZER: Timestamp header={timestamp_header}")
-        
+
         # API Gateway may provide query string parameters separately
         query_string_parameters = event.get('queryStringParameters') or {}
-        
+
         # Construct full URI with query parameters
         uri = path
         if query_string_parameters:
             query_string = '&'.join([f"{k}={v}" for k, v in query_string_parameters.items()])
             uri = f"{path}?{query_string}"
-        
-        print(f"AUTHORIZER: Final URI={uri}")
-        print(f"AUTHORIZER: Body received: '{body}'")
-        print(f"AUTHORIZER: Body length: {len(body)}")
-        
-        # Now restore authentication with correct method
+
         try:
             is_authenticated = authenticate_request(
                 headers=headers,
@@ -125,12 +108,12 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 psk_secret_name=PSK_SECRET_NAME,
                 region=AWS_REGION
             )
-            
+
             if is_authenticated:
-                print("AUTHORIZER: Authentication successful")
+                logger.info("Request authenticated")
                 return generate_policy(
-                    'authenticated-user', 
-                    'Allow', 
+                    'authenticated-user',
+                    'Allow',
                     event['methodArn'],
                     context={
                         'authenticated': 'true',
@@ -138,11 +121,11 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                     }
                 )
             else:
-                print("AUTHORIZER: Authentication failed")
+                logger.warning("Request authentication failed")
                 return generate_policy('unauthenticated', 'Deny', event['methodArn'])
-                
+
         except Exception as auth_error:
-            print(f"AUTHORIZER: Auth system error: {str(auth_error)}")
+            logger.error(f"Auth system error: {str(auth_error)}")
             return generate_policy('auth-error', 'Deny', event['methodArn'])
             
     except Exception as e:

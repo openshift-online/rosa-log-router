@@ -723,7 +723,7 @@ resource "aws_api_gateway_method_settings" "all" {
   settings {
     metrics_enabled    = true
     logging_level      = "INFO"
-    data_trace_enabled = true
+    data_trace_enabled = false
   }
 
   depends_on = [aws_cloudwatch_log_group.api_gateway_log_welcome]
