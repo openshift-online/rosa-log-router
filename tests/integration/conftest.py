@@ -2,6 +2,8 @@
 Integration test configuration and fixtures for DynamoDB Local testing
 """
 
+import hashlib
+import json
 import pytest
 import boto3
 import os
@@ -181,31 +183,41 @@ def api_client():
             # Set default timeout for all requests
             self.session.timeout = 30
         
+        def _signed_headers(self, raw: bytes) -> Dict[str, str]:
+            """Return Content-Type + X-Body-SHA256 headers for a raw body."""
+            return {
+                "Content-Type": "application/json",
+                "X-Body-SHA256": hashlib.sha256(raw).hexdigest(),
+            }
+
         def create_delivery_config(self, tenant_id: str, config_data: Dict[str, Any]) -> Dict[str, Any]:
             """Create a delivery configuration via API"""
             url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs"
-            response = self.session.post(url, json=config_data)
+            raw = json.dumps(config_data).encode()
+            response = self.session.post(url, data=raw, headers=self._signed_headers(raw))
             response.raise_for_status()
             return response.json()
-        
+
         def get_delivery_config(self, tenant_id: str, delivery_type: str) -> Dict[str, Any]:
             """Get a delivery configuration via API"""
             url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
             response = self.session.get(url)
             response.raise_for_status()
             return response.json()
-        
+
         def update_delivery_config(self, tenant_id: str, delivery_type: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
             """Update a delivery configuration via API"""
             url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
-            response = self.session.put(url, json=update_data)
+            raw = json.dumps(update_data).encode()
+            response = self.session.put(url, data=raw, headers=self._signed_headers(raw))
             response.raise_for_status()
             return response.json()
-        
+
         def patch_delivery_config(self, tenant_id: str, delivery_type: str, patch_data: Dict[str, Any]) -> Dict[str, Any]:
             """Patch a delivery configuration via API"""
             url = f"{self.base_url}/api/v1/tenants/{tenant_id}/delivery-configs/{delivery_type}"
-            response = self.session.patch(url, json=patch_data)
+            raw = json.dumps(patch_data).encode()
+            response = self.session.patch(url, data=raw, headers=self._signed_headers(raw))
             response.raise_for_status()
             return response.json()
         
