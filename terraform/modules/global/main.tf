@@ -90,6 +90,11 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "arn:aws:s3:::*",
           "arn:aws:s3:::*/*"
         ]
+        Condition = {
+          StringNotEquals = {
+            "s3:ResourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       },
       {
         Effect = "Allow"
@@ -99,6 +104,11 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "kms:GenerateDataKey"
         ]
         Resource = "*"
+        Condition = {
+          StringLike = {
+            "kms:ViaService" = "s3.*.amazonaws.com"
+          }
+        }
       }
     ]
   })

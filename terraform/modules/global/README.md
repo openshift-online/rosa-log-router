@@ -9,7 +9,7 @@ This Terraform module creates global IAM resources for the multi-tenant logging 
 - **AWS IAM Role Policy**: Cross-account assume role policy with permissions for:
   - STS assume role with external ID validation
   - S3 source bucket read access (hcp-log-* buckets)
-  - S3 target bucket write access (all buckets for cross-region delivery)
+  - S3 target bucket write access (customer-owned buckets in external accounts only; same-account writes are denied)
   - KMS encryption/decryption permissions
 
 ### Central S3 Writer Role
@@ -65,8 +65,8 @@ module "global_iam" {
 #### Inline Policy Permissions
 - **Cross-account role assumption**: `sts:AssumeRole` on `arn:aws:iam::*:role/CustomerLogDistribution-*` and `arn:aws:iam::*:role/*/CustomerLogDistribution-*` with external ID validation (supports IAM path prefixes)
 - **Source S3 access**: `s3:GetObject`, `s3:GetBucketLocation`, `s3:ListBucket` on `hcp-log-*` buckets
-- **Target S3 access**: `s3:PutObject` on all S3 buckets for cross-region delivery
-- **KMS operations**: `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKey` on all KMS keys
+- **Target S3 access**: `s3:PutObject` on all S3 buckets in external (customer) accounts only — `s3:ResourceAccount` condition denies writes to any bucket in the central account. Customer bucket names are user-defined and cannot be restricted by name pattern.
+- **KMS operations**: `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKey` on all KMS keys with `kms:ViaService = "s3.*.amazonaws.com"` condition
 
 #### Trust Policy
 The role can be assumed by:
