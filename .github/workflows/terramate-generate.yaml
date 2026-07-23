@@ -74,7 +74,7 @@ jobs:
 
       - name: Comment diff on PR
         if: ${{ github.event_name == 'pull_request' && steps.verify-changed-files.outputs.changed == 'true' }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const diffContent = process.env.DIFF_CONTENT;
