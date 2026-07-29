@@ -26,6 +26,7 @@ locals {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 resource "aws_iam_role" "central_log_distribution_role" {
   name = "ROSA-CentralLogDistributionRole-${local.random_suffix}"
@@ -36,7 +37,7 @@ resource "aws_iam_role" "central_log_distribution_role" {
       {
         Effect = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
         }
         Action = "sts:AssumeRole"
       }
@@ -60,8 +61,8 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "sts:AssumeRole"
         ]
         Resource = [
-          "arn:aws:iam::*:role/CustomerLogDistribution-*",
-          "arn:aws:iam::*:role/*/CustomerLogDistribution-*"
+          "arn:${data.aws_partition.current.partition}:iam::*:role/CustomerLogDistribution-*",
+          "arn:${data.aws_partition.current.partition}:iam::*:role/*/CustomerLogDistribution-*"
         ]
         Condition = {
           StringEquals = {
@@ -77,8 +78,8 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
-          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
+          "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
+          "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
         ]
       },
       {
@@ -87,8 +88,8 @@ resource "aws_iam_role_policy" "cross_account_assume_role_policy" {
           "s3:PutObject"
         ]
         Resource = [
-          "arn:aws:s3:::*",
-          "arn:aws:s3:::*/*"
+          "arn:${data.aws_partition.current.partition}:s3:::*",
+          "arn:${data.aws_partition.current.partition}:s3:::*/*"
         ]
         Condition = {
           StringNotEquals = {
@@ -130,7 +131,7 @@ resource "aws_iam_role" "central_s3_writer_role" {
             "aws:PrincipalOrgID" : "${var.org_id}"
           }
           ArnLike = {
-            "aws:PrincipalArn" : "arn:aws:iam::*:role/hypershift-control-plane-log-forwarder"
+            "aws:PrincipalArn" : "arn:${data.aws_partition.current.partition}:iam::*:role/hypershift-control-plane-log-forwarder"
           }
         }
         Action = "sts:AssumeRole"
@@ -154,7 +155,7 @@ resource "aws_iam_role_policy" "central_s3_writer_policy" {
           "s3:PutObject",
           "s3:PutObjectAcl"
         ]
-        Resource = "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
       },
       {
         Effect = "Allow"
@@ -162,7 +163,7 @@ resource "aws_iam_role_policy" "central_s3_writer_policy" {
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
-        Resource = "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*"
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*"
       },
       {
         Effect = "Allow"
@@ -203,12 +204,12 @@ resource "aws_iam_role" "lambda_execution_role" {
 
 resource "aws_iam_role_policy_attachment" "lambda_execution_basic" {
   role       = aws_iam_role.lambda_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_execution_sqs" {
   role       = aws_iam_role.lambda_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
 }
 
 resource "aws_iam_role_policy" "lambda_log_processor_policy" {
@@ -226,7 +227,7 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
           "dynamodb:Query",
           "dynamodb:BatchGetItem"
         ]
-        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-tenant-configs"
+        Resource = "arn:${data.aws_partition.current.partition}:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-tenant-configs"
       },
       # S3 access for reading log files (all project buckets)
       {
@@ -237,8 +238,8 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
-          "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
+          "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*",
+          "arn:${data.aws_partition.current.partition}:s3:::${data.aws_caller_identity.current.account_id}-${var.project_name}-${var.environment}-*/*"
         ]
       },
       # Assume the central log distribution role
@@ -261,7 +262,7 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
         Action = [
           "sqs:sendmessage"
         ]
-        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-queue"
+        Resource = "arn:${data.aws_partition.current.partition}:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-queue"
       },
       {
         Effect = "Allow"
@@ -294,7 +295,7 @@ resource "aws_iam_role" "authorizer_execution_role" {
 
 resource "aws_iam_role_policy_attachment" "authorizer_execution_basic" {
   role       = aws_iam_role.authorizer_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 # IAM Policy for Secrets Manager Access
@@ -310,7 +311,7 @@ resource "aws_iam_role_policy" "authorizer_sm_access" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project_name}-${var.environment}-psk*"
+        Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project_name}-${var.environment}-psk*"
       }
     ]
   })
@@ -356,7 +357,7 @@ resource "aws_iam_role" "api_execution_role" {
 
 resource "aws_iam_role_policy_attachment" "api_execution_basic" {
   role       = aws_iam_role.api_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy" "api_dynamodb_access" {
@@ -377,7 +378,7 @@ resource "aws_iam_role_policy" "api_dynamodb_access" {
           "dynamodb:Query",
           "dynamodb:Scan"
         ]
-        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-tenant-configs"
+        Resource = "arn:${data.aws_partition.current.partition}:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-tenant-configs"
       },
       {
         Effect = "Allow"
@@ -420,7 +421,7 @@ resource "aws_iam_role_policy" "invoke_authorizer_function" {
       {
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${var.environment}-api-authorizer:live"
+        Resource = "arn:${data.aws_partition.current.partition}:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${var.environment}-api-authorizer:live"
       }
     ]
   })
@@ -448,5 +449,5 @@ resource "aws_iam_role" "api_gateway_cloudwatch_role" {
 # Attach CloudWatch logging policy to API Gateway role
 resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
   role       = aws_iam_role.api_gateway_cloudwatch_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
 }
