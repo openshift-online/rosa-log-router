@@ -40,7 +40,7 @@ variable "central_log_distribution_role_arn" {
   description = "ARN of the central log distribution role from global stack"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$", var.central_log_distribution_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/ROSA-CentralLogDistributionRole-[a-f0-9]{8}$", var.central_log_distribution_role_arn))
     error_message = "Must be a valid IAM role ARN matching the expected pattern."
   }
 }
@@ -54,7 +54,7 @@ variable "lambda_execution_role_arn" {
   description = "ARN of the global Lambda execution role"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*lambda-execution-role$", var.lambda_execution_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/.*lambda-execution-role$", var.lambda_execution_role_arn))
     error_message = "Must be a valid IAM role ARN for Lambda execution."
   }
 }
@@ -68,7 +68,7 @@ variable "authorizer_execution_role_arn" {
   description = "ARN of the global Lambda authorizer execution role"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*api-authorizer-role$", var.authorizer_execution_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/.*api-authorizer-role$", var.authorizer_execution_role_arn))
     error_message = "Must be a valid IAM role ARN for Lambda execution."
   }
 }
@@ -82,7 +82,7 @@ variable "api_execution_role_arn" {
   description = "ARN of the global Lambda api execution role"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*api-service-role", var.api_execution_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/.*api-service-role", var.api_execution_role_arn))
     error_message = "Must be a valid IAM role ARN for Lambda execution."
   }
 }
@@ -96,7 +96,7 @@ variable "api_gateway_authorizer_role_arn" {
   description = "ARN of the global API Gateway authorizer execution role"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*api-gateway-authorizer-role", var.api_gateway_authorizer_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/.*api-gateway-authorizer-role", var.api_gateway_authorizer_role_arn))
     error_message = "Must be a valid IAM role ARN for API Gateway."
   }
 }
@@ -105,7 +105,7 @@ variable "api_gateway_cloudwatch_role_arn" {
   description = "ARN of the global API Gateway cloudwatch execution role"
   type        = string
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.*api-gateway-cloudwatch-role", var.api_gateway_cloudwatch_role_arn))
+    condition     = can(regex("^arn:aws(-us-gov)?:iam::[0-9]{12}:role/.*api-gateway-cloudwatch-role", var.api_gateway_cloudwatch_role_arn))
     error_message = "Must be a valid IAM role ARN for API Gateway."
   }
 }
