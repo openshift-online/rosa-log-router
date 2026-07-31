@@ -168,6 +168,12 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 			}
 		}
 
+		// CloudWatch PutLogEvents requires message length >= 1; empty strings
+		// cause the entire batch to be rejected (ROSAENG-63153).
+		if messageStr == "" {
+			messageStr = " "
+		}
+
 		processedEvents = append(processedEvents, types.InputLogEvent{
 			Timestamp: aws.Int64(processedTimestamp),
 			Message:   aws.String(messageStr),
