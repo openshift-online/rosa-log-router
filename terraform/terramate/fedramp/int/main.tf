@@ -16,10 +16,10 @@ module "global" {
     "us-gov-west-1",
     "us-gov-east-1",
   ]
-  source = "../../modules/global"
+  source = "../../../modules/global"
 }
 module "regional-resource-us-gov-west-1" {
-  source = "../../modules/regional"
+  source = "../../../modules/regional"
   providers = {
     aws = aws.us-gov-west-1
   }
@@ -41,7 +41,7 @@ module "regional-resource-us-gov-west-1" {
   route53_zone_id                   = var.route53_zone_id
 }
 module "regional-resource-us-gov-east-1" {
-  source = "../../modules/regional"
+  source = "../../../modules/regional"
   providers = {
     aws = aws.us-gov-east-1
   }

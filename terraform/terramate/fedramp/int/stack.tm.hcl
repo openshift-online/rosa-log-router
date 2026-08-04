@@ -30,7 +30,7 @@ generate_hcl "main.tf" {
     }
 
     module "global" {
-      source = "../../modules/global"
+      source = "../../../modules/global"
 
       project_name       = var.project_name
       environment        = var.environment
@@ -45,7 +45,7 @@ generate_hcl "main.tf" {
       iterator = region
       labels   = ["regional-resource-${region.value}"]
       attributes = {
-        source = "../../modules/regional"
+        source = "../../../modules/regional"
 
         providers = {
           aws = tm_hcl_expression("aws.${region.value}")
