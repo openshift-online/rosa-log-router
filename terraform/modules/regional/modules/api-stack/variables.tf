@@ -72,6 +72,12 @@ variable "route53_zone_id" {
   type        = string
 }
 
+variable "base_domain" {
+  description = "Base DNS domain for the API custom domain"
+  type        = string
+  default     = "devshift.net"
+}
+
 variable "enable_custom_domain" {
   description = "Enable custom domain with Route53 and ACM (disable for LocalStack)"
   type        = bool
