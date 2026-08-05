@@ -17,7 +17,7 @@ data "aws_partition" "current" {}
 
 # Local values
 locals {
-  domain_name = "${data.aws_region.current.id}.${var.project_name}.${var.environment}.devshift.net"
+  domain_name = "${data.aws_region.current.id}.${var.project_name}.${var.environment}.${var.base_domain}"
   common_tags = {
     Project     = var.project_name
     Environment = var.environment
