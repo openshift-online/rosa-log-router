@@ -95,7 +95,6 @@ generate_hcl "main.tf" {
         api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
         api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
         route53_zone_id                   = var.route53_zone_id
-        base_domain                       = var.base_domain
       }
     }
   }

@@ -72,9 +72,3 @@ variable "route53_zone_id" {
   description = "Zone id of the customer domain"
   type        = string
 }
-
-variable "base_domain" {
-  description = "Base DNS domain for the API custom domain"
-  type        = string
-  default     = "devshift.net"
-}

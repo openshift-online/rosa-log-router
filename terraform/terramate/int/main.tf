@@ -42,7 +42,6 @@ module "regional-resource-ap-northeast-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  base_domain                       = var.base_domain
 }
 module "regional-resource-ap-southeast-1" {
   source = "../../modules/regional"
@@ -65,7 +64,6 @@ module "regional-resource-ap-southeast-1" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  base_domain                       = var.base_domain
 }
 module "regional-resource-us-east-1" {
   source = "../../modules/regional"
@@ -88,7 +86,6 @@ module "regional-resource-us-east-1" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  base_domain                       = var.base_domain
 }
 module "regional-resource-us-east-2" {
   source = "../../modules/regional"
@@ -111,7 +108,6 @@ module "regional-resource-us-east-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  base_domain                       = var.base_domain
 }
 module "regional-resource-us-west-2" {
   source = "../../modules/regional"
@@ -134,5 +130,4 @@ module "regional-resource-us-west-2" {
   api_gateway_authorizer_role_arn   = module.global.api_gateway_authorizer_role_arn
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
-  base_domain                       = var.base_domain
 }
