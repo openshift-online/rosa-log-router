@@ -335,18 +335,6 @@ provider "aws" {
   }
 }
 provider "aws" {
-  alias  = "me-central-1"
-  region = "me-central-1"
-  default_tags {
-    tags = {
-      app-code               = "OSD-002"
-      cost-center            = "148"
-      managed_by_integration = "terraform-repo"
-      service-phase          = "prod"
-    }
-  }
-}
-provider "aws" {
   alias  = "mx-central-1"
   region = "mx-central-1"
   default_tags {

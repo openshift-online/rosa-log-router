@@ -96,9 +96,6 @@ output "central_logging_bucket_name_eu-west-3" {
 output "central_logging_bucket_name_il-central-1" {
   value = module.regional-resource-il-central-1.central_logging_bucket_name
 }
-output "central_logging_bucket_name_me-central-1" {
-  value = module.regional-resource-me-central-1.central_logging_bucket_name
-}
 output "central_logging_bucket_name_mx-central-1" {
   value = module.regional-resource-mx-central-1.central_logging_bucket_name
 }
@@ -188,9 +185,6 @@ output "api_endpoint_eu-west-3" {
 }
 output "api_endpoint_il-central-1" {
   value = module.regional-resource-il-central-1.api_endpoint
-}
-output "api_endpoint_me-central-1" {
-  value = module.regional-resource-me-central-1.api_endpoint
 }
 output "api_endpoint_mx-central-1" {
   value = module.regional-resource-mx-central-1.api_endpoint
