@@ -144,18 +144,15 @@ rules:
 ```
 
 **Log Processor Permissions**:
-```yaml
-# From k8s/processor/base/role.yaml
-rules:
-- apiGroups: [""]
-  resources: ["pods", "configmaps", "events"]
-  verbs: ["get", "list", "watch", "create", "patch"]
-```
+The log processor does not interact with the Kubernetes API. It reads configuration
+from environment variables and communicates exclusively with AWS services (S3, SQS,
+DynamoDB, CloudWatch). No RBAC permissions are required.
 
 **Risk Mitigation**:
 - **Least privilege principle**: Each component has minimal required permissions
 - **Read-only log access**: Vector can only read pod logs, not modify them
 - **No cluster admin**: No component has cluster-wide administrative access
+- **No k8s API access for processor**: Processor uses AWS IAM, not Kubernetes RBAC
 - **SecurityContextConstraints**: OpenShift SCC restrictions for container security
 
 ### 4. Data Protection Boundary (Encryption and Partitioning)
