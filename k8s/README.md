@@ -27,9 +27,7 @@ k8s/
     │   ├── kustomization.yaml
     │   ├── service-account.yaml      # Processor service account
     │   ├── config.yaml              # Processor ConfigMap
-    │   ├── deployment.yaml          # Processor Deployment
-    │   ├── role.yaml               # RBAC permissions
-    │   └── rolebinding.yaml
+    │   └── deployment.yaml          # Processor Deployment
     ├── openshift-base/        # OpenShift-specific resources
     │   ├── kustomization.yaml
     │   └── scc.yaml          # SecurityContextConstraints
