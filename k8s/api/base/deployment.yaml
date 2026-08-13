@@ -19,6 +19,12 @@ spec:
       - name: api
         image: public.ecr.aws/d1w4s4o1/rosa-logrouter/api:main
         imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
         command:
         - python3
         - -m
