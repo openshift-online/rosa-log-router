@@ -22,6 +22,9 @@ RUN uv sync --frozen --no-dev
 # Copy API source code
 COPY src/ ./src/
 
+RUN useradd -u 1001 -r -s /sbin/nologin appuser && chown -R 1001:0 /var/task
+USER 1001
+
 # Set the Lambda handler using AWS Lambda Runtime Interface Client
 ENTRYPOINT ["/var/task/.venv/bin/python", "-m", "awslambdaric", "src.handlers.authorizer.lambda_handler"]
 

@@ -21,6 +21,9 @@ RUN uv pip install uvicorn
 # Copy API source code
 COPY src/ ./src/
 
+RUN useradd -u 1001 -r -s /sbin/nologin appuser && chown -R 1001:0 /app
+USER 1001
+
 # Expose port
 EXPOSE 8080
 
