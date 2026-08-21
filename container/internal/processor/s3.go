@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -13,6 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/openshift/rosa-log-router/internal/models"
 )
+
+// Caps both the raw S3 object read and the gzip-decompressed output.
+// Vector's max batch size is 64 MB uncompressed; 256 MB gives 4x headroom.
+const maxReadBytes = 256 * 1024 * 1024
 
 // ExtractTenantInfoFromKey extracts tenant information from S3 object key path
 // Expected format (from Vector): cluster_id/namespace/application/pod_name/timestamp-uuid.json.gz
@@ -94,22 +99,30 @@ func GetS3Object(ctx context.Context, s3Client *s3.Client, bucketName, objectKey
 
 // ProcessLogFile extracts the log events from a file
 func ProcessLogFile(ctx context.Context, filename string, content io.Reader, logger *slog.Logger) ([]*models.LogEvent, error) {
-	fileContent, err := io.ReadAll(content)
+	fileContent, err := io.ReadAll(io.LimitReader(content, maxReadBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read S3 object content: %w", err)
+	}
+	if int64(len(fileContent)) > maxReadBytes {
+		return nil, models.NewNonRecoverableError(
+			fmt.Sprintf("S3 object exceeds maximum allowed size of %d bytes", maxReadBytes))
 	}
 
 	// Decompress if gzipped
 	if strings.HasSuffix(filename, ".gz") {
-		gzReader, err := gzip.NewReader(strings.NewReader(string(fileContent)))
+		gzReader, err := gzip.NewReader(bytes.NewReader(fileContent))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		defer gzReader.Close()
 
-		decompressed, err := io.ReadAll(gzReader)
+		decompressed, err := io.ReadAll(io.LimitReader(gzReader, maxReadBytes+1))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decompress gzip content: %w", err)
+		}
+		if int64(len(decompressed)) > maxReadBytes {
+			return nil, models.NewNonRecoverableError(
+				fmt.Sprintf("decompressed size exceeds maximum allowed size of %d bytes", maxReadBytes))
 		}
 
 		fileContent = decompressed

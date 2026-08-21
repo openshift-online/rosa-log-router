@@ -1,9 +1,14 @@
 package processor
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/openshift/rosa-log-router/internal/models"
@@ -453,5 +458,58 @@ func TestGetKeys(t *testing.T) {
 	t.Run("returns empty slice for nil map", func(t *testing.T) {
 		keys := getKeys(nil)
 		assert.Len(t, keys, 0)
+	})
+}
+
+// zeroReader emits an endless stream of zero bytes without allocating.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func TestProcessLogFile(t *testing.T) {
+	logger := getTestLogger()
+	ctx := context.Background()
+
+	t.Run("processes plain JSON file", func(t *testing.T) {
+		content := `{"timestamp":"2024-01-01T12:00:00Z","message":"hello"}`
+		events, err := ProcessLogFile(ctx, "test.json", strings.NewReader(content), logger)
+		require.NoError(t, err)
+		assert.Len(t, events, 1)
+	})
+
+	t.Run("processes gzipped file", func(t *testing.T) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, err := gz.Write([]byte(`{"timestamp":"2024-01-01T12:00:00Z","message":"hello"}`))
+		require.NoError(t, err)
+		require.NoError(t, gz.Close())
+
+		events, err := ProcessLogFile(ctx, "test.json.gz", &buf, logger)
+		require.NoError(t, err)
+		assert.Len(t, events, 1)
+	})
+
+	t.Run("rejects oversized plain file", func(t *testing.T) {
+		oversized := io.LimitReader(zeroReader{}, maxReadBytes+1)
+		_, err := ProcessLogFile(ctx, "test.json", oversized, logger)
+		require.Error(t, err)
+		assert.True(t, models.IsNonRecoverable(err))
+		assert.Contains(t, err.Error(), "exceeds maximum allowed size")
+	})
+
+	t.Run("rejects gzip bomb", func(t *testing.T) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, err := io.CopyN(gz, zeroReader{}, maxReadBytes+1)
+		require.NoError(t, err)
+		require.NoError(t, gz.Close())
+
+		_, err = ProcessLogFile(ctx, "bomb.json.gz", &buf, logger)
+		require.Error(t, err)
+		assert.True(t, models.IsNonRecoverable(err))
+		assert.Contains(t, err.Error(), "decompressed size exceeds")
 	})
 }

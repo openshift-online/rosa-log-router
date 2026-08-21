@@ -141,10 +141,10 @@ jobs:
     - name: Deploy log processor
       run: |
         kubectl apply -k k8s/processor/overlays/github
-        
+
         # Wait for log processor to be ready
-        kubectl wait --for=condition=ready pod -l app=log-processor --timeout=300s --namespace=logging
-        
+        kubectl rollout status deployment/log-processor --namespace=logging --timeout=300s
+
         echo "Log processor is ready"
 
     - name: Deploy fake log generators
@@ -173,10 +173,10 @@ jobs:
     - name: Deploy Vector collector
       run: |
         kubectl apply -k k8s/collector/overlays/github
-        
+
         # Wait for Vector DaemonSet to be ready
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vector --timeout=300s --namespace=logging
-        
+        kubectl rollout status daemonset/vector-logs --namespace=logging --timeout=300s
+
         echo "Vector collector is ready"
 
     - name: Wait for log collection and processing
