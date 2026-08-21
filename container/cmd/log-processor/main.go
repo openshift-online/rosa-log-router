@@ -179,6 +179,14 @@ func sqsPollingMode(ctx context.Context, proc *processor.Processor, sqsClient *s
 	logger.Info("starting SQS polling", "queue_url", cfg.SQSQueueURL)
 
 	for {
+		// Stop polling if the context has been cancelled (e.g. graceful shutdown)
+		select {
+		case <-ctx.Done():
+			logger.Info("context cancelled, stopping SQS polling")
+			return nil
+		default:
+		}
+
 		// Poll for messages
 		resp, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            &cfg.SQSQueueURL,
