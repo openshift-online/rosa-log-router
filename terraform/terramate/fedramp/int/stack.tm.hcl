@@ -18,6 +18,25 @@ globals "aws" {
   }
 }
 
+# Per-region private (FedRAMP) endpoint configuration.
+# Both regions deploy the API as a PRIVATE REST API fronted by a region-templated
+# PRIVATE custom domain ({region}.hcp-log.{env}.{base_domain}) so the fixed OCM
+# client selects the regional API by hostname exactly as it does in commercial.
+# The custom domain uses a public DNS-validated ACM cert (validated in the
+# delegated public Route53 zone, var.route53_zone_id) and is reached in-VPC via an
+# interface endpoint; the resource policy is locked to the region's allowed VPC.
+# A region with no injected VPC id gets a deny-all lockdown policy.
+globals "private" {
+  config = {
+    "us-gov-west-1" = {
+      private_endpoint = true
+    }
+    "us-gov-east-1" = {
+      private_endpoint = true
+    }
+  }
+}
+
 generate_hcl "main.tf" {
   content {
 
@@ -67,6 +86,8 @@ generate_hcl "main.tf" {
         api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
         route53_zone_id                   = var.route53_zone_id
         base_domain                       = var.base_domain
+        private_endpoint                  = global.private.config[region.value].private_endpoint
+        allowed_vpc_id                    = tm_hcl_expression("lookup(var.allowed_vpc_ids, \"${region.value}\", \"\")")
       }
     }
   }
@@ -163,5 +184,27 @@ generate_hcl "outputs.tf" {
         value = tm_hcl_expression("module.regional-resource-${region.value}.api_endpoint")
       }
     }
+
+    # ARN of each region's PRIVATE custom domain name. Consumed cross-account by
+    # the terraform-ocm-fedramp-aws repo to build the domain-name access
+    # association from the OCM cluster's execute-api VPC endpoint.
+    tm_dynamic "output" {
+      for_each = global.aws.regions
+      iterator = region
+      labels   = ["custom_domain_arn_${region.value}"]
+      attributes = {
+        value = tm_hcl_expression("module.regional-resource-${region.value}.custom_domain_arn")
+      }
+    }
+
+    tm_dynamic "output" {
+      for_each = global.aws.regions
+      iterator = region
+      labels   = ["custom_domain_id_${region.value}"]
+      attributes = {
+        value = tm_hcl_expression("module.regional-resource-${region.value}.custom_domain_id")
+      }
+    }
+
   }
 }

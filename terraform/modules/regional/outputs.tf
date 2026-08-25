@@ -22,3 +22,13 @@ output "api_endpoint" {
   description = "API Gateway endpoint URL"
   value       = module.api_stack.api_endpoint
 }
+
+output "custom_domain_arn" {
+  description = "ARN of the API Gateway custom domain name (for the cross-account PRIVATE domain-name access association)"
+  value       = module.api_stack.custom_domain_arn
+}
+
+output "custom_domain_id" {
+  description = "Identifier of the PRIVATE custom domain name"
+  value       = module.api_stack.custom_domain_id
+}

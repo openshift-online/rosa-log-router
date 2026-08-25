@@ -83,3 +83,15 @@ variable "enable_custom_domain" {
   type        = bool
   default     = true
 }
+
+variable "private_endpoint" {
+  description = "Deploy the API Gateway as a PRIVATE REST API reachable only via an interface VPC endpoint. When true, the endpoint type becomes PRIVATE and the resource policy is locked to allowed_vpc_id. When combined with enable_custom_domain, the custom domain is created as a PRIVATE custom domain (certificate_arn + domain_name_id); the runtime vanity DNS record and the domain-name access association to the VPC endpoint are owned by the consumer account."
+  type        = bool
+  default     = false
+}
+
+variable "allowed_vpc_id" {
+  description = "VPC id permitted to invoke the private API (matched against aws:sourceVpc in the resource policy). Only used when private_endpoint is true. An empty value produces a deny-all lockdown policy (compliant but unreachable)."
+  type        = string
+  default     = ""
+}

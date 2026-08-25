@@ -40,6 +40,8 @@ module "regional-resource-us-gov-west-1" {
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
   base_domain                       = var.base_domain
+  private_endpoint                  = true
+  allowed_vpc_id                    = lookup(var.allowed_vpc_ids, "us-gov-west-1", "")
 }
 module "regional-resource-us-gov-east-1" {
   source = "../../../modules/regional"
@@ -63,4 +65,6 @@ module "regional-resource-us-gov-east-1" {
   api_gateway_cloudwatch_role_arn   = module.global.api_gateway_cloudwatch_role_arn
   route53_zone_id                   = var.route53_zone_id
   base_domain                       = var.base_domain
+  private_endpoint                  = true
+  allowed_vpc_id                    = lookup(var.allowed_vpc_ids, "us-gov-east-1", "")
 }

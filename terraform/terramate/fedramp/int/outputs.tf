@@ -33,3 +33,15 @@ output "api_endpoint_us-gov-west-1" {
 output "api_endpoint_us-gov-east-1" {
   value = module.regional-resource-us-gov-east-1.api_endpoint
 }
+output "custom_domain_arn_us-gov-west-1" {
+  value = module.regional-resource-us-gov-west-1.custom_domain_arn
+}
+output "custom_domain_arn_us-gov-east-1" {
+  value = module.regional-resource-us-gov-east-1.custom_domain_arn
+}
+output "custom_domain_id_us-gov-west-1" {
+  value = module.regional-resource-us-gov-west-1.custom_domain_id
+}
+output "custom_domain_id_us-gov-east-1" {
+  value = module.regional-resource-us-gov-east-1.custom_domain_id
+}
