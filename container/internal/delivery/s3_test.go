@@ -125,7 +125,7 @@ func TestS3DelivererErrorClassification(t *testing.T) {
 		{
 			name:             "access_denied",
 			errorMsg:         "AccessDenied: Access Denied",
-			isNonRecoverable: true,
+			isNonRecoverable: false,
 		},
 		{
 			name:             "no_such_key",
@@ -152,8 +152,8 @@ func TestS3DelivererErrorClassification(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Test the error classification logic used in DeliverLogs
+			// AccessDenied is recoverable (routed to retry queue for slow retry)
 			isNonRecoverable := strings.Contains(tc.errorMsg, "NoSuchBucket") ||
-				strings.Contains(tc.errorMsg, "AccessDenied") ||
 				strings.Contains(tc.errorMsg, "NoSuchKey")
 
 			assert.Equal(t, tc.isNonRecoverable, isNonRecoverable,

@@ -4,11 +4,16 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	dtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -348,4 +353,192 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 		require.Error(t, err, "Getting deleted config should return error")
 		t.Logf("✅ Deleted CloudWatch config for tenant: %s", tenantID)
 	})
+}
+
+// TestE2ERetryQueuePermissionError tests that a permission error routes the message
+// to the retry queue instead of being silently dropped or causing a recursive loop.
+// When IAM enforcement is disabled (default LocalStack), this test instead verifies
+// retry queue consumption by placing a message directly and checking delivery.
+func TestE2ERetryQueuePermissionError(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+	defer helper.Cleanup(t)
+
+	retryQueueURL := helper.RetryQueueURL()
+	if retryQueueURL == "" {
+		t.Skip("RETRY_QUEUE_URL not available — retry queue not deployed")
+	}
+
+	if os.Getenv("ENFORCE_IAM") == "1" {
+		t.Run("IAMEnforced", func(t *testing.T) {
+			// With IAM enforcement, a broken role produces AccessDenied → retry queue
+			tenantID := fmt.Sprintf("e2e-retry-test-%s", uuid.New().String()[:8])
+			helper.CreateTestTenantConfig(t, tenantID, "cloudwatch", map[string]dtypes.AttributeValue{
+				"log_group_name":            &dtypes.AttributeValueMemberS{Value: "/aws/logs/e2e-retry-test"},
+				"target_region":             &dtypes.AttributeValueMemberS{Value: "us-east-1"},
+				"log_distribution_role_arn": &dtypes.AttributeValueMemberS{Value: "arn:aws:iam::999999999999:role/NonExistentRole"},
+			})
+			defer helper.DeleteTestTenantConfig(t, tenantID, "cloudwatch")
+
+			testID, logData := helper.GenerateTestLog(tenantID, "test-app", "test-pod")
+			t.Logf("Generated test log with UUID: %s", testID)
+
+			timestamp := time.Now().Unix()
+			s3Key := fmt.Sprintf("%s/%s/test-app/test-pod/retry-test-%d.json.gz",
+				TestClusterID, tenantID, timestamp)
+			helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+			t.Logf("Waiting %v for log processing...", ProcessingWaitTime)
+			time.Sleep(ProcessingWaitTime)
+
+			helper.WaitForSQSMessageCount(t, retryQueueURL, 1, DefaultTimeout)
+			msgBody := helper.WaitForSQSMessage(t, retryQueueURL, testID, DefaultTimeout)
+
+			var msgData map[string]any
+			err := json.Unmarshal([]byte(msgBody), &msgData)
+			require.NoError(t, err, "retry queue message should be valid JSON")
+
+			metadata, ok := msgData["processing_metadata"].(map[string]any)
+			require.True(t, ok, "message should have processing_metadata")
+			_, hasCompleted := metadata["completed_deliveries"]
+			assert.True(t, hasCompleted, "metadata should have completed_deliveries field")
+			t.Logf("Retry queue message has completed_deliveries: %v", metadata["completed_deliveries"])
+		})
+	} else {
+		t.Run("RetryQueueConsumption", func(t *testing.T) {
+			// Without IAM enforcement, test the retry queue consumption path directly.
+			// Place a message in the retry queue with completed_deliveries metadata and
+			// verify the Lambda processes it and delivers to the remaining destination.
+			tenantID := Customer2ID // globex-industries — has CloudWatch delivery
+			testID, logData := helper.GenerateTestLog(tenantID, Customer2Service, "retry-consume-pod")
+			t.Logf("Generated test log with UUID: %s", testID)
+
+			// Upload the log file to central S3 so delivery can find it
+			timestamp := time.Now().Unix()
+			s3Key := fmt.Sprintf("%s/%s/%s/retry-consume-pod/retry-consume-%d.json.gz",
+				TestClusterID, tenantID, Customer2Service, timestamp)
+			helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+			// Construct an SNS-wrapped S3 event message with retry queue metadata
+			s3Event := fmt.Sprintf(`{"Records":[{"s3":{"bucket":{"name":"%s"},"object":{"key":"%s"}}}]}`,
+				helper.CentralBucket(), s3Key)
+			snsMessage := fmt.Sprintf(`{"Message":%q,"processing_metadata":{"completed_deliveries":["s3:%s"],"from_retry_queue":true}}`,
+				s3Event, helper.Customer2Bucket())
+
+			// Send directly to the retry queue
+			helper.SendSQSMessage(t, retryQueueURL, snsMessage)
+			t.Logf("Sent crafted retry queue message with completed_deliveries:[\"s3:%s\"]", helper.Customer2Bucket())
+
+			// Wait for Lambda to process from the retry queue
+			t.Logf("Waiting %v for retry queue processing...", ProcessingWaitTime)
+			time.Sleep(ProcessingWaitTime)
+
+			// Verify CloudWatch delivery succeeded (the non-completed delivery type)
+			helper.WaitForCloudWatchDelivery(
+				t, Customer2AccountID, helper.Customer2LogGroup(),
+				"retry-consume-pod", testID, DefaultTimeout,
+			)
+			t.Logf("Retry queue consumption verified — CloudWatch delivery succeeded from retry queue message")
+		})
+	}
+}
+
+// TestE2ERetryQueueMultiDelivery tests multi-delivery retry behavior.
+// With IAM enforcement: broken CW role → S3 delivers, retry queue gets message with completed_deliveries.
+// Without IAM enforcement: verifies retry queue consumption with completed_deliveries skips S3.
+func TestE2ERetryQueueMultiDelivery(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+	defer helper.Cleanup(t)
+
+	retryQueueURL := helper.RetryQueueURL()
+	if retryQueueURL == "" {
+		t.Skip("RETRY_QUEUE_URL not available — retry queue not deployed")
+	}
+
+	if os.Getenv("ENFORCE_IAM") == "1" {
+		t.Run("IAMEnforced", func(t *testing.T) {
+			tenantID := fmt.Sprintf("e2e-multi-retry-%s", uuid.New().String()[:8])
+
+			helper.CreateTestTenantConfig(t, tenantID, "s3", map[string]dtypes.AttributeValue{
+				"bucket_name":               &dtypes.AttributeValueMemberS{Value: helper.Customer1Bucket()},
+				"bucket_prefix":             &dtypes.AttributeValueMemberS{Value: "multi-retry-test/"},
+				"target_region":             &dtypes.AttributeValueMemberS{Value: "us-east-1"},
+				"log_distribution_role_arn": &dtypes.AttributeValueMemberS{Value: "arn:aws:iam::222222222222:role/not-needed-localstack"},
+			})
+			defer helper.DeleteTestTenantConfig(t, tenantID, "s3")
+
+			helper.CreateTestTenantConfig(t, tenantID, "cloudwatch", map[string]dtypes.AttributeValue{
+				"log_group_name":            &dtypes.AttributeValueMemberS{Value: "/aws/logs/multi-retry-test"},
+				"target_region":             &dtypes.AttributeValueMemberS{Value: "us-east-1"},
+				"log_distribution_role_arn": &dtypes.AttributeValueMemberS{Value: "arn:aws:iam::999999999999:role/BrokenRole"},
+			})
+			defer helper.DeleteTestTenantConfig(t, tenantID, "cloudwatch")
+
+			testID, logData := helper.GenerateTestLog(tenantID, "test-app", "test-pod")
+			t.Logf("Generated test log with UUID: %s", testID)
+
+			timestamp := time.Now().Unix()
+			s3Key := fmt.Sprintf("%s/%s/test-app/test-pod/multi-retry-%d.json.gz",
+				TestClusterID, tenantID, timestamp)
+			helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+			t.Logf("Waiting %v for log processing...", ProcessingWaitTime)
+			time.Sleep(ProcessingWaitTime)
+
+			expectedPrefix := fmt.Sprintf("multi-retry-test/%s/test-app/test-pod/", tenantID)
+			deliveredKey := helper.WaitForS3Delivery(
+				t, Customer1AccountID, helper.Customer1Bucket(), expectedPrefix, testID, DefaultTimeout,
+			)
+			t.Logf("S3 delivery succeeded: %s", deliveredKey)
+
+			helper.WaitForSQSMessageCount(t, retryQueueURL, 1, DefaultTimeout)
+			msgBody := helper.WaitForSQSMessage(t, retryQueueURL, testID, DefaultTimeout)
+
+			var msgData map[string]any
+			err := json.Unmarshal([]byte(msgBody), &msgData)
+			require.NoError(t, err)
+
+			metadata, ok := msgData["processing_metadata"].(map[string]any)
+			require.True(t, ok, "message should have processing_metadata")
+			completed, ok := metadata["completed_deliveries"].([]any)
+			require.True(t, ok, "completed_deliveries should be a list")
+			require.Len(t, completed, 1, "one delivery should be completed")
+			completedStr, ok := completed[0].(string)
+			require.True(t, ok)
+			assert.True(t, strings.HasPrefix(completedStr, "s3:"), "completed delivery should be an S3 delivery ID, got: %s", completedStr)
+			t.Logf("Retry queue message correctly shows completed_deliveries: %v", completed)
+		})
+	} else {
+		t.Run("RetryQueueSkipsCompleted", func(t *testing.T) {
+			// Without IAM enforcement, verify that a retry queue message with
+			// completed_deliveries causes the Lambda to skip the completed type
+			// and only deliver to the remaining destination.
+			tenantID := Customer2ID // globex-industries — has both S3 + CloudWatch
+			testID, logData := helper.GenerateTestLog(tenantID, Customer2Service, "multi-retry-pod")
+			t.Logf("Generated test log with UUID: %s", testID)
+
+			timestamp := time.Now().Unix()
+			s3Key := fmt.Sprintf("%s/%s/%s/multi-retry-pod/multi-retry-%d.json.gz",
+				TestClusterID, tenantID, Customer2Service, timestamp)
+			helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+			// Craft a retry queue message marking S3 as already completed
+			s3Event := fmt.Sprintf(`{"Records":[{"s3":{"bucket":{"name":"%s"},"object":{"key":"%s"}}}]}`,
+				helper.CentralBucket(), s3Key)
+			snsMessage := fmt.Sprintf(`{"Message":%q,"processing_metadata":{"completed_deliveries":["s3:%s"],"from_retry_queue":true}}`,
+				s3Event, helper.Customer2Bucket())
+
+			helper.SendSQSMessage(t, retryQueueURL, snsMessage)
+			t.Logf("Sent retry queue message with completed_deliveries:[\"s3:%s\"]", helper.Customer2Bucket())
+
+			t.Logf("Waiting %v for retry queue processing...", ProcessingWaitTime)
+			time.Sleep(ProcessingWaitTime)
+
+			// Verify CloudWatch delivery succeeded (the non-completed destination)
+			helper.WaitForCloudWatchDelivery(
+				t, Customer2AccountID, helper.Customer2LogGroup(),
+				"multi-retry-pod", testID, DefaultTimeout,
+			)
+			t.Logf("Retry queue correctly processed message — CloudWatch delivered, S3 skipped")
+		})
+	}
 }

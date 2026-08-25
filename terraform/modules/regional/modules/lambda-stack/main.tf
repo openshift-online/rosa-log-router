@@ -44,6 +44,7 @@ resource "aws_lambda_function" "log_distributor_function" {
       RETRY_ATTEMPTS                    = "3"
       CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = var.central_log_distribution_role_arn
       SQS_QUEUE_URL                     = var.sqs_queue_url
+      RETRY_QUEUE_URL                   = var.retry_queue_url
     }
   }
 
@@ -58,6 +59,15 @@ resource "aws_lambda_function" "log_distributor_function" {
 # Event Source Mapping for SQS to Lambda
 resource "aws_lambda_event_source_mapping" "log_delivery_event_source_mapping" {
   event_source_arn                   = var.sqs_queue_arn
+  function_name                      = aws_lambda_function.log_distributor_function.arn
+  batch_size                         = 10
+  maximum_batching_window_in_seconds = 5
+  function_response_types            = ["ReportBatchItemFailures"]
+}
+
+# Event Source Mapping for Retry Queue to Lambda
+resource "aws_lambda_event_source_mapping" "retry_queue_event_source_mapping" {
+  event_source_arn                   = var.retry_queue_arn
   function_name                      = aws_lambda_function.log_distributor_function.arn
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5

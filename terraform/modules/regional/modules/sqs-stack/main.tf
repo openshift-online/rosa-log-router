@@ -26,6 +26,21 @@ resource "aws_sqs_queue" "log_delivery_dlq" {
   tags = local.common_tags
 }
 
+# Retry queue for permission errors (slow retry with longer backoff)
+resource "aws_sqs_queue" "log_delivery_retry_queue" {
+  name                       = "${var.project_name}-${var.environment}-log-delivery-retry-queue"
+  message_retention_seconds  = 604800 # 7 days (aligned with S3 bucket lifecycle)
+  visibility_timeout_seconds = 7200   # 2 hours between retries
+  receive_wait_time_seconds  = 20     # Long polling
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.log_delivery_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = local.common_tags
+}
+
 # SQS queue for log delivery processing
 resource "aws_sqs_queue" "log_delivery_queue" {
   name                       = "${var.project_name}-${var.environment}-log-delivery-queue"

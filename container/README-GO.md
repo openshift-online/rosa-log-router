@@ -174,7 +174,8 @@ export TENANT_CONFIG_TABLE=tenant-configurations
 |----------|-------------|---------|
 | `EXECUTION_MODE` | Execution mode: lambda, sqs, manual, scan | `lambda` |
 | `TENANT_CONFIG_TABLE` | DynamoDB table for tenant configs | `tenant-configurations` |
-| `SQS_QUEUE_URL` | SQS queue URL for polling mode | - |
+| `SQS_QUEUE_URL` | SQS queue URL for main queue (polling and requeue) | - |
+| `RETRY_QUEUE_URL` | SQS queue URL for permission error retry queue (optional — falls back to BatchItemFailure if not set) | - |
 | `CENTRAL_LOG_DISTRIBUTION_ROLE_ARN` | ARN of central distribution role | - |
 | `AWS_REGION` | AWS region | `us-east-1` |
 | `MAX_BATCH_SIZE` | Max events per CloudWatch batch | `1000` |

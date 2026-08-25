@@ -19,6 +19,11 @@ output "central_sqs_queue_url" {
   value       = module.central_sqs_stack.log_delivery_queue_url
 }
 
+output "central_retry_queue_url" {
+  description = "Retry queue URL for permission error testing"
+  value       = module.central_sqs_stack.log_delivery_retry_queue_url
+}
+
 output "central_dynamodb_table" {
   description = "DynamoDB table name for tenant configs"
   value       = module.central_core_infrastructure.tenant_config_table_name

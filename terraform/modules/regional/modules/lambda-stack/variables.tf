@@ -28,6 +28,16 @@ variable "sqs_queue_url" {
   type        = string
 }
 
+variable "retry_queue_arn" {
+  description = "ARN of the retry SQS queue for permission error retries"
+  type        = string
+}
+
+variable "retry_queue_url" {
+  description = "URL of the retry SQS queue"
+  type        = string
+}
+
 variable "central_log_distribution_role_arn" {
   description = "ARN of the central log distribution role for cross-account access"
   type        = string

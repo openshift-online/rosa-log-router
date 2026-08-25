@@ -4,6 +4,9 @@ package models
 import (
 	"errors"
 	"fmt"
+	"strings"
+
+	smithy "github.com/aws/smithy-go"
 )
 
 // NonRecoverableError represents an error that should not be retried.
@@ -112,4 +115,24 @@ func NewInvalidS3NotificationError(message string) *InvalidS3NotificationError {
 // WrapInvalidS3NotificationError wraps an existing error as invalid S3 notification
 func WrapInvalidS3NotificationError(message string, err error) *InvalidS3NotificationError {
 	return &InvalidS3NotificationError{Message: message, Err: err}
+}
+
+// IsPermissionError checks if an error is related to IAM/access permissions.
+// Uses AWS SDK typed errors when available, falls back to string matching.
+func IsPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := strings.ToLower(apiErr.ErrorCode())
+		if code == "accessdenied" || code == "unauthorizedaccess" ||
+			strings.Contains(code, "unauthorized") {
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "accessdenied") ||
+		strings.Contains(msg, "access denied") ||
+		strings.Contains(msg, "not authorized")
 }

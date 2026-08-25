@@ -54,6 +54,8 @@ spec:
         # These will be provided by overlay patches
         - name: SQS_QUEUE_URL
           value: ""
+        - name: RETRY_QUEUE_URL
+          value: ""
         - name: TENANT_CONFIG_TABLE
           value: ""
         - name: CENTRAL_LOG_DISTRIBUTION_ROLE_ARN

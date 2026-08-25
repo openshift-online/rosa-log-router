@@ -24,3 +24,13 @@ output "log_delivery_dlq_name" {
   description = "Name of the log delivery DLQ"
   value       = aws_sqs_queue.log_delivery_dlq.name
 }
+
+output "log_delivery_retry_queue_arn" {
+  description = "ARN of the log delivery retry queue"
+  value       = aws_sqs_queue.log_delivery_retry_queue.arn
+}
+
+output "log_delivery_retry_queue_url" {
+  description = "URL of the log delivery retry queue"
+  value       = aws_sqs_queue.log_delivery_retry_queue.id
+}
