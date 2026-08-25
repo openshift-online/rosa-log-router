@@ -57,8 +57,48 @@ func ShouldSkipProcessedEvents(events []*models.LogEvent, offset int, logger *sl
 	return events[offset:]
 }
 
+// SendToRetryQueue sends a message to the retry queue with completed delivery metadata.
+// Used for permission errors that need slow retry with longer backoff.
+func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL, messageBody string, completedDeliveries []string, logger *slog.Logger) error {
+	var messageData map[string]interface{}
+	if err := json.Unmarshal([]byte(messageBody), &messageData); err != nil {
+		return fmt.Errorf("failed to parse message body: %w", err)
+	}
+
+	if messageData["processing_metadata"] == nil {
+		messageData["processing_metadata"] = make(map[string]interface{})
+	}
+	procMetadata, ok := messageData["processing_metadata"].(map[string]interface{})
+	if !ok {
+		procMetadata = make(map[string]interface{})
+		messageData["processing_metadata"] = procMetadata
+	}
+
+	procMetadata["completed_deliveries"] = completedDeliveries
+	procMetadata["retry_count"] = 0
+	procMetadata["from_retry_queue"] = true
+	procMetadata["sent_to_retry_queue_at"] = time.Now().Format(time.RFC3339)
+
+	updatedBody, err := json.Marshal(messageData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated message body: %w", err)
+	}
+
+	_, err = sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    aws.String(retryQueueURL),
+		MessageBody: aws.String(string(updatedBody)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send message to retry queue: %w", err)
+	}
+
+	logger.Info("sent message to retry queue",
+		"completed_deliveries", completedDeliveries)
+	return nil
+}
+
 // RequeueSQSMessageWithOffset re-queues an SQS message with processing offset information
-func RequeueSQSMessageWithOffset(ctx context.Context, sqsClient SQSClientAPI, queueURL, messageBody, originalReceiptHandle string, processingOffset, maxRetries int, logger *slog.Logger) error {
+func RequeueSQSMessageWithOffset(ctx context.Context, sqsClient SQSClientAPI, queueURL, messageBody, originalReceiptHandle string, processingOffset, maxRetries int, completedDeliveries []string, logger *slog.Logger) error {
 	if queueURL == "" {
 		logger.Warn("SQS_QUEUE_URL not configured, cannot re-queue message")
 		return nil
@@ -93,6 +133,10 @@ func RequeueSQSMessageWithOffset(ctx context.Context, sqsClient SQSClientAPI, qu
 	procMetadata["retry_count"] = newRetryCount
 	procMetadata["original_receipt_handle"] = originalReceiptHandle
 	procMetadata["requeued_at"] = time.Now().Format(time.RFC3339)
+	delete(procMetadata, "from_retry_queue")
+	if len(completedDeliveries) > 0 {
+		procMetadata["completed_deliveries"] = completedDeliveries
+	}
 
 	// Check if we've exceeded retry limits
 	if newRetryCount > maxRetries {

@@ -132,7 +132,7 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 		if strings.Contains(errMsg, "NoSuchBucket") {
 			return models.NewNonRecoverableError(fmt.Sprintf("destination S3 bucket '%s' does not exist", destinationBucket))
 		} else if strings.Contains(errMsg, "AccessDenied") {
-			return models.NewNonRecoverableError(fmt.Sprintf("access denied to S3 bucket '%s'. Check bucket policy and Central Role permissions", destinationBucket))
+			return fmt.Errorf("access denied to S3 bucket '%s': %w", destinationBucket, err)
 		} else if strings.Contains(errMsg, "NoSuchKey") {
 			return models.NewNonRecoverableError(fmt.Sprintf("source S3 object s3://%s/%s not found", sourceBucket, sourceKey))
 		}

@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -217,7 +218,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		messageBody := `{"Message": "test"}`
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 50, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 50, 5, nil, logger)
 
 		require.NoError(t, err)
 		assert.NotNil(t, capturedInput)
@@ -251,7 +252,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		}`
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 100, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 100, 5, nil, logger)
 
 		require.NoError(t, err)
 
@@ -295,7 +296,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 			messageBodyBytes, _ := json.Marshal(data)
 
 			queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
-			err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, string(messageBodyBytes), "receipt-1", 0, 20, logger)
+			err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, string(messageBodyBytes), "receipt-1", 0, 20, nil, logger)
 
 			require.NoError(t, err)
 			assert.Equal(t, tc.expectedDelay, capturedDelay)
@@ -320,7 +321,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 		maxRetries := 3
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 0, maxRetries, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 0, maxRetries, nil, logger)
 
 		// Should not error, but should not call SendMessage
 		require.NoError(t, err)
@@ -331,7 +332,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		mockClient := &mockSQSClient{}
 		messageBody := `{"Message": "test"}`
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, "", messageBody, "receipt-1", 0, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, "", messageBody, "receipt-1", 0, 5, nil, logger)
 
 		// Should not error when queue URL is empty
 		require.NoError(t, err)
@@ -349,7 +350,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		messageBody := `{"Message": "test"}`
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 75, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 75, 5, nil, logger)
 
 		require.NoError(t, err)
 		assert.NotNil(t, capturedInput.MessageAttributes)
@@ -378,7 +379,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 		originalHandle := "original-receipt-handle-abc123"
 
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, originalHandle, 0, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, originalHandle, 0, 5, nil, logger)
 
 		require.NoError(t, err)
 
@@ -403,7 +404,7 @@ func TestRequeueSQSMessageWithOffset(t *testing.T) {
 		queueURL := "https://sqs.us-east-1.amazonaws.com/123/test-queue"
 
 		beforeTime := time.Now()
-		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 0, 5, logger)
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, queueURL, messageBody, "receipt-1", 0, 5, nil, logger)
 		afterTime := time.Now()
 
 		require.NoError(t, err)
@@ -531,4 +532,118 @@ func min(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func TestSendToRetryQueue(t *testing.T) {
+	logger := getTestLogger()
+	ctx := context.Background()
+
+	t.Run("sends message with completed_deliveries metadata", func(t *testing.T) {
+		var capturedInput *sqs.SendMessageInput
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				capturedInput = params
+				return &sqs.SendMessageOutput{MessageId: aws.String("retry-msg-id")}, nil
+			},
+		}
+
+		messageBody := `{"Message": "test-s3-event"}`
+		retryURL := "https://sqs.us-east-1.amazonaws.com/123/retry-queue"
+
+		err := SendToRetryQueue(ctx, mockClient, retryURL, messageBody, []string{"s3:my-bucket"}, logger)
+
+		require.NoError(t, err)
+		require.NotNil(t, capturedInput)
+		assert.Equal(t, retryURL, *capturedInput.QueueUrl)
+
+		var body map[string]any
+		err = json.Unmarshal([]byte(*capturedInput.MessageBody), &body)
+		require.NoError(t, err)
+
+		metadata := body["processing_metadata"].(map[string]any)
+		completed := metadata["completed_deliveries"].([]any)
+		assert.Equal(t, "s3:my-bucket", completed[0])
+		assert.Equal(t, float64(0), metadata["retry_count"])
+		assert.Equal(t, "test-s3-event", body["Message"])
+	})
+
+	t.Run("returns error on SendMessage failure", func(t *testing.T) {
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				return nil, fmt.Errorf("network error")
+			},
+		}
+
+		err := SendToRetryQueue(ctx, mockClient, "https://sqs/retry", `{"Message":"test"}`, []string{"s3:my-bucket"}, logger)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to send message to retry queue")
+	})
+
+	t.Run("handles empty completed_deliveries", func(t *testing.T) {
+		var capturedInput *sqs.SendMessageInput
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				capturedInput = params
+				return &sqs.SendMessageOutput{MessageId: aws.String("msg-id")}, nil
+			},
+		}
+
+		err := SendToRetryQueue(ctx, mockClient, "https://sqs/retry", `{"Message":"test"}`, []string{}, logger)
+		require.NoError(t, err)
+
+		var body map[string]any
+		err = json.Unmarshal([]byte(*capturedInput.MessageBody), &body)
+		require.NoError(t, err)
+
+		metadata := body["processing_metadata"].(map[string]any)
+		completed := metadata["completed_deliveries"].([]any)
+		assert.Empty(t, completed)
+	})
+}
+
+func TestRequeueSQSMessageWithCompletedDeliveries(t *testing.T) {
+	logger := getTestLogger()
+	ctx := context.Background()
+
+	t.Run("includes completed_deliveries when provided", func(t *testing.T) {
+		var capturedInput *sqs.SendMessageInput
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				capturedInput = params
+				return &sqs.SendMessageOutput{MessageId: aws.String("msg-id")}, nil
+			},
+		}
+
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, "https://sqs/queue", `{"Message":"test"}`, "receipt-1", 10, 5, []string{"s3:my-bucket"}, logger)
+		require.NoError(t, err)
+
+		var body map[string]any
+		err = json.Unmarshal([]byte(*capturedInput.MessageBody), &body)
+		require.NoError(t, err)
+
+		metadata := body["processing_metadata"].(map[string]any)
+		completed := metadata["completed_deliveries"].([]any)
+		assert.Equal(t, "s3:my-bucket", completed[0])
+	})
+
+	t.Run("omits completed_deliveries when nil", func(t *testing.T) {
+		var capturedInput *sqs.SendMessageInput
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				capturedInput = params
+				return &sqs.SendMessageOutput{MessageId: aws.String("msg-id")}, nil
+			},
+		}
+
+		err := RequeueSQSMessageWithOffset(ctx, mockClient, "https://sqs/queue", `{"Message":"test"}`, "receipt-1", 10, 5, nil, logger)
+		require.NoError(t, err)
+
+		var body map[string]any
+		err = json.Unmarshal([]byte(*capturedInput.MessageBody), &body)
+		require.NoError(t, err)
+
+		metadata := body["processing_metadata"].(map[string]any)
+		_, hasCompleted := metadata["completed_deliveries"]
+		assert.False(t, hasCompleted)
+	})
 }

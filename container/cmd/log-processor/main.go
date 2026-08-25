@@ -160,6 +160,9 @@ func loadConfig() (*models.Config, error) {
 		}
 		cfg.ScanInterval = i
 	}
+	if v := os.Getenv("RETRY_QUEUE_URL"); v != "" {
+		cfg.RetryQueueURL = v
+	}
 	if v := os.Getenv("AWS_S3_USE_PATH_STYLE"); v != "" {
 		cfg.S3UsePathStyle = v == "true" || v == "1"
 	}

@@ -2,7 +2,10 @@ package models
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+
+	smithy "github.com/aws/smithy-go"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -81,4 +84,29 @@ func TestInvalidS3NotificationError(t *testing.T) {
 		var nonRecoverable *NonRecoverableError
 		assert.True(t, errors.As(err, &nonRecoverable))
 	})
+}
+
+func TestIsPermissionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil error", nil, false},
+		{"AccessDenied from AWS SDK", errors.New("AccessDenied: User is not authorized"), true},
+		{"access denied lowercase", errors.New("access denied to S3 bucket 'foo'"), true},
+		{"not authorized", errors.New("User: arn:aws:iam::123:role/X is not authorized to perform: sts:AssumeRole"), true},
+		{"timeout error", errors.New("RequestTimeout: connection timed out"), false},
+		{"throttling error", errors.New("SlowDown: Please reduce your request rate"), false},
+		{"wrapped AccessDenied", fmt.Errorf("failed to assume customer role: %w", errors.New("AccessDenied: forbidden")), true},
+		{"smithy APIError AccessDenied", &smithy.GenericAPIError{Code: "AccessDenied", Message: "not allowed"}, true},
+		{"smithy APIError wrapped", fmt.Errorf("delivery failed: %w", &smithy.GenericAPIError{Code: "AccessDenied", Message: "forbidden"}), true},
+		{"smithy APIError non-permission", &smithy.GenericAPIError{Code: "ThrottlingException", Message: "rate exceeded"}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, IsPermissionError(tc.err))
+		})
+	}
 }

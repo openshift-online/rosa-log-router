@@ -17,7 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +46,8 @@ type E2ETestHelper struct {
 	ctx          context.Context
 	s3Client     *s3.Client
 	cwLogsClient *cloudwatchlogs.Client
+	dynamoClient *dynamodb.Client
+	sqsClient    *sqs.Client
 
 	// LocalStack-specific
 	localstackURL string
@@ -52,6 +58,8 @@ type E2ETestHelper struct {
 	customer2Bucket    string
 	customer2LogGroup  string
 	apiGatewayEndpoint string
+	retryQueueURL      string
+	tenantConfigTable  string
 }
 
 // NewE2ETestHelper creates a new test helper with LocalStack-configured AWS clients
@@ -89,6 +97,8 @@ func NewE2ETestHelper(t *testing.T) *E2ETestHelper {
 
 	// Create CloudWatch Logs client for customer account verification
 	cwLogsClient := cloudwatchlogs.NewFromConfig(cfg)
+	dynamoClient := dynamodb.NewFromConfig(cfg)
+	sqsClient := sqs.NewFromConfig(cfg)
 
 	// Fetch terraform outputs
 	centralBucket := getTerraformOutput(t, "central_source_bucket")
@@ -106,16 +116,23 @@ func NewE2ETestHelper(t *testing.T) *E2ETestHelper {
 		apiGatewayEndpoint = convertToLocalStackAPIGatewayURL(apiGatewayEndpoint)
 	}
 
+	retryQueueURL := getTerraformOutputOptional(t, "central_retry_queue_url")
+	tenantConfigTable := getTerraformOutput(t, "central_dynamodb_table")
+
 	return &E2ETestHelper{
 		ctx:                ctx,
 		s3Client:           s3Client,
 		cwLogsClient:       cwLogsClient,
+		dynamoClient:       dynamoClient,
+		sqsClient:          sqsClient,
 		localstackURL:      LocalStackEndpoint,
 		centralBucket:      centralBucket,
 		customer1Bucket:    customer1Bucket,
 		customer2Bucket:    customer2Bucket,
 		customer2LogGroup:  customer2LogGroup,
 		apiGatewayEndpoint: apiGatewayEndpoint,
+		retryQueueURL:      retryQueueURL,
+		tenantConfigTable:  tenantConfigTable,
 	}
 }
 
@@ -410,6 +427,131 @@ func (h *E2ETestHelper) APIGatewayEndpoint() string {
 func (h *E2ETestHelper) APIPSK() string {
 	// Use the default test PSK
 	return "test-psk-localstack-do-not-use-in-production"
+}
+
+// RetryQueueURL returns the retry queue URL from terraform output
+func (h *E2ETestHelper) RetryQueueURL() string {
+	return h.retryQueueURL
+}
+
+// CreateTestTenantConfig creates a DynamoDB entry for a test tenant
+func (h *E2ETestHelper) CreateTestTenantConfig(t *testing.T, tenantID, deliveryType string, attrs map[string]dtypes.AttributeValue) {
+	t.Helper()
+
+	item := map[string]dtypes.AttributeValue{
+		"tenant_id": &dtypes.AttributeValueMemberS{Value: tenantID},
+		"type":      &dtypes.AttributeValueMemberS{Value: deliveryType},
+		"enabled":   &dtypes.AttributeValueMemberBOOL{Value: true},
+	}
+	for k, v := range attrs {
+		item[k] = v
+	}
+
+	_, err := h.dynamoClient.PutItem(h.ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(h.tenantConfigTable),
+		Item:      item,
+	})
+	require.NoError(t, err, "failed to create test tenant config for %s/%s", tenantID, deliveryType)
+	t.Logf("Created test tenant config: %s/%s", tenantID, deliveryType)
+}
+
+// DeleteTestTenantConfig removes a DynamoDB entry for a test tenant
+func (h *E2ETestHelper) DeleteTestTenantConfig(t *testing.T, tenantID, deliveryType string) {
+	t.Helper()
+
+	_, err := h.dynamoClient.DeleteItem(h.ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(h.tenantConfigTable),
+		Key: map[string]dtypes.AttributeValue{
+			"tenant_id": &dtypes.AttributeValueMemberS{Value: tenantID},
+			"type":      &dtypes.AttributeValueMemberS{Value: deliveryType},
+		},
+	})
+	require.NoError(t, err, "failed to delete test tenant config for %s/%s", tenantID, deliveryType)
+}
+
+// WaitForSQSMessage polls an SQS queue for a message containing the test UUID.
+// Uses ReceiveMessage to inspect message content. Note: in environments where a
+// Lambda event source mapping is consuming from the same queue, prefer
+// WaitForSQSMessageCount for non-destructive assertions to avoid racing the consumer.
+func (h *E2ETestHelper) WaitForSQSMessage(t *testing.T, queueURL, testID string, timeout time.Duration) string {
+	t.Helper()
+
+	var lastErr error
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := h.sqsClient.ReceiveMessage(h.ctx, &sqs.ReceiveMessageInput{
+			QueueUrl:            aws.String(queueURL),
+			MaxNumberOfMessages: 10,
+			WaitTimeSeconds:     2,
+			VisibilityTimeout:   0,
+		})
+		if err != nil {
+			lastErr = err
+			time.Sleep(PollInterval)
+			continue
+		}
+
+		for _, msg := range resp.Messages {
+			if msg.Body != nil && strings.Contains(*msg.Body, testID) {
+				t.Logf("Found message with UUID %s in queue %s", testID, queueURL)
+				return *msg.Body
+			}
+		}
+
+		time.Sleep(PollInterval)
+	}
+
+	require.Fail(t, "timeout waiting for SQS message", "UUID %s not found in queue %s after %v (last error: %v)", testID, queueURL, timeout, lastErr)
+	return ""
+}
+
+// WaitForSQSMessageCount polls a queue's attributes until the message count
+// reaches or exceeds the target. This is non-destructive — it doesn't receive
+// or modify messages — so it's safe to use on queues with active Lambda ESMs.
+func (h *E2ETestHelper) WaitForSQSMessageCount(t *testing.T, queueURL string, minCount int, timeout time.Duration) int {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		count := h.GetSQSQueueMessageCount(t, queueURL)
+		if count >= minCount {
+			t.Logf("Queue %s has %d messages (target: %d)", queueURL, count, minCount)
+			return count
+		}
+		time.Sleep(PollInterval)
+	}
+
+	require.Fail(t, "timeout waiting for SQS message count",
+		"queue %s did not reach %d messages after %v", queueURL, minCount, timeout)
+	return 0
+}
+
+// GetSQSQueueMessageCount returns the approximate number of messages in a queue
+func (h *E2ETestHelper) GetSQSQueueMessageCount(t *testing.T, queueURL string) int {
+	t.Helper()
+
+	resp, err := h.sqsClient.GetQueueAttributes(h.ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       aws.String(queueURL),
+		AttributeNames: []sqstypes.QueueAttributeName{"ApproximateNumberOfMessages"},
+	})
+	require.NoError(t, err, "failed to get queue attributes for %s", queueURL)
+
+	countStr := resp.Attributes["ApproximateNumberOfMessages"]
+	var count int
+	_, err = fmt.Sscanf(countStr, "%d", &count)
+	require.NoError(t, err, "invalid ApproximateNumberOfMessages value %q", countStr)
+	return count
+}
+
+// SendSQSMessage sends a message to an SQS queue.
+func (h *E2ETestHelper) SendSQSMessage(t *testing.T, queueURL, body string) {
+	t.Helper()
+
+	_, err := h.sqsClient.SendMessage(h.ctx, &sqs.SendMessageInput{
+		QueueUrl:    aws.String(queueURL),
+		MessageBody: aws.String(body),
+	})
+	require.NoError(t, err, "failed to send message to queue %s", queueURL)
 }
 
 // Cleanup performs any necessary cleanup after tests (currently a no-op but provided for future use)
