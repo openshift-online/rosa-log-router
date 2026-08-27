@@ -23,6 +23,40 @@ locals {
     Environment = var.environment
     StackType   = "api-stack"
   }
+
+  # Resource policy for the API.
+  #
+  # Public endpoints allow all principals. Private endpoints are deny-by-default:
+  # a single conditional Allow grants invocation only from allowed_vpc_id, and
+  # everything else falls to IAM's implicit deny.
+  # When allowed_vpc_id is "" the condition matches no real request, so the API
+  # is implicitly locked down entirely.
+  api_policy = var.private_endpoint ? jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "execute-api:Invoke"
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "aws:sourceVpc" = var.allowed_vpc_id
+          }
+        }
+      }
+    ]
+    }) : jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "execute-api:Invoke"
+        Resource  = "*"
+      }
+    ]
+  })
 }
 
 # Lambda Authorizer Function
@@ -97,20 +131,10 @@ resource "aws_api_gateway_rest_api" "tenant_management_api" {
   disable_execute_api_endpoint = var.enable_custom_domain
 
   endpoint_configuration {
-    types = ["REGIONAL"]
+    types = var.private_endpoint ? ["PRIVATE"] : ["REGIONAL"]
   }
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = "*"
-        Action    = "execute-api:Invoke"
-        Resource  = "*"
-      }
-    ]
-  })
+  policy = local.api_policy
 
   tags = local.common_tags
 }
@@ -802,16 +826,24 @@ resource "aws_acm_certificate_validation" "cert" {
 resource "aws_api_gateway_domain_name" "domain" {
   count = var.enable_custom_domain ? 1 : 0
 
-  domain_name              = local.domain_name
-  regional_certificate_arn = aws_acm_certificate_validation.cert[0].certificate_arn
+  domain_name = local.domain_name
+
+  # A PRIVATE custom domain takes certificate_arn
+  # REGIONAL custom domain takes regional_certificate_arn. The same public
+  # DNS-validated ACM cert works for both.
+  certificate_arn          = var.private_endpoint ? aws_acm_certificate_validation.cert[0].certificate_arn : null
+  regional_certificate_arn = var.private_endpoint ? null : aws_acm_certificate_validation.cert[0].certificate_arn
 
   endpoint_configuration {
-    types = ["REGIONAL"]
+    types = var.private_endpoint ? ["PRIVATE"] : ["REGIONAL"]
   }
 }
 
 resource "aws_route53_record" "api" {
-  count = var.enable_custom_domain ? 1 : 0
+  # Public/regional path only. On the private path the runtime alias for the
+  # vanity FQDN lives in the consumer account's PRIVATE hosted zone (pointing at
+  # the execute-api VPC endpoint), not in this public zone.
+  count = var.enable_custom_domain && !var.private_endpoint ? 1 : 0
 
   name    = local.domain_name
   type    = "A"
@@ -830,6 +862,10 @@ resource "aws_api_gateway_base_path_mapping" "api" {
   api_id      = aws_api_gateway_rest_api.tenant_management_api.id
   stage_name  = aws_api_gateway_stage.api_stage.stage_name
   domain_name = local.domain_name
+
+  # PRIVATE custom domain names are not globally unique, so their dependent
+  # resources are keyed by domain_name_id; REGIONAL domains are not.
+  domain_name_id = var.private_endpoint ? aws_api_gateway_domain_name.domain[0].domain_name_id : null
 
   depends_on = [aws_api_gateway_domain_name.domain]
 }

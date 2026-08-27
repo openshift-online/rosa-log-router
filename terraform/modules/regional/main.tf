@@ -59,4 +59,6 @@ module "api_stack" {
   api_gateway_cloudwatch_role_arn = var.api_gateway_cloudwatch_role_arn
   route53_zone_id                 = var.route53_zone_id
   base_domain                     = var.base_domain
+  private_endpoint                = var.private_endpoint
+  allowed_vpc_id                  = var.allowed_vpc_id
 }

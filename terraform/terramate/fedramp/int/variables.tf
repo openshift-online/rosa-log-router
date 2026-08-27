@@ -68,9 +68,16 @@ variable "api_image" {
   type        = string
 }
 
+variable "allowed_vpc_ids" {
+  description = "Per-region VPC id permitted to invoke the private API, matched against aws:sourceVpc in the resource policy. Keyed by AWS region (e.g. us-gov-west-1). Injected by CI/CD. A region absent from the map (or mapped to \"\") produces a deny-all lockdown policy for that region. Only used when private_endpoint is true."
+  type        = map(string)
+  default     = {}
+}
+
 variable "route53_zone_id" {
-  description = "Zone id of the customer domain"
+  description = "Zone id of the customer domain (public path only; unused for the private endpoint where DNS is owned by the consumer account)"
   type        = string
+  default     = ""
 }
 
 variable "base_domain" {

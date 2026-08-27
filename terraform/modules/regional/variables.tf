@@ -120,3 +120,15 @@ variable "base_domain" {
   type        = string
   default     = "devshift.net"
 }
+
+variable "private_endpoint" {
+  description = "Deploy the API Gateway as a PRIVATE REST API reachable only via an interface VPC endpoint."
+  type        = bool
+  default     = false
+}
+
+variable "allowed_vpc_id" {
+  description = "VPC id permitted to invoke the private API (matched against aws:sourceVpc). Empty produces a deny-all lockdown policy."
+  type        = string
+  default     = ""
+}
