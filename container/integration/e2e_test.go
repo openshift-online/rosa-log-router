@@ -5,9 +5,12 @@ package integration
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -348,4 +351,55 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 		require.Error(t, err, "Getting deleted config should return error")
 		t.Logf("✅ Deleted CloudWatch config for tenant: %s", tenantID)
 	})
+}
+
+// TestE2EChaosSTSFaultInjection verifies that the LocalStack Chaos API can
+// inject AccessDenied faults on STS AssumeRole, causing delivery failures.
+// This enables testing permission error handling without ENFORCE_IAM=1.
+func TestE2EChaosSTSFaultInjection(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+	defer helper.Cleanup(t)
+
+	// Inject STS AssumeRole AccessDenied fault
+	removeFault := helper.InjectSTSAccessDenied(t)
+	defer removeFault()
+
+	// Upload a log file for globex-industries (has CloudWatch delivery via STS)
+	podName := "chaos-test-pod"
+	testID, logData := helper.GenerateTestLog(Customer2ID, Customer2Service, podName)
+	t.Logf("Generated test log with UUID: %s (expecting delivery failure due to STS fault)", testID)
+
+	timestamp := time.Now().Unix()
+	s3Key := fmt.Sprintf("%s/%s/%s/%s/test-chaos-%d.json.gz",
+		TestClusterID, Customer2ID, Customer2Service, podName, timestamp)
+	helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+	t.Logf("Waiting %v for log processing (with STS fault active)...", ProcessingWaitTime)
+	time.Sleep(ProcessingWaitTime)
+
+	// CloudWatch delivery should fail because AssumeRole returns AccessDenied.
+	// Verify the log was NOT delivered to CloudWatch (delivery failed).
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		// Short poll — we expect NOT to find the message
+		time.Sleep(2 * time.Second)
+	}
+
+	// Try to find the message in CloudWatch — it should NOT be there
+	found := false
+	resp, err := helper.cwLogsClient.GetLogEvents(helper.ctx, &cloudwatchlogs.GetLogEventsInput{
+		LogGroupName:  aws.String(helper.Customer2LogGroup()),
+		LogStreamName: aws.String(podName),
+		Limit:         aws.Int32(100),
+	})
+	if err == nil && resp.Events != nil {
+		for _, event := range resp.Events {
+			if event.Message != nil && strings.Contains(*event.Message, testID) {
+				found = true
+			}
+		}
+	}
+
+	require.False(t, found, "CloudWatch delivery should have failed due to STS fault — message should NOT be in log group")
+	t.Logf("✅ Chaos fault injection verified — STS AccessDenied prevented CloudWatch delivery")
 }

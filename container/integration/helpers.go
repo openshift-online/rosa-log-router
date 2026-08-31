@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
@@ -410,6 +412,70 @@ func (h *E2ETestHelper) APIGatewayEndpoint() string {
 func (h *E2ETestHelper) APIPSK() string {
 	// Use the default test PSK
 	return "test-psk-localstack-do-not-use-in-production"
+}
+
+// ChaosRule defines a LocalStack Chaos API fault injection rule.
+type ChaosRule struct {
+	Service     string     `json:"service"`
+	Operation   string     `json:"operation,omitempty"`
+	Region      string     `json:"region,omitempty"`
+	Probability float64    `json:"probability"`
+	Error       ChaosError `json:"error"`
+}
+
+type ChaosError struct {
+	StatusCode int    `json:"statusCode"`
+	Code       string `json:"code"`
+}
+
+// InjectFault adds a fault injection rule via the LocalStack Chaos API.
+// Returns a cleanup function that removes the fault — use with defer.
+func (h *E2ETestHelper) InjectFault(t *testing.T, rules []ChaosRule) func() {
+	t.Helper()
+
+	body, err := json.Marshal(rules)
+	require.NoError(t, err)
+
+	resp, err := http.Post(h.localstackURL+"/_localstack/chaos/faults", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"failed to inject fault: %s", string(respBody))
+
+	t.Logf("Injected chaos fault: %s", string(body))
+
+	return func() {
+		req, err := http.NewRequest(http.MethodDelete, h.localstackURL+"/_localstack/chaos/faults", bytes.NewReader(body))
+		if err != nil {
+			t.Logf("warning: failed to create fault cleanup request: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Logf("warning: failed to remove fault: %v", err)
+			return
+		}
+		resp.Body.Close()
+		t.Logf("Removed chaos fault")
+	}
+}
+
+// InjectSTSAccessDenied injects a 100% probability AccessDenied fault on
+// STS AssumeRole calls. Returns a cleanup function — use with defer.
+func (h *E2ETestHelper) InjectSTSAccessDenied(t *testing.T) func() {
+	t.Helper()
+	return h.InjectFault(t, []ChaosRule{{
+		Service:     "sts",
+		Operation:   "AssumeRole",
+		Probability: 1.0,
+		Error: ChaosError{
+			StatusCode: 403,
+			Code:       "AccessDenied",
+		},
+	}})
 }
 
 // Cleanup performs any necessary cleanup after tests (currently a no-op but provided for future use)
