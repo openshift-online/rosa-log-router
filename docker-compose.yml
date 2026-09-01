@@ -25,7 +25,7 @@ services:
       # Mount Docker/Podman socket so LocalStack can run Lambda containers
       # Default: Podman socket for local development (/run/user/1000/podman/podman.sock)
       # CI: Set DOCKER_SOCK=/var/run/docker.sock to use Docker socket
-      # Note: Update UID (1000) if your user ID is different (run: id -u)
+      # macOS: Use docker-compose.macos.yml override (auto-detected by Makefile)
       - ${DOCKER_SOCK:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock:Z
       # Share AWS credentials (for tflocal)
       - ./local-aws:/etc/localstack/init/ready.d
