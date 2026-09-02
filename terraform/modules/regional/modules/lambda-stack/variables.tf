@@ -42,3 +42,9 @@ variable "lambda_execution_role_arn" {
   description = "ARN of the global Lambda execution role"
   type        = string
 }
+
+variable "pagerduty_integration_url" {
+  description = "PagerDuty Events API v2 HTTPS endpoint for delivery failure alerts. When empty, the alarm is created but not routed to PagerDuty."
+  type        = string
+  default     = ""
+}

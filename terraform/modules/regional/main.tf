@@ -41,6 +41,7 @@ module "lambda_stack" {
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
   processor_image                   = var.processor_image
   lambda_execution_role_arn         = var.lambda_execution_role_arn
+  pagerduty_integration_url         = var.pagerduty_integration_url
 }
 
 # API Stack Module (Optional)

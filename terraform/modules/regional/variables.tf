@@ -132,3 +132,9 @@ variable "allowed_vpc_id" {
   type        = string
   default     = ""
 }
+
+variable "pagerduty_integration_url" {
+  description = "PagerDuty Events API v2 HTTPS endpoint for delivery failure alerts. Empty disables PagerDuty routing."
+  type        = string
+  default     = ""
+}

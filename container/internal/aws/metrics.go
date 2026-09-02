@@ -67,6 +67,17 @@ func (p *MetricsPublisher) PushMetrics(ctx context.Context, tenantID, method str
 		})
 	}
 
+	// Publish aggregate metrics without the Tenant dimension for fleet-wide alarming.
+	aggregates := make([]types.MetricDatum, 0, len(metricData))
+	for _, datum := range metricData {
+		aggregates = append(aggregates, types.MetricDatum{
+			MetricName: datum.MetricName,
+			Value:      datum.Value,
+			Unit:       datum.Unit,
+		})
+	}
+	metricData = append(metricData, aggregates...)
+
 	_, err := p.client.PutMetricData(ctx, &cloudwatch.PutMetricDataInput{
 		Namespace:  aws.String(MetricsNamespace),
 		MetricData: metricData,
