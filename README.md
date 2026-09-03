@@ -134,7 +134,7 @@ make validate-vector-flow
 
 ### 🚧 Proof-of-Concept Limitations
 - **Basic monitoring** - AWS native services only (no custom metrics/dashboards)
-- **Simple error handling** - DLQ and retry logic without advanced workflow
+- **Error handling** - Three-tier retry: main queue (transient), retry queue (permission errors with 2-hour backoff), DLQ (exhausted retries). Non-recoverable errors (missing bucket/key) are skipped at the delivery level.
 - **Regional deployment** - Manual multi-region setup required
 - **Minimal UI** - Configuration via API/CLI only
 

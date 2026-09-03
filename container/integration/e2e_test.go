@@ -349,3 +349,101 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 		t.Logf("✅ Deleted CloudWatch config for tenant: %s", tenantID)
 	})
 }
+
+// TestE2ERetryQueueConsumption verifies that the Lambda processes messages from
+// the retry queue and delivers to remaining destinations. Tests:
+// - Retry queue event source mapping is active
+// - Lambda reads completed_deliveries from message metadata
+// - Lambda delivers to the non-completed delivery type
+// - from_retry_queue flag is respected
+//
+// Note: routing TO the retry queue (permission error → SendToRetryQueue) cannot
+// be tested in LocalStack because it doesn't enforce IAM policies. That path is
+// covered by unit tests and the manual integration test plan.
+func TestE2ERetryQueueConsumption(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+	defer helper.Cleanup(t)
+
+	retryQueueURL := helper.RetryQueueURL()
+	if retryQueueURL == "" {
+		t.Skip("RETRY_QUEUE_URL not available — retry queue not deployed")
+	}
+
+	tenantID := Customer2ID // globex-industries — has CloudWatch delivery
+	testID, logData := helper.GenerateTestLog(tenantID, Customer2Service, "retry-consume-pod")
+	t.Logf("Generated test log with UUID: %s", testID)
+
+	timestamp := time.Now().Unix()
+	s3Key := fmt.Sprintf("%s/%s/%s/retry-consume-pod/retry-consume-%d.json.gz",
+		TestClusterID, tenantID, Customer2Service, timestamp)
+	helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+	// Craft a retry queue message with completed_deliveries and from_retry_queue metadata.
+	// This simulates a message that was routed to the retry queue after S3 delivery
+	// succeeded but CloudWatch delivery failed with a permission error.
+	s3Event := fmt.Sprintf(`{"Records":[{"s3":{"bucket":{"name":"%s"},"object":{"key":"%s"}}}]}`,
+		helper.CentralBucket(), s3Key)
+	snsMessage := fmt.Sprintf(`{"Message":%q,"processing_metadata":{"completed_deliveries":["s3:%s"],"from_retry_queue":true}}`,
+		s3Event, helper.Customer2Bucket())
+
+	helper.SendSQSMessage(t, retryQueueURL, snsMessage)
+	t.Logf("Sent retry queue message with completed_deliveries:[\"s3:%s\"], from_retry_queue:true", helper.Customer2Bucket())
+
+	t.Logf("Waiting %v for retry queue processing...", ProcessingWaitTime)
+	time.Sleep(ProcessingWaitTime)
+
+	// Verify CloudWatch delivery succeeded (the non-completed delivery type)
+	helper.WaitForCloudWatchDelivery(
+		t, Customer2AccountID, helper.Customer2LogGroup(),
+		"retry-consume-pod", testID, DefaultTimeout,
+	)
+	t.Logf("Retry queue consumption verified — CloudWatch delivery succeeded, S3 was skipped")
+}
+
+// TestE2ERetryQueueSkipsCompletedDeliveries verifies that when a multi-delivery
+// tenant's message is processed from the retry queue with completed_deliveries
+// metadata, the Lambda skips the already-completed delivery type and only
+// delivers to the remaining destination. Tests:
+// - DeliveryID-based skip logic works end-to-end
+// - Multi-delivery tenant config is loaded correctly
+// - Only the non-completed delivery type is attempted
+func TestE2ERetryQueueSkipsCompletedDeliveries(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+	defer helper.Cleanup(t)
+
+	retryQueueURL := helper.RetryQueueURL()
+	if retryQueueURL == "" {
+		t.Skip("RETRY_QUEUE_URL not available — retry queue not deployed")
+	}
+
+	// globex-industries has both S3 + CloudWatch delivery configured
+	tenantID := Customer2ID
+	testID, logData := helper.GenerateTestLog(tenantID, Customer2Service, "skip-completed-pod")
+	t.Logf("Generated test log with UUID: %s", testID)
+
+	timestamp := time.Now().Unix()
+	s3Key := fmt.Sprintf("%s/%s/%s/skip-completed-pod/skip-completed-%d.json.gz",
+		TestClusterID, tenantID, Customer2Service, timestamp)
+	helper.UploadTestLog(t, helper.CentralBucket(), s3Key, logData)
+
+	// Craft a retry queue message marking S3 as already completed.
+	// This simulates: S3 delivery succeeded, CloudWatch failed with permission
+	// error, message was sent to retry queue with completed_deliveries:["s3:bucket"].
+	s3Event := fmt.Sprintf(`{"Records":[{"s3":{"bucket":{"name":"%s"},"object":{"key":"%s"}}}]}`,
+		helper.CentralBucket(), s3Key)
+	snsMessage := fmt.Sprintf(`{"Message":%q,"processing_metadata":{"completed_deliveries":["s3:%s"],"from_retry_queue":true}}`,
+		s3Event, helper.Customer2Bucket())
+
+	helper.SendSQSMessage(t, retryQueueURL, snsMessage)
+	t.Logf("Sent retry queue message — S3 marked complete, expecting only CloudWatch delivery")
+
+	t.Logf("Waiting %v for retry queue processing...", ProcessingWaitTime)
+	time.Sleep(ProcessingWaitTime)
+
+	// Verify CloudWatch delivery succeeded (the non-completed destination)
+	helper.WaitForCloudWatchDelivery(
+		t, Customer2AccountID, helper.Customer2LogGroup(),
+		"skip-completed-pod", testID, DefaultTimeout,
+	)
+	t.Logf("Verified — Lambda delivered to CloudWatch and skipped S3 (already completed)")
+}

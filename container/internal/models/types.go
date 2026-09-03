@@ -30,6 +30,23 @@ type DeliveryConfig struct {
 	BucketPrefix           string   `json:"bucket_prefix,omitempty" dynamodbav:"bucket_prefix,omitempty"`
 }
 
+// DeliveryID returns a stable identifier for this delivery configuration,
+// combining the type with the destination to distinguish multiple configs
+// of the same type (e.g., two S3 destinations for one tenant).
+func (c *DeliveryConfig) DeliveryID() string {
+	switch c.Type {
+	case "s3":
+		if c.BucketName != "" {
+			return c.Type + ":" + c.BucketName
+		}
+	case "cloudwatch":
+		if c.LogGroupName != "" {
+			return c.Type + ":" + c.LogGroupName
+		}
+	}
+	return c.Type
+}
+
 func (c *DeliveryConfig) ApplicationEnabled(applicationName string) bool {
 	// No desired logs specified - process all applications
 	if len(c.DesiredLogs) == 0 {
@@ -54,6 +71,12 @@ type ProcessingMetadata struct {
 	RetryCount            int       `json:"retry_count"`
 	OriginalReceiptHandle string    `json:"original_receipt_handle"`
 	RequeuedAt            time.Time `json:"requeued_at,omitempty"`
+	CompletedDeliveries   []string  `json:"completed_deliveries,omitempty"`
+	FromRetryQueue        bool      `json:"from_retry_queue,omitempty"`
+}
+
+func (m *ProcessingMetadata) IsDeliveryCompleted(deliveryType string) bool {
+	return slices.Contains(m.CompletedDeliveries, deliveryType)
 }
 
 // DeliveryStats tracks delivery success/failure statistics
@@ -114,6 +137,7 @@ type Config struct {
 	RetryAttempts                 int
 	CentralLogDistributionRoleArn string
 	SQSQueueURL                   string
+	RetryQueueURL                 string
 	AWSRegion                     string
 	ExecutionMode                 string // lambda, sqs, manual, scan
 	SourceBucket                  string // For scan mode

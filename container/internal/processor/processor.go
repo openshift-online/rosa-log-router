@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -174,11 +175,13 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 		return err
 	}
 
-	// Process each delivery configuration independently with its own filtering
+	completedDeliveries := slices.Clone(metadata.CompletedDeliveries)
+	var permissionErr error
+	var transientErr error
+
 	for _, deliveryConfig := range deliveryConfigs {
 		deliveryType := deliveryConfig.Type
 
-		// Check if this application should be processed based on this config's desired_logs filtering
 		if !deliveryConfig.ApplicationEnabled(tenantInfo.Application) {
 			p.logger.Info("skipping delivery for application due to desired_logs filtering",
 				"delivery_type", deliveryType,
@@ -186,13 +189,21 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 			continue
 		}
 
-		// This specific delivery config should process this application
+		if metadata.IsDeliveryCompleted(deliveryConfig.DeliveryID()) {
+			// tenant_id and delivery_id are operational identifiers (namespace, bucket name),
+			// not PII — logged throughout the codebase for observability.
+			p.logger.Info("skipping already-completed delivery",
+				"delivery_id", deliveryConfig.DeliveryID(),
+				"tenant_id", tenantInfo.TenantID)
+			deliveryStats.SuccessfulDeliveries++
+			continue
+		}
+
 		p.logger.Info("processing delivery",
 			"tenant_id", tenantInfo.TenantID,
 			"delivery_type", deliveryType,
 			"application", tenantInfo.Application)
 
-		// Deliver logs based on delivery type
 		if err := p.deliverLogs(ctx, bucketName, objectKey, deliveryType, deliveryConfig, tenantInfo, metadata); err != nil {
 			p.logger.Error("failed to deliver logs",
 				"tenant_id", tenantInfo.TenantID,
@@ -200,20 +211,63 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 				"error", err)
 			deliveryStats.FailedDeliveries++
 
-			// For CloudWatch failures, try to re-queue with offset if possible
-			if deliveryType == "cloudwatch" && receiptHandle != "" && p.config.SQSQueueURL != "" {
-				if err := RequeueSQSMessageWithOffset(ctx, p.sqsClient, p.config.SQSQueueURL, messageBody, receiptHandle, metadata.Offset, 3, p.logger); err != nil {
-					p.logger.Error("failed to re-queue message", "error", err)
-				} else {
-					p.logger.Info("re-queued message for retry", "offset", metadata.Offset)
-				}
+			if models.IsNonRecoverable(err) {
+				p.logger.Warn("non-recoverable delivery error, skipping",
+					"delivery_type", deliveryType,
+					"error", err)
+				continue
 			}
 
-			// Continue with other delivery types even if one fails
+			if models.IsPermissionError(err) {
+				permissionErr = err
+			} else {
+				transientErr = err
+			}
 			continue
 		}
 
+		completedDeliveries = append(completedDeliveries, deliveryConfig.DeliveryID())
 		deliveryStats.SuccessfulDeliveries++
+	}
+
+	// Transient errors take priority — they need fast retry via main queue.
+	// Permission errors persist and will route to retry queue on the next
+	// attempt once only permission errors remain.
+	// Note: completed_deliveries is message-scoped. S3 event notifications via
+	// SNS produce one S3 record per SQS message, so this is effectively per-object.
+	if transientErr != nil && receiptHandle != "" && p.config.SQSQueueURL != "" {
+		if err := RequeueSQSMessageWithOffset(ctx, p.sqsClient, p.config.SQSQueueURL, messageBody, receiptHandle, metadata.Offset, 3, completedDeliveries, p.logger); err != nil {
+			p.logger.Error("failed to re-queue message", "error", err)
+			return fmt.Errorf("failed to re-queue transient delivery error: %w", err)
+		}
+		return nil
+	}
+
+	if permissionErr != nil {
+		if metadata.FromRetryQueue {
+			newDeliverySucceeded := len(completedDeliveries) > len(metadata.CompletedDeliveries)
+			if newDeliverySucceeded && p.config.RetryQueueURL != "" && receiptHandle != "" {
+				p.logger.Info("delivery state changed on retry queue — updating metadata",
+					"completed_deliveries", completedDeliveries)
+				if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
+					p.logger.Error("failed to update retry queue message, falling back to SQS native retry", "error", err)
+					return fmt.Errorf("permission error on delivery (retry): %w", permissionErr)
+				}
+				return nil
+			}
+			p.logger.Warn("permission error persists on retry queue message, letting SQS native retry handle it",
+				"error", permissionErr)
+			return fmt.Errorf("permission error on delivery (retry): %w", permissionErr)
+		}
+		if receiptHandle != "" && p.config.RetryQueueURL != "" {
+			if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
+				p.logger.Error("failed to send to retry queue, falling back to BatchItemFailure", "error", err)
+				return fmt.Errorf("permission error on delivery: %w", permissionErr)
+			}
+			return nil
+		}
+		p.logger.Warn("permission error with no retry queue configured, falling back to BatchItemFailure")
+		return fmt.Errorf("permission error on delivery: %w", permissionErr)
 	}
 
 	return nil

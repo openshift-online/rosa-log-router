@@ -417,6 +417,7 @@ resource "aws_lambda_function" "central_log_distributor" {
       RETRY_ATTEMPTS                    = "3"
       CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = aws_iam_role.central_log_distribution_role.arn
       SQS_QUEUE_URL                     = module.central_sqs_stack.log_delivery_queue_url
+      RETRY_QUEUE_URL                   = module.central_sqs_stack.log_delivery_retry_queue_url
       EXECUTION_MODE                    = "lambda"
       LOG_LEVEL                         = "DEBUG"
     }
@@ -431,6 +432,18 @@ resource "aws_lambda_event_source_mapping" "central_sqs_to_lambda" {
   provider = aws.central
 
   event_source_arn                   = module.central_sqs_stack.log_delivery_queue_arn
+  function_name                      = aws_lambda_function.central_log_distributor[0].arn
+  batch_size                         = 10
+  maximum_batching_window_in_seconds = 5
+  function_response_types            = ["ReportBatchItemFailures"]
+}
+
+# Event source mapping: Retry Queue -> Lambda
+resource "aws_lambda_event_source_mapping" "central_retry_queue_to_lambda" {
+  count    = var.deploy_lambda ? 1 : 0
+  provider = aws.central
+
+  event_source_arn                   = module.central_sqs_stack.log_delivery_retry_queue_arn
   function_name                      = aws_lambda_function.central_log_distributor[0].arn
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5

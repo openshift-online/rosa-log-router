@@ -51,8 +51,12 @@ spec:
             configMapKeyRef:
               name: log-processor-config
               key: RETRY_ATTEMPTS
-        # These will be provided by overlay patches
+        # These will be provided by overlay patches.
+        # RETRY_QUEUE_URL is optional — when empty, permission errors fall back
+        # to BatchItemFailure (SQS native retry). Set by Lambda terraform in production.
         - name: SQS_QUEUE_URL
+          value: ""
+        - name: RETRY_QUEUE_URL
           value: ""
         - name: TENANT_CONFIG_TABLE
           value: ""
