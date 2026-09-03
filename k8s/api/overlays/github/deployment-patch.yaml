@@ -10,10 +10,11 @@ spec:
       - name: api
         image: tenant-config-api:github-actions
         imagePullPolicy: Never
+        # Invoke uvicorn from the venv baked into the image directly. Using
+        # "uv run" would make uv write to its cache/venv, which fails under the
+        # read-only root filesystem.
         command:
-        - uv
-        - run
-        - uvicorn
+        - /app/.venv/bin/uvicorn
         - src.app:app
         - --host
         - "0.0.0.0"
