@@ -46,10 +46,11 @@ graph LR
 ## 🎯 Quick Start
 
 ### Prerequisites for Local Development
-- **Podman** for container builds and LocalStack
+- **Docker or Podman** for container builds and LocalStack (auto-detected by Makefile)
 - **Go 1.21+** for log processor development
 - **Terraform** for infrastructure as code
 - **Make** for development workflow automation
+- **GNU coreutils** (macOS only: `brew install coreutils` — provides `timeout`)
 - **kubectl** (optional, for cluster deployments)
 
 ### 1. Local Development with LocalStack
