@@ -120,7 +120,7 @@ func TestS3DelivererErrorClassification(t *testing.T) {
 		{
 			name:             "no_such_bucket",
 			errorMsg:         "NoSuchBucket: The specified bucket does not exist",
-			isNonRecoverable: true,
+			isNonRecoverable: false, // Changed: customer can recreate bucket, should retry
 		},
 		{
 			name:             "access_denied",
@@ -152,9 +152,9 @@ func TestS3DelivererErrorClassification(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Test the error classification logic used in DeliverLogs
-			// AccessDenied is recoverable (routed to retry queue for slow retry)
-			isNonRecoverable := strings.Contains(tc.errorMsg, "NoSuchBucket") ||
-				strings.Contains(tc.errorMsg, "NoSuchKey")
+			// NoSuchBucket (destination) and AccessDenied are customer-fixable (retry queue)
+			// Only NoSuchKey (source) is truly non-recoverable
+			isNonRecoverable := strings.Contains(tc.errorMsg, "NoSuchKey")
 
 			assert.Equal(t, tc.isNonRecoverable, isNonRecoverable,
 				"Error classification mismatch for: %s", tc.errorMsg)

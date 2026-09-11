@@ -230,46 +230,69 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 		deliveryStats.SuccessfulDeliveries++
 	}
 
-	// Transient errors take priority — they need fast retry via main queue.
-	// Permission errors persist and will route to retry queue on the next
-	// attempt once only permission errors remain.
-	// Note: completed_deliveries is message-scoped. S3 event notifications via
-	// SNS produce one S3 record per SQS message, so this is effectively per-object.
-	if transientErr != nil && receiptHandle != "" && p.config.SQSQueueURL != "" {
-		if err := RequeueSQSMessageWithOffset(ctx, p.sqsClient, p.config.SQSQueueURL, messageBody, receiptHandle, metadata.Offset, 3, completedDeliveries, p.logger); err != nil {
-			p.logger.Error("failed to re-queue message", "error", err)
-			return fmt.Errorf("failed to re-queue transient delivery error: %w", err)
+	// Performance-optimized error routing:
+	// Only call SendMessage when metadata needs updating OR first permission error from main queue.
+	// Otherwise use native SQS retry (return error, stays in same queue).
+	// This eliminates ~150ms SendMessage overhead for "no progress" retries.
+
+	// Check if any new deliveries succeeded (metadata changed)
+	metadataChanged := len(completedDeliveries) > len(metadata.CompletedDeliveries)
+
+	if metadataChanged {
+		// Partial success - metadata needs updating
+		if permissionErr != nil {
+			// Has permission errors - route to retry queue with updated metadata
+			if receiptHandle != "" && p.config.RetryQueueURL != "" {
+				p.logger.Info("partial success with permission errors, updating retry queue metadata",
+					"completed_deliveries", completedDeliveries)
+				if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
+					// Critical: SendMessage failed after successful delivery - duplicates possible!
+					p.logger.Error("CRITICAL: failed to requeue after partial success, duplicates possible",
+						"completed_deliveries", completedDeliveries,
+						"error", err)
+					return fmt.Errorf("failed to requeue after partial success: %w", err)
+				}
+				return nil
+			}
+		}
+		// Partial success with only transient errors (or no errors on remaining targets)
+		// Note: We don't requeue transient errors to main queue - just use native retry
+		// The metadata will be lost, but that's acceptable since transient errors should resolve quickly
+		p.logger.Info("partial success with transient/no errors, using native SQS retry",
+			"completed_deliveries", completedDeliveries)
+		if transientErr != nil {
+			return fmt.Errorf("transient error after partial success: %w", transientErr)
 		}
 		return nil
 	}
 
+	// No metadata change (no new successes)
 	if permissionErr != nil {
-		if metadata.FromRetryQueue {
-			newDeliverySucceeded := len(completedDeliveries) > len(metadata.CompletedDeliveries)
-			if newDeliverySucceeded && p.config.RetryQueueURL != "" && receiptHandle != "" {
-				p.logger.Info("delivery state changed on retry queue — updating metadata",
-					"completed_deliveries", completedDeliveries)
+		if !metadata.FromRetryQueue {
+			// First permission error from main queue - route to retry queue for 2hr visibility
+			if receiptHandle != "" && p.config.RetryQueueURL != "" {
+				p.logger.Info("first permission error from main queue, routing to retry queue")
 				if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
-					p.logger.Error("failed to update retry queue message, falling back to SQS native retry", "error", err)
-					return fmt.Errorf("permission error on delivery (retry): %w", permissionErr)
+					p.logger.Error("failed to send to retry queue, falling back to native retry", "error", err)
+					return fmt.Errorf("permission error on delivery: %w", permissionErr)
 				}
 				return nil
 			}
-			p.logger.Warn("permission error persists on retry queue message, letting SQS native retry handle it",
-				"error", permissionErr)
-			return fmt.Errorf("permission error on delivery (retry): %w", permissionErr)
+			p.logger.Warn("permission error with no retry queue configured, using native retry")
+			return fmt.Errorf("permission error on delivery: %w", permissionErr)
 		}
-		if receiptHandle != "" && p.config.RetryQueueURL != "" {
-			if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
-				p.logger.Error("failed to send to retry queue, falling back to BatchItemFailure", "error", err)
-				return fmt.Errorf("permission error on delivery: %w", permissionErr)
-			}
-			return nil
-		}
-		p.logger.Warn("permission error with no retry queue configured, falling back to BatchItemFailure")
-		return fmt.Errorf("permission error on delivery: %w", permissionErr)
+		// Permission error from retry queue, no progress - use native SQS retry (stays in retry queue)
+		p.logger.Info("permission error from retry queue with no progress, using native SQS retry (2hr visibility)")
+		return fmt.Errorf("permission error on delivery (retry queue, no progress): %w", permissionErr)
 	}
 
+	if transientErr != nil {
+		// Transient error, no progress - use native SQS retry (stays in current queue)
+		p.logger.Info("transient error with no progress, using native SQS retry")
+		return fmt.Errorf("transient error on delivery: %w", transientErr)
+	}
+
+	// No errors - success
 	return nil
 }
 

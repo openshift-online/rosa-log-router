@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"github.com/openshift/rosa-log-router/internal/models"
 )
@@ -127,14 +129,22 @@ func (d *S3Deliverer) DeliverLogs(ctx context.Context, sourceBucket, sourceKey s
 	})
 
 	if err != nil {
-		// Handle specific S3 errors
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "NoSuchBucket") {
-			return models.NewNonRecoverableError(fmt.Sprintf("destination S3 bucket '%s' does not exist", destinationBucket))
-		} else if strings.Contains(errMsg, "AccessDenied") {
-			return fmt.Errorf("access denied to S3 bucket '%s': %w", destinationBucket, err)
-		} else if strings.Contains(errMsg, "NoSuchKey") {
+		// Handle specific S3 errors using typed error checking
+		var noSuchBucket *types.NoSuchBucket
+		var noSuchKey *types.NoSuchKey
+		var apiErr smithy.APIError
+
+		if errors.As(err, &noSuchBucket) {
+			// NoSuchBucket from CopyObject means destination bucket doesn't exist
+			// This is customer-fixable (they can recreate the bucket) so route to retry queue
+			// to give them time to fix it (2hr visibility timeout)
+			return fmt.Errorf("destination S3 bucket '%s' does not exist (customer can recreate): %w", destinationBucket, err)
+		} else if errors.As(err, &noSuchKey) {
+			// Source object already deleted/processed - non-recoverable
 			return models.NewNonRecoverableError(fmt.Sprintf("source S3 object s3://%s/%s not found", sourceBucket, sourceKey))
+		} else if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
+			// Customer can fix IAM permissions, route to retry queue
+			return fmt.Errorf("access denied to S3 bucket '%s': %w", destinationBucket, err)
 		}
 
 		// For other errors, treat as recoverable (temporary issues)
