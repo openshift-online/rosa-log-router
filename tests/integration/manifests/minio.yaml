@@ -49,6 +49,7 @@ spec:
       containers:
       - name: minio
         image: minio/minio:latest
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/bash
         - -c
@@ -111,6 +112,7 @@ spec:
       containers:
       - name: mc
         image: minio/mc:latest
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/bash
         - -c
