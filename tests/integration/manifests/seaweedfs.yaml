@@ -1,12 +1,12 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: minio-credentials
+  name: s3-credentials
   namespace: logging
 type: Opaque
 stringData:
-  access-key: "minioadmin"
-  secret-key: "minioadmin"
+  access-key: "admin"
+  secret-key: "admin123"
 
 ---
 apiVersion: v1
@@ -15,74 +15,76 @@ metadata:
   name: minio
   namespace: logging
   labels:
-    app: minio
+    app: s3-storage
 spec:
   selector:
-    app: minio
+    app: s3-storage
   ports:
-  - name: api
+  - name: s3-api
     port: 9000
-    targetPort: 9000
-  - name: console
-    port: 9001
-    targetPort: 9001
+    targetPort: 8333
   type: ClusterIP
 
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: minio
+  name: s3-storage
   namespace: logging
   labels:
-    app: minio
+    app: s3-storage
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: minio
+      app: s3-storage
   template:
     metadata:
       labels:
-        app: minio
+        app: s3-storage
     spec:
       containers:
-      - name: minio
-        image: minio/minio:latest
+      - name: seaweedfs
+        image: chrislusf/seaweedfs:latest
+        imagePullPolicy: IfNotPresent
         command:
-        - /bin/bash
-        - -c
+        - /usr/bin/weed
         args:
-        - minio server /data --console-address ":9001"
+        - server
+        - -s3
+        - -s3.port=8333
+        - -dir=/data
         env:
-        - name: MINIO_ROOT_USER
+        - name: WEED_S3_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: s3-credentials
               key: access-key
-        - name: MINIO_ROOT_PASSWORD
+        - name: WEED_S3_SECRET_KEY
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: s3-credentials
               key: secret-key
         ports:
-        - containerPort: 9000
-          name: api
-        - containerPort: 9001
-          name: console
+        - containerPort: 8333
+          name: s3-api
+        - containerPort: 9333
+          name: master
+        - containerPort: 8080
+          name: volume
         volumeMounts:
         - name: data
           mountPath: /data
         readinessProbe:
           httpGet:
-            path: /minio/health/ready
-            port: 9000
+            path: /
+            port: 9333
           initialDelaySeconds: 10
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /minio/health/live
-            port: 9000
+            path: /
+            port: 9333
           initialDelaySeconds: 30
           periodSeconds: 10
         resources:
@@ -100,52 +102,49 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minio-setup
+  name: s3-setup
   namespace: logging
   labels:
-    app: minio-setup
+    app: s3-setup
 spec:
   template:
     spec:
       restartPolicy: Never
       containers:
-      - name: mc
-        image: minio/mc:latest
+      - name: aws-cli
+        image: amazon/aws-cli:latest
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/bash
         - -c
         args:
         - |
-          # Wait for MinIO to be ready
-          until mc alias set minio http://minio:9000 minioadmin minioadmin; do
-            echo "Waiting for MinIO to be ready..."
+          # Configure AWS CLI for SeaweedFS
+          aws configure set aws_access_key_id admin
+          aws configure set aws_secret_access_key admin123
+          aws configure set region us-east-1
+
+          # Wait for S3 service to be ready
+          until aws s3 ls --endpoint-url=http://minio:9000 2>/dev/null; do
+            echo "Waiting for S3 service to be ready..."
             sleep 5
           done
-          
+
           # Create source bucket (where Vector writes logs)
-          mc mb minio/test-logs --ignore-existing
+          aws s3 mb s3://test-logs --endpoint-url=http://minio:9000 || true
           echo "Created source bucket: test-logs"
-          
+
           # Create destination buckets (where processor copies logs)
-          mc mb minio/customer-logs --ignore-existing
+          aws s3 mb s3://customer-logs --endpoint-url=http://minio:9000 || true
           echo "Created destination bucket: customer-logs"
-          
-          mc mb minio/acme-corp-logs --ignore-existing
+
+          aws s3 mb s3://acme-corp-logs --endpoint-url=http://minio:9000 || true
           echo "Created destination bucket: acme-corp-logs"
-          
-          mc mb minio/multi-delivery-bucket --ignore-existing
+
+          aws s3 mb s3://multi-delivery-bucket --endpoint-url=http://minio:9000 || true
           echo "Created destination bucket: multi-delivery-bucket"
-          
-          # Set bucket policies to allow read/write access
-          mc anonymous set download minio/test-logs
-          mc anonymous set download minio/customer-logs
-          mc anonymous set download minio/acme-corp-logs
-          mc anonymous set download minio/multi-delivery-bucket
-          
-          echo "MinIO setup complete with source and destination buckets"
-        env:
-        - name: MC_HOST_minio
-          value: "http://minioadmin:minioadmin@minio:9000"
+
+          echo "S3 setup complete with source and destination buckets"
         resources:
           requests:
             memory: "64Mi"
