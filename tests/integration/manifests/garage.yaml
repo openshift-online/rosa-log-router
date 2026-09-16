@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+  namespace: logging
+data:
+  garage.toml: |
+    metadata_dir = "/tmp/meta"
+    data_dir = "/tmp/data"
+
+    # Single-node test setup (v2.4.1 format)
+    # For single-node, replication_factor=1 means no replication
+    # consistency_mode is only needed when replication_factor > 1
+    replication_factor = 1
+
+    rpc_bind_addr = "[::]:3901"
+    rpc_public_addr = "[::]:3901"
+    rpc_secret = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+    [s3_api]
+    s3_region = "us-east-1"
+    api_bind_addr = "[::]:3900"
+    root_domain = ".s3.garage.localhost"
+
+    [s3_web]
+    bind_addr = "[::]:3902"
+    root_domain = ".web.garage.localhost"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: logging
+  labels:
+    app: s3-storage
+spec:
+  selector:
+    app: s3-storage
+  ports:
+  - name: s3-api
+    port: 9000
+    targetPort: 3900
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-storage
+  namespace: logging
+  labels:
+    app: s3-storage
+spec:
+  selector:
+    app: s3-storage
+  ports:
+  - name: s3-api
+    port: 3900
+    targetPort: 3900
+  - name: rpc
+    port: 3901
+    targetPort: 3901
+  - name: admin
+    port: 3903
+    targetPort: 3903
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3-storage
+  namespace: logging
+  labels:
+    app: s3-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: s3-storage
+  template:
+    metadata:
+      labels:
+        app: s3-storage
+    spec:
+      containers:
+      - name: garage
+        image: dxflrs/garage:v2.4.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - /garage
+        args:
+        - -c
+        - /etc/garage.toml
+        - server
+        env:
+        - name: RUST_LOG
+          value: "garage=info"
+        ports:
+        - containerPort: 3900
+          name: s3-api
+        - containerPort: 3901
+          name: rpc
+        - containerPort: 3902
+          name: web
+        - containerPort: 3903
+          name: admin
+        volumeMounts:
+        - name: config
+          mountPath: /etc/garage.toml
+          subPath: garage.toml
+        - name: data
+          mountPath: /tmp/data
+        - name: meta
+          mountPath: /tmp/meta
+        # Readiness/liveness probes disabled - Garage /health returns non-200 until configured
+        # The setup job will configure Garage, then we can rely on service availability
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: config
+        configMap:
+          name: garage-config
+      - name: data
+        emptyDir: {}
+      - name: meta
+        emptyDir: {}
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-setup
+  namespace: logging
+  labels:
+    app: s3-setup
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: garage-setup
+        image: alpine:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: GARAGE_RPC_SECRET
+          value: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+        - name: GARAGE_RPC_HOST
+          value: "s3-storage:3901"
+        command:
+        - sh
+        - -c
+        args:
+        - |
+          set -ex
+
+          # Install AWS CLI for S3 operations
+          apk add --no-cache aws-cli
+
+          # Configure AWS CLI for Garage
+          export AWS_ACCESS_KEY_ID=testadmin
+          export AWS_SECRET_ACCESS_KEY=testadmin
+          export AWS_DEFAULT_REGION=us-east-1
+
+          # Wait for S3 API to be accessible and create buckets
+          # Garage in single-node mode (replication_factor=1) accepts S3 requests immediately
+          echo "Waiting for Garage S3 API and creating buckets..."
+          for i in $(seq 1 60); do
+            echo "Attempt $i: Creating buckets via S3 API..."
+
+            CREATED=0
+            for bucket in test-logs customer-logs acme-corp-logs multi-delivery-bucket; do
+              if aws s3 mb "s3://$bucket" --endpoint-url=http://s3-storage:3900 2>&1; then
+                echo "✓ Created bucket: $bucket"
+                CREATED=$((CREATED + 1))
+              fi
+            done
+
+            if [ $CREATED -eq 4 ]; then
+              echo "All buckets created successfully!"
+              exit 0
+            fi
+
+            echo "Waiting 5 seconds before retry..."
+            sleep 5
+          done
+
+          echo "Failed to create all buckets after 60 attempts"
+          exit 1
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "100m"

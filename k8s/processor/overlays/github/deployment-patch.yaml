@@ -17,9 +17,9 @@ spec:
         - name: AWS_ENDPOINT_URL_DYNAMODB
           value: "http://dynamodb-local:8000"
         - name: AWS_ACCESS_KEY_ID
-          value: "minioadmin"
+          value: "testadmin"
         - name: AWS_SECRET_ACCESS_KEY
-          value: "minioadmin"
+          value: "testadmin"
         - name: SQS_QUEUE_URL
           value: "dummy-sqs-url"
         - name: TENANT_CONFIG_TABLE

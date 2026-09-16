@@ -38,7 +38,7 @@ Real-world testing against actual services using DynamoDB Local in Minikube:
 - **Kubernetes Manifests** (`tests/integration/manifests/`):
   - `dynamodb-local.yaml` - DynamoDB Local deployment
   - `fake-log-generator.yaml` - Multi-replica log generators
-  - `minio.yaml` - S3-compatible storage for testing
+  - `garage.yaml` - Garage S3-compatible storage for testing
 
 ### 3. **SQS Message Handling Tests** (`tests/`)
 Focused tests for SQS message processing and error handling:
@@ -133,7 +133,7 @@ The repository includes comprehensive end-to-end integration tests that run auto
 
 ### Complete Pipeline Testing
 1. **Minikube Setup** - Kubernetes cluster with proper networking
-2. **MinIO Deployment** - S3-compatible storage for log delivery testing  
+2. **Garage S3 Deployment** - S3-compatible storage for log delivery testing
 3. **DynamoDB Local** - Real DynamoDB for tenant configuration testing
 4. **Fake Log Generators** - Mixed format log generation (60% plain text, 40% JSON)
 5. **Vector Collector** - Full Vector pipeline with intelligent JSON parsing
@@ -142,7 +142,7 @@ The repository includes comprehensive end-to-end integration tests that run auto
 
 ### Test Validation
 The GitHub Actions workflow verifies:
-- ✅ Log directory structure creation in MinIO (`test-cluster/default/fake-log-generator/`)
+- ✅ Log directory structure creation in Garage S3 (`test-cluster/default/fake-log-generator/`)
 - ✅ Compressed log file generation (`.json.gz` objects)
 - ✅ Multi-pod log collection from 2 replica fake log generators
 - ✅ Vector's intelligent parsing of mixed plain text and JSON logs
@@ -150,8 +150,8 @@ The GitHub Actions workflow verifies:
 - ✅ API integration tests with DynamoDB Local (8 tests covering CRUD, concurrency, validation)
 
 ### Recent Improvements
-- **Fixed file detection issues**: Replaced incompatible `find` commands with `ls` commands for MinIO container
-- **Enhanced S3 object verification**: Updated logic to properly count `.json.gz` objects in MinIO's S3-compatible storage
+- **Migrated to Garage S3**: Replaced discontinued MinIO with Garage for S3-compatible storage
+- **S3 API-based verification**: Updated from filesystem access to proper S3 API calls for validation
 - **Increased processing time**: Extended wait from 120s to 180s for reliable Vector log delivery
 - **Comprehensive logging**: Added detailed debugging output for troubleshooting
 

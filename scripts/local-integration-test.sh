@@ -14,6 +14,7 @@
 #   - podman installed
 #   - kubectl configured for minikube
 #   - Python 3.13+ with pip
+#   - AWS CLI (installed automatically via pip)
 
 set -e
 
@@ -149,8 +150,16 @@ check_prerequisites() {
     
     # Install test dependencies
     log_info "Installing Python test dependencies..."
-    pip3 install --user pytest requests boto3 >/dev/null 2>&1
+    pip3 install --user pytest requests boto3 awscli >/dev/null 2>&1
     log_success "Test dependencies installed"
+
+    # Check for AWS CLI
+    if ! command -v aws &> /dev/null; then
+        log_error "AWS CLI is not available after installation"
+        log_info "Please install AWS CLI manually: pip3 install --user awscli"
+        exit 1
+    fi
+    log_success "AWS CLI is available"
 }
 
 # Deploy DynamoDB Local to minikube
@@ -236,18 +245,17 @@ build_containers() {
     fi
 }
 
-# Deploy MinIO (S3-compatible storage)
-deploy_minio() {
-    log_section "Deploying MinIO"
-    
-    kubectl apply -f tests/integration/manifests/minio.yaml
-    
-    # Wait for MinIO to be ready
-    log_info "Waiting for MinIO deployment..."
-    kubectl wait --for=condition=ready pod -l app=minio --timeout=300s --namespace=logging
-    kubectl wait --for=condition=complete job/minio-setup --timeout=300s --namespace=logging
-    
-    log_success "MinIO is ready"
+# Deploy Garage (S3-compatible storage)
+deploy_garage() {
+    log_section "Deploying Garage S3 Storage"
+
+    kubectl apply -f tests/integration/manifests/garage.yaml
+
+    # Wait for setup job to configure Garage
+    log_info "Waiting for Garage setup job to complete..."
+    kubectl wait --for=condition=complete job/s3-setup --timeout=300s --namespace=logging
+
+    log_success "Garage S3 storage is ready"
 }
 
 # Deploy tenant configuration API
@@ -377,115 +385,87 @@ wait_for_logs() {
     kubectl logs -l app.kubernetes.io/name=vector --tail=20 --namespace=logging
 }
 
-# Verify log delivery to MinIO
+# Verify log delivery to Garage S3
 verify_log_delivery() {
-    log_section "Verifying Log Delivery to MinIO"
-    
-    # Get MinIO pod name
-    local minio_pod
-    minio_pod=$(kubectl get pod -l app=minio -o jsonpath='{.items[0].metadata.name}' --namespace=logging)
-    log_info "MinIO pod: $minio_pod"
-    
-    # Check if log files exist in MinIO bucket
-    log_info "Checking for log files in MinIO bucket..."
-    kubectl exec "$minio_pod" --namespace=logging -- ls -la /data/test-logs/
-    
-    # Verify multi-tenant log directory structure exists
-    log_info "Verifying multi-tenant log directory structure..."
+    log_section "Verifying Log Delivery to Garage S3"
+
+    # Get S3 storage pod name
+    local s3_pod
+    s3_pod=$(kubectl get pod -l app=s3-storage -o jsonpath='{.items[0].metadata.name}' --namespace=logging)
+    log_info "S3 storage pod: $s3_pod"
+
+    # Set up port forward for S3 API access
+    log_info "Setting up port forward for S3 API access..."
+    kubectl port-forward -n logging service/minio 9000:9000 &
+    local pf_pid=$!
+    PORT_FORWARD_PIDS+=("$pf_pid")
+
+    # Wait for port forward to be ready
+    sleep 5
+
+    # Configure AWS CLI for local S3 access (using test credentials)
+    export AWS_ACCESS_KEY_ID=testadmin
+    export AWS_SECRET_ACCESS_KEY=testadmin
+    export AWS_DEFAULT_REGION=us-east-1
+
+    # List all objects in test-logs bucket using S3 API
+    log_info "Listing S3 objects via S3 API..."
+    local objects
+    objects=$(aws s3 ls s3://test-logs/ --recursive --endpoint-url=http://localhost:9000 2>&1) || {
+        log_error "Failed to list S3 objects"
+        echo "$objects"
+        exit 1
+    }
+
+    # Verify multi-tenant structure exists
+    log_info "Verifying multi-tenant log structure..."
     local structure_found=false
-    
-    # Check for ACME Corp logs (payment-service or user-database)
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/acme-corp/payment-service/ > /dev/null 2>&1; then
-        log_success "Found ACME Corp payment-service logs"
+
+    # Check for each customer path in S3 keys
+    if echo "$objects" | grep -q "test-cluster/acme-corp/"; then
+        log_success "Found ACME Corp logs"
         structure_found=true
     fi
-    
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/acme-corp/user-database/ > /dev/null 2>&1; then
-        log_success "Found ACME Corp user-database logs"
+
+    if echo "$objects" | grep -q "test-cluster/wayne-enterprises/"; then
+        log_success "Found Wayne Enterprises logs"
         structure_found=true
     fi
-    
-    # Check for Wayne Enterprises logs (security-monitor or backup-service)
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/wayne-enterprises/security-monitor/ > /dev/null 2>&1; then
-        log_success "Found Wayne Enterprises security-monitor logs"
+
+    if echo "$objects" | grep -q "test-cluster/globex-industries/"; then
+        log_success "Found Globex Industries logs"
         structure_found=true
     fi
-    
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/wayne-enterprises/backup-service/ > /dev/null 2>&1; then
-        log_success "Found Wayne Enterprises backup-service logs"
+
+    if echo "$objects" | grep -q "test-cluster/umbrella-corp/"; then
+        log_success "Found Umbrella Corp logs"
         structure_found=true
     fi
-    
-    # Check for other customers
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/globex-industries/api-gateway/ > /dev/null 2>&1; then
-        log_success "Found Globex Industries api-gateway logs"
-        structure_found=true
-    fi
-    
-    if kubectl exec "$minio_pod" --namespace=logging -- ls /data/test-logs/test-cluster/umbrella-corp/analytics-engine/ > /dev/null 2>&1; then
-        log_success "Found Umbrella Corp analytics-engine logs"
-        structure_found=true
-    fi
-    
+
     if [[ "$structure_found" != true ]]; then
-        log_error "No multi-tenant log directory structure found"
-        log_info "Available paths:"
-        kubectl exec "$minio_pod" --namespace=logging -- find /data/test-logs -type d -maxdepth 4 || log_warning "Could not list paths"
+        log_error "No multi-tenant log directory structure found in S3"
+        log_info "Available S3 objects:"
+        echo "$objects" | head -20
         exit 1
     fi
-    
-    # Count S3 objects across multi-tenant structure
-    log_info "Checking for S3 objects across multi-tenant applications..."
-    local total_s3_objects=0
-    local total_applications=0
-    
-    # Function to check S3 objects for a specific application
-    check_s3_objects() {
-        local customer=$1
-        local app=$2
-        local app_path="/data/test-logs/test-cluster/$customer/$app"
-        
-        # Check if the application path exists
-        if kubectl exec "$minio_pod" --namespace=logging -- ls "$app_path/" > /dev/null 2>&1; then
-            log_info "  Found logs for $customer/$app"
-            total_applications=$((total_applications + 1))
-            
-            # Get pod directories for this application
-            local pod_dirs
-            pod_dirs=$(kubectl exec "$minio_pod" --namespace=logging -- ls "$app_path/" 2>/dev/null || echo "")
-            
-            for pod_dir in $pod_dirs; do
-                if [[ -n "$pod_dir" ]]; then
-                    # Count .json.gz objects in this pod directory
-                    local s3_objects
-                    s3_objects=$(kubectl exec "$minio_pod" --namespace=logging -- ls "$app_path/$pod_dir/" 2>/dev/null | grep -c "\.json\.gz" || echo "0")
-                    if [[ "$s3_objects" -gt 0 ]]; then
-                        log_info "    Pod $pod_dir: $s3_objects objects"
-                        total_s3_objects=$((total_s3_objects + s3_objects))
-                    fi
-                fi
-            done
-        fi
-    }
-    
-    # Check all multi-tenant applications
-    check_s3_objects "acme-corp" "payment-service"
-    check_s3_objects "acme-corp" "user-database" 
-    check_s3_objects "globex-industries" "api-gateway"
-    check_s3_objects "umbrella-corp" "analytics-engine"
-    check_s3_objects "wayne-enterprises" "security-monitor"
-    check_s3_objects "wayne-enterprises" "backup-service"
-    
-    log_info "Total S3 objects found: $total_s3_objects across $total_applications applications"
-    
+
+    # Count S3 objects (.json.gz files) using S3 API
+    log_info "Checking for S3 objects (.json.gz) across multi-tenant applications..."
+    local total_s3_objects
+    total_s3_objects=$(echo "$objects" | grep -c "\.json\.gz" || echo "0")
+    local total_applications
+    total_applications=$(echo "$objects" | grep "json.gz" | awk -F'/' '{print $2"/"$3}' | sort -u | wc -l | tr -d ' ')
+
+    log_info "Total S3 objects found: $total_s3_objects across $total_applications application paths"
+
     if [[ "$total_s3_objects" -gt 0 ]]; then
-        log_success "Multi-tenant log objects were created and stored in MinIO"
+        log_success "Multi-tenant log objects were created and stored in Garage S3"
         log_success "Vector is successfully writing logs to S3-compatible storage"
-        log_success "Found logs from $total_applications different applications across multiple customers"
+        log_success "Found logs from $total_applications different application paths across multiple customers"
     else
         log_error "No S3 objects (.json.gz) found across multi-tenant applications"
-        log_info "Debug: Available directory structure:"
-        kubectl exec "$minio_pod" --namespace=logging -- find /data/test-logs -name "*.json.gz" | head -10 || log_warning "Could not find any .json.gz files"
+        log_info "Debug: All S3 objects in test-logs bucket:"
+        echo "$objects"
         exit 1
     fi
 }
@@ -519,7 +499,7 @@ show_results() {
     log_section "Integration Test Summary"
     
     log_success "Container builds from current code: OK"
-    log_success "MinIO deployment (S3-compatible storage): OK" 
+    log_success "Garage S3 deployment (S3-compatible storage): OK"
     log_success "DynamoDB Local deployment: OK"
     log_success "Tenant Configuration API deployment (real code): OK"
     log_success "API integration tests: OK"
@@ -527,13 +507,13 @@ show_results() {
     log_success "Multi-tenant fake log generators (real code): OK"
     log_success "Vector collector deployment (real code): OK"
     log_success "Log collection and processing: OK"
-    log_success "Log delivery to MinIO bucket: OK"
+    log_success "Log delivery to Garage S3 bucket: OK"
     log_success "End-to-end verification: OK"
     
     echo ""
     log_success "Local integration test completed successfully!"
     log_info "All components built from current code and deployed in minikube:"
-    log_info "Vector → MinIO → Processor → API (all using current local code)"
+    log_info "Vector → Garage S3 → Processor → API (all using current local code)"
 }
 
 # Main execution
@@ -546,7 +526,7 @@ main() {
     check_prerequisites
     deploy_dynamodb_local
     build_containers
-    deploy_minio
+    deploy_garage
     deploy_api
     test_api_integration
     deploy_processor
