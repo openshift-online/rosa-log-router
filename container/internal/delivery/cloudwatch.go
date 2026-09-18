@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	stypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"github.com/openshift/rosa-log-router/internal/models"
 )
@@ -53,6 +54,38 @@ func NewCloudWatchDeliverer(stsClient *sts.Client, centralRoleArn string, endpoi
 	}
 }
 
+// classifyCloudWatchError wraps CloudWatch errors with appropriate classification for retry logic
+func classifyCloudWatchError(err error, context string) error {
+	if err == nil {
+		return nil
+	}
+
+	// Check for specific CloudWatch error types
+	var resourceNotFound *types.ResourceNotFoundException
+	var apiErr smithy.APIError
+
+	if errors.As(err, &resourceNotFound) {
+		// Log group doesn't exist - customer can recreate (if auto-create disabled)
+		// Route to retry queue for 2hr window
+		return fmt.Errorf("%s: CloudWatch resource not found (customer can recreate): %w", context, err)
+	} else if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessDeniedException", "AccessDenied":
+			// Customer can fix IAM permissions, route to retry queue
+			return fmt.Errorf("%s: access denied to CloudWatch (customer can fix IAM): %w", context, err)
+		case "ThrottlingException", "Throttling":
+			// Transient throttling, will retry quickly
+			return fmt.Errorf("%s: CloudWatch throttling (transient): %w", context, err)
+		case "ServiceUnavailableException":
+			// Transient service issue
+			return fmt.Errorf("%s: CloudWatch service unavailable (transient): %w", context, err)
+		}
+	}
+
+	// Unknown error - treat as recoverable (will route to retry queue)
+	return fmt.Errorf("%s: %w", context, err)
+}
+
 // DeliverLogs delivers log events to customer's CloudWatch Logs
 func (d *CloudWatchDeliverer) DeliverLogs(ctx context.Context, logEvents []*models.LogEvent, deliveryConfig *models.DeliveryConfig, tenantInfo *models.TenantInfo, s3Timestamp int64) (*models.DeliveryStats, error) {
 	d.logger.Info("starting CloudWatch delivery",
@@ -67,7 +100,7 @@ func (d *CloudWatchDeliverer) DeliverLogs(ctx context.Context, logEvents []*mode
 		RoleSessionName: aws.String(sessionName),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to assume central log distribution role: %w", err)
+		return nil, classifyCloudWatchError(err, "failed to assume central log distribution role")
 	}
 
 	// Step 2: Get current account ID for ExternalId
@@ -187,13 +220,13 @@ func (d *CloudWatchDeliverer) deliverLogsNative(ctx context.Context, logEvents [
 
 	// Ensure log group and stream exist
 	if err := ensureLogGroupAndStreamExist(ctx, logsClient, logGroup, logStream, d.logger); err != nil {
-		return nil, err
+		return nil, classifyCloudWatchError(err, "failed to ensure log group/stream exist")
 	}
 
 	// Deliver events in batches
 	stats, err := deliverEventsInBatches(ctx, logsClient, logGroup, logStream, processedEvents, d.maxEventsPerBatch, d.maxBytesPerBatch, d.timeoutSeconds, d.logger)
 	if err != nil {
-		return nil, err
+		return nil, classifyCloudWatchError(err, "failed to deliver events to CloudWatch")
 	}
 
 	d.logger.Info("CloudWatch delivery complete",

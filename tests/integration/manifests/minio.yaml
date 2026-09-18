@@ -48,7 +48,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:latest
+        image: quay.io/minio/minio:latest
         command:
         - /bin/bash
         - -c
@@ -110,7 +110,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: mc
-        image: minio/mc:latest
+        image: quay.io/minio/mc:latest
         command:
         - /bin/bash
         - -c

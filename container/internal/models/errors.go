@@ -136,3 +136,22 @@ func IsPermissionError(err error) bool {
 		strings.Contains(msg, "access denied") ||
 		strings.Contains(msg, "not authorized")
 }
+
+// IsCustomerRepairableError checks if an error can be fixed by the customer
+// (IAM permissions, missing resources they can recreate, etc.).
+// These errors should route through the 2-hour retry queue to give customers time to fix.
+func IsCustomerRepairableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for permission errors
+	if IsPermissionError(err) {
+		return true
+	}
+
+	// Check for customer-repairable resource errors via error message
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "customer can recreate") ||
+		strings.Contains(msg, "customer can fix")
+}
