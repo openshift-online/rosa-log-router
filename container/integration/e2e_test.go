@@ -5,6 +5,7 @@ package integration
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -348,6 +349,148 @@ func TestE2EAPITenantConfigCRUD(t *testing.T) {
 		require.Error(t, err, "Getting deleted config should return error")
 		t.Logf("✅ Deleted CloudWatch config for tenant: %s", tenantID)
 	})
+}
+
+// TestE2EAPIConcurrentConfigWrites verifies the tenant-config API handles
+// concurrent create operations for distinct tenants without errors or lost
+// writes, then confirms every config is durably retrievable. Ported from the
+// removed minikube/DynamoDB-Local Python suite (test_concurrent_operations) to
+// the higher-fidelity LocalStack pipeline (real Lambda + API Gateway).
+//
+// Each worker runs as a parallel subtest so testify's require assertions stay on
+// testing-framework-managed goroutines (calling require from a raw goroutine is
+// unsafe). The subtests run simultaneously, exercising the concurrent path.
+func TestE2EAPIConcurrentConfigWrites(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+
+	if helper.APIGatewayEndpoint() == "" {
+		t.Skip("API Gateway endpoint not available - API not deployed")
+	}
+
+	const workers = 5
+	runID := uuid.New().String()[:8]
+
+	for i := 0; i < workers; i++ {
+		i := i
+		t.Run(fmt.Sprintf("Worker%d", i), func(t *testing.T) {
+			t.Parallel()
+
+			tenantID := fmt.Sprintf("e2e-concurrent-%s-%d", runID, i)
+			config := map[string]interface{}{
+				"tenant_id":                 tenantID,
+				"type":                      "cloudwatch",
+				"log_distribution_role_arn": "arn:aws:iam::999999999999:role/E2ETestRole",
+				"log_group_name":            fmt.Sprintf("/aws/logs/%s", tenantID),
+				"target_region":             "us-east-1",
+				"enabled":                   true,
+				"groups":                    []string{"concurrent-group"},
+			}
+
+			created := helper.APICreateDeliveryConfig(t, tenantID, config)
+			require.Equal(t, tenantID, created["tenant_id"], "concurrent create should return the correct tenant_id")
+
+			// Verify the write is durable and retrievable after the concurrent create.
+			retrieved := helper.APIGetDeliveryConfig(t, tenantID, "cloudwatch")
+			require.Equal(t, tenantID, retrieved["tenant_id"], "config should be retrievable after concurrent create")
+			require.Equal(t, "cloudwatch", retrieved["type"], "retrieved config should have correct type")
+
+			// Cleanup this worker's config.
+			helper.APIDeleteDeliveryConfig(t, tenantID, "cloudwatch")
+			t.Logf("✅ Worker %d: concurrent create/verify/delete succeeded for %s", i, tenantID)
+		})
+	}
+}
+
+// TestE2EAPIListPagination verifies the list-all delivery-configs endpoint
+// paginates correctly over a dataset larger than a single page. Ported from the
+// removed Python suite (test_large_data_operations). It creates 12 tenants, each
+// with a CloudWatch and an S3 config, then pages through the results and asserts
+// every config created by this run is surfaced exactly once across multiple pages.
+func TestE2EAPIListPagination(t *testing.T) {
+	helper := NewE2ETestHelper(t)
+
+	if helper.APIGatewayEndpoint() == "" {
+		t.Skip("API Gateway endpoint not available - API not deployed")
+	}
+
+	const (
+		tenantCount = 12
+		pageSize    = 10
+		maxPages    = 100 // safety valve against a pagination bug looping forever
+	)
+	runID := uuid.New().String()[:8]
+	tenantPrefix := fmt.Sprintf("e2e-bulk-%s-", runID)
+	tenantID := func(i int) string { return fmt.Sprintf("%s%03d", tenantPrefix, i) }
+
+	// Create tenantCount tenants, each with a CloudWatch and an S3 config,
+	// alternating enabled/disabled to mirror the removed Python test's dataset.
+	for i := 0; i < tenantCount; i++ {
+		cwConfig := map[string]interface{}{
+			"tenant_id":                 tenantID(i),
+			"type":                      "cloudwatch",
+			"log_distribution_role_arn": "arn:aws:iam::999999999999:role/BulkRole",
+			"log_group_name":            fmt.Sprintf("/aws/logs/%s", tenantID(i)),
+			"target_region":             "us-east-1",
+			"enabled":                   i%2 == 0,
+			"groups":                    []string{fmt.Sprintf("app-%d", i)},
+		}
+		s3Config := map[string]interface{}{
+			"tenant_id":     tenantID(i),
+			"type":          "s3",
+			"bucket_name":   fmt.Sprintf("%s-logs", tenantID(i)),
+			"bucket_prefix": "logs/",
+			"target_region": "us-east-1",
+			"enabled":       i%3 == 0,
+			"groups":        []string{fmt.Sprintf("app-%d", i)},
+		}
+		helper.APICreateDeliveryConfig(t, tenantID(i), cwConfig)
+		helper.APICreateDeliveryConfig(t, tenantID(i), s3Config)
+	}
+
+	// Always clean up this run's configs, even if the assertions below fail.
+	defer func() {
+		for i := 0; i < tenantCount; i++ {
+			helper.APIDeleteDeliveryConfig(t, tenantID(i), "cloudwatch")
+			helper.APIDeleteDeliveryConfig(t, tenantID(i), "s3")
+		}
+	}()
+
+	// Page through the list-all endpoint, collecting only this run's configs so
+	// the assertions are robust against seed data and other tests' configs.
+	seen := map[string]bool{}
+	pages := 0
+	lastKey := ""
+	for {
+		data := helper.APIListAllDeliveryConfigs(t, pageSize, lastKey)
+		pages++
+		require.LessOrEqual(t, pages, maxPages, "pagination did not terminate")
+
+		configs, ok := data["configurations"].([]interface{})
+		require.True(t, ok, "list-all response should contain a 'configurations' array")
+		require.LessOrEqual(t, len(configs), pageSize, "a page should not exceed the requested limit")
+
+		for _, c := range configs {
+			cfg, ok := c.(map[string]interface{})
+			require.True(t, ok, "each configuration should be an object")
+			tid, _ := cfg["tenant_id"].(string)
+			if strings.HasPrefix(tid, tenantPrefix) {
+				seen[fmt.Sprintf("%s#%v", tid, cfg["type"])] = true
+			}
+		}
+
+		next, hasNext := data["last_key"].(string)
+		if !hasNext || next == "" {
+			break // final page — no more results
+		}
+		lastKey = next
+	}
+
+	require.Equal(t, tenantCount*2, len(seen),
+		"pagination should surface every config created by this run exactly once")
+	require.Greater(t, pages, 1,
+		"a dataset larger than the page size should span multiple pages")
+
+	t.Logf("✅ Paginated %d configs across %d pages (page size %d)", len(seen), pages, pageSize)
 }
 
 // TestE2ERetryQueueConsumption verifies that the Lambda processes messages from

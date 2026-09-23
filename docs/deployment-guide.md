@@ -164,18 +164,9 @@ configMapGenerator:
       - CLUSTER_ID=your-cluster-identifier
 ```
 
-### Log Processor Deployment (Optional)
-
-For Kubernetes-based processing instead of Lambda:
-
-```bash
-# Deploy log processor
-kubectl apply -k k8s/processor/overlays/cuppett
-
-# Verify deployment
-kubectl get pods -n logging
-kubectl logs -n logging deployment/log-processor
-```
+> **Note:** The log processor and tenant-configuration API are **not** deployed
+> as Kubernetes workloads. They run as AWS Lambda container images provisioned by
+> Terraform (`terraform/`). Only the Vector collector runs in-cluster.
 
 ## Customer Onboarding (Production)
 
