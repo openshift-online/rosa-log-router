@@ -35,6 +35,12 @@ app = FastAPI(
     root_path=ROOT_PATH
 )
 
+# Environment variables
+TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+RUNNING_IN_K8S = os.environ.get('RUNNING_IN_K8S', '').lower() == 'true'
+PSK_SECRET_NAME = os.environ.get('PSK_SECRET_NAME', '')
+
 # CORS middleware removed - API does not require browser access
 
 @app.middleware("http")
@@ -65,9 +71,44 @@ async def verify_body_hash(request: Request, call_next):
             )
     return await call_next(request)
 
-# Environment variables
-TENANT_CONFIG_TABLE = os.environ.get('TENANT_CONFIG_TABLE', 'tenant-configurations')
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+# Starlette processes middlewares LIFO — this is defined last so it runs first (outermost).
+@app.middleware("http")
+async def enforce_hmac_auth(request: Request, call_next):
+    """
+    Enforce HMAC request authentication when deployed in-cluster (RUNNING_IN_K8S=true).
+
+    The health endpoint is exempt. All other endpoints require valid HMAC headers
+    (X-API-Timestamp, X-Body-SHA256, Authorization: HMAC-SHA256 <sig>).
+    """
+    if not RUNNING_IN_K8S or request.url.path == "/api/v1/health":
+        return await call_next(request)
+
+    if not PSK_SECRET_NAME:
+        logger.error("PSK_SECRET_NAME not configured for in-cluster auth")
+        return JSONResponse(status_code=503, content={"error": "Authentication not configured"})
+
+    from src.utils.auth import authenticate_request, AuthenticationError
+    try:
+        authenticated = authenticate_request(
+            headers=dict(request.headers),
+            method=request.method,
+            uri=request.url.path + (f"?{request.url.query}" if request.url.query else ""),
+            body="",
+            psk_secret_name=PSK_SECRET_NAME,
+            region=AWS_REGION,
+        )
+    except AuthenticationError:
+        logger.error("Authentication service unavailable")
+        return JSONResponse(status_code=503, content={"error": "Authentication service unavailable"})
+    except Exception as e:
+        logger.error(f"Unexpected authentication error: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+    if not authenticated:
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    return await call_next(request)
 
 # Initialize tenant delivery config service
 delivery_config_service = TenantDeliveryConfigService(table_name=TENANT_CONFIG_TABLE, region=AWS_REGION)
