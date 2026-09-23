@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +56,56 @@ func (h *E2ETestHelper) makeAPIRequest(t *testing.T, method, path string, body i
 	bodyHashArr := sha256.Sum256(bodyBytes)
 	bodyHash := hex.EncodeToString(bodyHashArr[:])
 	signature := generateHMACSignature(h.APIPSK(), method, path, timestamp, bodyHash)
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Timestamp", timestamp)
+	req.Header.Set("X-Body-SHA256", bodyHash)
+	req.Header.Set("Authorization", fmt.Sprintf("HMAC-SHA256 %s", signature))
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	return client.Do(req)
+}
+
+// makeAPIRequestWithQuery makes an authenticated request that carries query
+// parameters. The signed URI must byte-for-byte match what the API Gateway
+// authorizer reconstructs: it takes the (URL-decoded) queryStringParameters map
+// and rebuilds "path?k=v&k=v" in query-string order (see api/src/handlers/authorizer.py).
+//
+// We therefore build two strings from the same ordered slice: the signed URI
+// uses raw (decoded) values, while the request URL uses URL-escaped values. This
+// matters for last_key, whose value contains a literal '#' that must be escaped
+// in the URL (or it would be treated as a fragment) but appears decoded in the
+// signed message.
+func (h *E2ETestHelper) makeAPIRequestWithQuery(t *testing.T, method, basePath string, query [][2]string, body interface{}) (*http.Response, error) {
+	t.Helper()
+
+	signPath := basePath
+	requestPath := basePath
+	if len(query) > 0 {
+		rawPairs := make([]string, 0, len(query))     // k=v with decoded values (signed)
+		escapedPairs := make([]string, 0, len(query)) // k=escape(v) (actual URL)
+		for _, kv := range query {
+			rawPairs = append(rawPairs, fmt.Sprintf("%s=%s", kv[0], kv[1]))
+			escapedPairs = append(escapedPairs, fmt.Sprintf("%s=%s", kv[0], url.QueryEscape(kv[1])))
+		}
+		signPath = basePath + "?" + strings.Join(rawPairs, "&")
+		requestPath = basePath + "?" + strings.Join(escapedPairs, "&")
+	}
+
+	var bodyBytes []byte
+	var err error
+	if body != nil {
+		bodyBytes, err = json.Marshal(body)
+		require.NoError(t, err, "failed to marshal request body")
+	}
+
+	req, err := http.NewRequest(method, h.APIGatewayEndpoint()+requestPath, bytes.NewReader(bodyBytes))
+	require.NoError(t, err, "failed to create HTTP request")
+
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	bodyHashArr := sha256.Sum256(bodyBytes)
+	bodyHash := hex.EncodeToString(bodyHashArr[:])
+	signature := generateHMACSignature(h.APIPSK(), method, signPath, timestamp, bodyHash)
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Timestamp", timestamp)
@@ -199,6 +251,37 @@ func (h *E2ETestHelper) APIListTenantConfigs(t *testing.T, tenantID string) map[
 	require.NoError(t, err, "failed to decode list response")
 
 	// Extract the "data" field from the API response
+	data, ok := wrapper["data"].(map[string]interface{})
+	require.True(t, ok, "response should have 'data' field")
+
+	return data
+}
+
+// APIListAllDeliveryConfigs lists delivery configs across all tenants via the
+// paginated list-all endpoint (GET /api/v1/delivery-configs). Pass an empty
+// lastKey for the first page; the returned data's "last_key" (present only when
+// more pages remain) feeds the next call.
+func (h *E2ETestHelper) APIListAllDeliveryConfigs(t *testing.T, limit int, lastKey string) map[string]interface{} {
+	t.Helper()
+
+	// Order matters: limit first, then last_key. The authorizer reconstructs the
+	// signed URI in query-string order, so the request URL and signed URI (built
+	// from this same slice) stay consistent.
+	query := [][2]string{{"limit", strconv.Itoa(limit)}}
+	if lastKey != "" {
+		query = append(query, [2]string{"last_key", lastKey})
+	}
+
+	resp, err := h.makeAPIRequestWithQuery(t, "GET", "/api/v1/delivery-configs", query, nil)
+	require.NoError(t, err, "failed to list all delivery configs")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "list-all should return 200 OK")
+
+	var wrapper map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&wrapper)
+	require.NoError(t, err, "failed to decode list-all response")
+
 	data, ok := wrapper["data"].(map[string]interface{})
 	require.True(t, ok, "response should have 'data' field")
 
