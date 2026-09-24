@@ -424,10 +424,10 @@ class TenantDeliveryConfigService:
                         'status': 'ok',
                         'message': f'CloudWatch field {field} is present'
                     })
-            
+
             # Role ARN format validation
             role_arn = config.get('log_distribution_role_arn', '')
-            if role_arn and not role_arn.startswith('arn:aws:iam::'):
+            if role_arn and not role_arn.startswith(('arn:aws:iam::', 'arn:aws-us-gov:iam::')):
                 validation_results['valid'] = False
                 validation_results['checks'].append({
                     'field': 'log_distribution_role_arn',
