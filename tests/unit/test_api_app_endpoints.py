@@ -281,3 +281,77 @@ class TestErrorHandling:
         )
         assert response.status_code == 400
         assert "X-Body-SHA256" in response.json()["error"]
+
+
+class TestEnforceHmacAuth:
+    """Tests for the enforce_hmac_auth middleware (RUNNING_IN_K8S=true path)."""
+
+    def test_lambda_path_unaffected(self, client):
+        """RUNNING_IN_K8S unset — middleware skips entirely, no auth headers needed."""
+        # Default fixture has RUNNING_IN_K8S=False (module-level default)
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', 'test-secret')
+    @patch('src.app.authenticate_request', return_value=False)
+    def test_unauthenticated_get_returns_401(self, mock_auth, client):
+        """RUNNING_IN_K8S=true, no auth headers — GET returns 401."""
+        response = client.get("/api/v1/delivery-configs")
+        assert response.status_code == 401
+        assert response.json()["error"] == "Unauthorized"
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', 'test-secret')
+    @patch('src.app.authenticate_request', return_value=False)
+    def test_unauthenticated_post_returns_401_before_body_hash(self, mock_auth, client):
+        """Auth (401) fires before body-hash check (400) — LIFO ordering works."""
+        response = client.post(
+            "/api/v1/tenants/test-tenant/delivery-configs",
+            json={"tenant_id": "test-tenant", "type": "cloudwatch"},
+        )
+        assert response.status_code == 401
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', 'test-secret')
+    @patch('src.app.authenticate_request', return_value=True)
+    @patch('src.app.delivery_config_service')
+    def test_authenticated_request_proceeds(self, mock_service, mock_auth, client):
+        """Valid auth allows the request through to the handler."""
+        mock_service.get_tenant_configs.return_value = []
+        response = client.get("/api/v1/tenants/test-tenant/delivery-configs")
+        assert response.status_code == 200
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    def test_health_endpoint_exempt_from_auth(self, client):
+        """Health endpoint returns 200 even when RUNNING_IN_K8S=true and no auth headers."""
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', '')
+    def test_missing_psk_secret_name_returns_503(self, client):
+        """PSK_SECRET_NAME unset while RUNNING_IN_K8S=true returns 503."""
+        response = client.get("/api/v1/delivery-configs")
+        assert response.status_code == 503
+        assert response.json()["error"] == "Authentication not configured"
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', 'test-secret')
+    @patch('src.app.authenticate_request', side_effect=Exception("unexpected"))
+    def test_unexpected_auth_error_returns_500(self, mock_auth, client):
+        """Unexpected exception in auth returns 500, not a crash."""
+        response = client.get("/api/v1/delivery-configs")
+        assert response.status_code == 500
+        assert response.json()["error"] == "Internal server error"
+
+    @patch('src.app.RUNNING_IN_K8S', True)
+    @patch('src.app.PSK_SECRET_NAME', 'test-secret')
+    @patch('src.app.authenticate_request')
+    def test_auth_service_unavailable_returns_503(self, mock_auth, client):
+        """AuthenticationError (PSK fetch failure) returns 503."""
+        from src.utils.auth import AuthenticationError
+        mock_auth.side_effect = AuthenticationError("cannot reach Secrets Manager")
+        response = client.get("/api/v1/delivery-configs")
+        assert response.status_code == 503
+        assert response.json()["error"] == "Authentication service unavailable"
