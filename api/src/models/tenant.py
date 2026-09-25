@@ -19,9 +19,14 @@ def normalize_bucket_prefix(prefix: str) -> str:
         return ""
     return prefix if prefix.endswith('/') else prefix + '/'
 
+# IAM role ARNs are partition-qualified. We support the commercial (aws) and
+# GovCloud (aws-us-gov) partitions
+_VALID_IAM_ROLE_ARN_PREFIXES = ('arn:aws:iam::', 'arn:aws-us-gov:iam::')
+
+
 def validate_iam_role_arn(arn: Optional[str]) -> Optional[str]:
     """Shared validator for IAM role ARN format"""
-    if arn is not None and not arn.startswith('arn:aws:iam::'):
+    if arn is not None and not arn.startswith(_VALID_IAM_ROLE_ARN_PREFIXES):
         raise ValueError('Role ARN must be a valid IAM role ARN')
     return arn
 
@@ -106,7 +111,7 @@ class CloudWatchDeliveryConfig(TenantDeliveryConfigBase):
     @classmethod
     def validate_role_arn(cls, v):
         """Validate IAM role ARN format"""
-        if not v.startswith('arn:aws:iam::'):
+        if not v.startswith(_VALID_IAM_ROLE_ARN_PREFIXES):
             raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
         return v
 
@@ -163,7 +168,7 @@ class TenantDeliveryConfigCreateRequest(BaseModel):
     @classmethod
     def validate_role_arn(cls, v):
         """Validate IAM role ARN format"""
-        if v is not None and not v.startswith('arn:aws:iam::'):
+        if v is not None and not v.startswith(_VALID_IAM_ROLE_ARN_PREFIXES):
             raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
         return v
     
@@ -217,7 +222,7 @@ class TenantDeliveryConfigUpdateRequest(BaseModel):
     @classmethod
     def validate_role_arn(cls, v):
         """Validate IAM role ARN format"""
-        if v is not None and not v.startswith('arn:aws:iam::'):
+        if v is not None and not v.startswith(_VALID_IAM_ROLE_ARN_PREFIXES):
             raise ValueError('log_distribution_role_arn must be a valid IAM role ARN')
         return v
     
