@@ -647,3 +647,185 @@ func TestRequeueSQSMessageWithCompletedDeliveries(t *testing.T) {
 		assert.False(t, hasCompleted)
 	})
 }
+
+// Phase 3 Helper Function Tests
+
+func TestIsDestinationSucceeded(t *testing.T) {
+	t.Run("returns true when destination has success status", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			DestinationStates: map[string]models.DestinationState{
+				"s3:bucket": {Status: "success"},
+				"cw:group":  {Status: "transient_error"},
+			},
+		}
+
+		assert.True(t, isDestinationSucceeded(metadata, "s3:bucket"))
+		assert.False(t, isDestinationSucceeded(metadata, "cw:group"))
+	})
+
+	t.Run("returns false when destination states is empty", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			DestinationStates: map[string]models.DestinationState{},
+		}
+
+		assert.False(t, isDestinationSucceeded(metadata, "s3:bucket"))
+	})
+
+	t.Run("returns false when destination states is nil", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			DestinationStates: nil,
+		}
+
+		assert.False(t, isDestinationSucceeded(metadata, "s3:bucket"))
+	})
+
+	t.Run("returns false when destination not in states", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			DestinationStates: map[string]models.DestinationState{
+				"s3:bucket": {Status: "success"},
+			},
+		}
+
+		assert.False(t, isDestinationSucceeded(metadata, "cw:nonexistent"))
+	})
+}
+
+func TestBuildDestinationStates(t *testing.T) {
+	t.Run("creates states for all completed deliveries", func(t *testing.T) {
+		completed := []string{"s3:bucket1", "cw:logs", "s3:bucket2"}
+
+		states := buildDestinationStates(completed)
+
+		assert.Equal(t, 3, len(states))
+		assert.Equal(t, "success", states["s3:bucket1"].Status)
+		assert.Equal(t, "success", states["cw:logs"].Status)
+		assert.Equal(t, "success", states["s3:bucket2"].Status)
+		// Verify UpdatedAt is populated and is valid RFC3339
+		_, err := time.Parse(time.RFC3339, states["s3:bucket1"].UpdatedAt)
+		assert.NoError(t, err)
+	})
+
+	t.Run("returns empty map for empty completed deliveries", func(t *testing.T) {
+		completed := []string{}
+
+		states := buildDestinationStates(completed)
+
+		assert.Equal(t, 0, len(states))
+	})
+
+	t.Run("returns empty map for nil completed deliveries", func(t *testing.T) {
+		var completed []string = nil
+
+		states := buildDestinationStates(completed)
+
+		assert.Equal(t, 0, len(states))
+	})
+
+	t.Run("preserves exact delivery ID keys", func(t *testing.T) {
+		completed := []string{"s3:my-special-bucket", "cw:app-logs"}
+
+		states := buildDestinationStates(completed)
+
+		assert.Equal(t, "success", states["s3:my-special-bucket"].Status)
+		assert.Equal(t, "success", states["cw:app-logs"].Status)
+	})
+}
+
+func TestCheckHopThresholds(t *testing.T) {
+	logger := getTestLogger()
+
+	t.Run("logs warning for main queue with hops >= 2", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			Hops:           2,
+			HopReason:      "transient_error",
+			FromRetryQueue: false,
+			DestinationStates: map[string]models.DestinationState{
+				"s3:bucket": {Status: "success"},
+			},
+		}
+
+		// Should not panic, should log warning
+		checkHopThresholds(logger, metadata)
+	})
+
+	t.Run("logs warning for retry queue with hops >= 3", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			Hops:           3,
+			HopReason:      "permission_error",
+			FromRetryQueue: true,
+			DestinationStates: map[string]models.DestinationState{
+				"cw:logs": {Status: "permission_error"},
+			},
+		}
+
+		// Should not panic, should log warning
+		checkHopThresholds(logger, metadata)
+	})
+
+	t.Run("does not log for main queue with hops < 2", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			Hops:           1,
+			FromRetryQueue: false,
+		}
+
+		// Should not panic, should not log warning
+		checkHopThresholds(logger, metadata)
+	})
+
+	t.Run("does not log for retry queue with hops < 3", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			Hops:           2,
+			FromRetryQueue: true,
+		}
+
+		// Should not panic, should not log warning
+		checkHopThresholds(logger, metadata)
+	})
+
+	t.Run("handles nil destination states gracefully", func(t *testing.T) {
+		metadata := &models.ProcessingMetadata{
+			Hops:              5,
+			HopReason:         "test",
+			FromRetryQueue:    false,
+			DestinationStates: nil,
+		}
+
+		// Should not panic even with nil destination states
+		checkHopThresholds(logger, metadata)
+	})
+}
+
+func TestSendToRetryQueueWithMetadata(t *testing.T) {
+	logger := getTestLogger()
+	ctx := context.Background()
+
+	t.Run("sends message with hops and reason tracking", func(t *testing.T) {
+		var capturedInput *sqs.SendMessageInput
+		mockClient := &mockSQSClient{
+			sendMessageFunc: func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+				capturedInput = params
+				return &sqs.SendMessageOutput{MessageId: aws.String("msg-id")}, nil
+			},
+		}
+
+		messageBody := `{"Message":"test"}`
+		destinationStates := map[string]models.DestinationState{
+			"s3:bucket": {Status: "success"},
+		}
+
+		err := SendToRetryQueueWithMetadata(
+			ctx, mockClient, "https://sqs/queue",
+			messageBody, []string{"s3:bucket"}, 5, "permission_error", destinationStates, logger)
+
+		require.NoError(t, err)
+
+		var body map[string]interface{}
+		err = json.Unmarshal([]byte(*capturedInput.MessageBody), &body)
+		require.NoError(t, err)
+
+		metadata := body["processing_metadata"].(map[string]interface{})
+		assert.Equal(t, float64(6), metadata["hops"])
+		assert.Equal(t, "permission_error", metadata["hop_reason"])
+		assert.NotNil(t, metadata["destination_states"])
+	})
+}

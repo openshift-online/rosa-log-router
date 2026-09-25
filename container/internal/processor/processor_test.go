@@ -504,3 +504,108 @@ func TestURLDecoding(t *testing.T) {
 		}
 	})
 }
+
+// Phase 4: AWS Lineage Extraction Tests
+
+func TestExtractAWSLineage(t *testing.T) {
+	t.Run("extracts lineage from valid trace header", func(t *testing.T) {
+		record := &events.SQSMessage{
+			Attributes: map[string]string{
+				"AWSTraceHeader": "Root=1-5e6722a7-cc2xmpl46db7ae98d0da47e;Sampled=1;Lineage=43e12f0f:5",
+			},
+		}
+
+		hopCount, err := extractAWSLineage(record)
+		require.NoError(t, err)
+		assert.Equal(t, 5, hopCount)
+	})
+
+	t.Run("returns 0 for missing AWSTraceHeader", func(t *testing.T) {
+		record := &events.SQSMessage{
+			Attributes: map[string]string{},
+		}
+
+		hopCount, err := extractAWSLineage(record)
+		require.NoError(t, err)
+		assert.Equal(t, 0, hopCount)
+	})
+
+	t.Run("returns 0 for nil record", func(t *testing.T) {
+		hopCount, err := extractAWSLineage(nil)
+		require.NoError(t, err)
+		assert.Equal(t, 0, hopCount)
+	})
+
+	t.Run("returns LineageExtractionError for malformed trace header (missing lineage)", func(t *testing.T) {
+		record := &events.SQSMessage{
+			Attributes: map[string]string{
+				"AWSTraceHeader": "Root=1-5e6722a7-cc2xmpl46db7ae98d0da47e;Sampled=1",
+			},
+		}
+
+		hopCount, err := extractAWSLineage(record)
+		require.Error(t, err)
+		assert.Equal(t, LineageExtractionError, hopCount)
+	})
+
+	t.Run("returns LineageExtractionError for empty trace header", func(t *testing.T) {
+		record := &events.SQSMessage{
+			Attributes: map[string]string{
+				"AWSTraceHeader": "",
+			},
+		}
+
+		hopCount, err := extractAWSLineage(record)
+		require.Error(t, err)
+		assert.Equal(t, LineageExtractionError, hopCount)
+	})
+
+	t.Run("handles various lineage values", func(t *testing.T) {
+		testCases := []struct {
+			lineageStr string
+			expected   int
+		}{
+			{"Root=1-1;Sampled=1;Lineage=abc:0", 0},
+			{"Root=1-1;Sampled=1;Lineage=abc:1", 1},
+			{"Root=1-1;Sampled=1;Lineage=abc:10", 10},
+			{"Root=1-1;Sampled=1;Lineage=abc:15", 15},
+			{"Root=1-1;Sampled=1;Lineage=abc:16", 16},
+		}
+
+		for _, tc := range testCases {
+			record := &events.SQSMessage{
+				Attributes: map[string]string{
+					"AWSTraceHeader": tc.lineageStr,
+				},
+			}
+
+			hopCount, err := extractAWSLineage(record)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, hopCount)
+		}
+	})
+}
+
+func TestShouldDLQForLineageOverflow(t *testing.T) {
+	logger := getTestLogger()
+
+	t.Run("returns true when lineage >= 15", func(t *testing.T) {
+		result := shouldDLQForLineageOverflow(logger, 15, "msg-123")
+		assert.True(t, result)
+	})
+
+	t.Run("returns true when lineage > 15", func(t *testing.T) {
+		result := shouldDLQForLineageOverflow(logger, 16, "msg-123")
+		assert.True(t, result)
+	})
+
+	t.Run("returns false when lineage < 15", func(t *testing.T) {
+		result := shouldDLQForLineageOverflow(logger, 14, "msg-123")
+		assert.False(t, result)
+	})
+
+	t.Run("returns false for zero lineage", func(t *testing.T) {
+		result := shouldDLQForLineageOverflow(logger, 0, "msg-123")
+		assert.False(t, result)
+	})
+}
