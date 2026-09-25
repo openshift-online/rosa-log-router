@@ -19,6 +19,7 @@ from src.models.tenant import (
     TenantDeliveryConfigCreateRequest, TenantDeliveryConfigUpdateRequest, TenantDeliveryConfigPatchRequest,
     TenantDeliveryConfigResponse, TenantDeliveryConfigListResponse, TenantDeliveryConfigValidationResponse
 )
+from src.utils.auth import authenticate_request, AuthenticationError
 
 # Set up logging
 logger = setup_logging()
@@ -88,7 +89,6 @@ async def enforce_hmac_auth(request: Request, call_next):
         logger.error("PSK_SECRET_NAME not configured for in-cluster auth")
         return JSONResponse(status_code=503, content={"error": "Authentication not configured"})
 
-    from src.utils.auth import authenticate_request, AuthenticationError
     try:
         authenticated = authenticate_request(
             headers=dict(request.headers),
