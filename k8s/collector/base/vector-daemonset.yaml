@@ -25,6 +25,10 @@ spec:
       # with a single scoped capability and everything else dropped is the
       # least-privilege posture that actually works. See kubernetes#56374.
       securityContext:
+        # NOTE: on OpenShift, setting a seccompProfile is only admitted if the
+        # governing SCC lists it in .seccompProfiles; otherwise the pod is
+        # rejected ("seccomp may not be set"). The production SCC must allow
+        # RuntimeDefault, or this field must be omitted there.
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -78,6 +82,14 @@ spec:
             # it needs to read and traverse those paths; everything else is
             # dropped and privilege escalation is disabled.
             add: ["DAC_READ_SEARCH"]
+          # On OpenShift the kubelet does not SELinux-relabel hostPath volumes,
+          # so a fully-confined (container_t) container is denied write to the
+          # vector-data hostPath (Vector's disk-buffer ledger) and fails to
+          # start. spc_t keeps the container SELinux-unconfined while every
+          # capability except DAC_READ_SEARCH is dropped and privilege
+          # escalation is off. (No-op on non-SELinux nodes such as CI kind.)
+          seLinuxOptions:
+            type: spc_t
       volumes:
       - name: var-log
         hostPath:
