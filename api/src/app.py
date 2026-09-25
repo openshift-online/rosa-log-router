@@ -94,7 +94,7 @@ async def enforce_hmac_auth(request: Request, call_next):
             headers=dict(request.headers),
             method=request.method,
             uri=request.url.path + (f"?{request.url.query}" if request.url.query else ""),
-            body="",
+            body="",  # body is unused; signature covers X-Body-SHA256 header (body integrity via verify_body_hash)
             psk_secret_name=PSK_SECRET_NAME,
             region=AWS_REGION,
         )
