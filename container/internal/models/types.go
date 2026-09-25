@@ -30,9 +30,7 @@ type DeliveryConfig struct {
 	BucketPrefix           string   `json:"bucket_prefix,omitempty" dynamodbav:"bucket_prefix,omitempty"`
 }
 
-// DeliveryID returns a stable identifier for this delivery configuration,
-// combining the type with the destination to distinguish multiple configs
-// of the same type (e.g., two S3 destinations for one tenant).
+// DeliveryID returns a stable identifier for this delivery configuration.
 func (c *DeliveryConfig) DeliveryID() string {
 	switch c.Type {
 	case "s3":
@@ -47,6 +45,7 @@ func (c *DeliveryConfig) DeliveryID() string {
 	return c.Type
 }
 
+// ApplicationEnabled checks if an application is enabled for this delivery configuration.
 func (c *DeliveryConfig) ApplicationEnabled(applicationName string) bool {
 	// No desired logs specified - process all applications
 	if len(c.DesiredLogs) == 0 {
@@ -65,16 +64,32 @@ type LogEvent struct {
 	Message   any `json:"message"`   // Can be string or map[string]interface{}
 }
 
-// ProcessingMetadata contains SQS message processing metadata
-type ProcessingMetadata struct {
-	Offset                int       `json:"offset"`
-	RetryCount            int       `json:"retry_count"`
-	OriginalReceiptHandle string    `json:"original_receipt_handle"`
-	RequeuedAt            time.Time `json:"requeued_at,omitempty"`
-	CompletedDeliveries   []string  `json:"completed_deliveries,omitempty"`
-	FromRetryQueue        bool      `json:"from_retry_queue,omitempty"`
+// DestinationState tracks the status of a specific delivery destination
+type DestinationState struct {
+	Status    string `json:"status"` // "pending", "success", "transient_error", "permission_error"
+	LastError string `json:"last_error,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"` // ISO 8601 timestamp
 }
 
+// TODO: Follow-up PR - Update retry queue Terraform configuration:
+// - visibility_timeout_seconds: 7200 -> 1800 (2 hours -> 30 minutes)
+// - maxReceiveCount: 3 -> 9 (more frequent retries, same total time)
+// This should be in a separate Terraform PR to keep promotions simpler.
+
+// ProcessingMetadata contains SQS message processing metadata
+type ProcessingMetadata struct {
+	Offset                int                         `json:"offset"`
+	RetryCount            int                         `json:"retry_count"`
+	OriginalReceiptHandle string                      `json:"original_receipt_handle"`
+	RequeuedAt            time.Time                   `json:"requeued_at,omitempty"`
+	CompletedDeliveries   []string                    `json:"completed_deliveries,omitempty"`
+	FromRetryQueue        bool                        `json:"from_retry_queue,omitempty"`
+	Hops                  int                         `json:"hops,omitempty"`               // Number of explicit SendMessage requeues
+	HopReason             string                      `json:"hop_reason,omitempty"`         // Why we requeued (e.g., "transient_s3", "permission_cw")
+	DestinationStates     map[string]DestinationState `json:"destination_states,omitempty"` // Per-destination status; presence indicates already called SendMessage
+}
+
+// IsDeliveryCompleted checks if a delivery type is in the completed deliveries list.
 func (m *ProcessingMetadata) IsDeliveryCompleted(deliveryType string) bool {
 	return slices.Contains(m.CompletedDeliveries, deliveryType)
 }

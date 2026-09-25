@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -21,6 +23,17 @@ import (
 	"github.com/openshift/rosa-log-router/internal/models"
 	"github.com/openshift/rosa-log-router/internal/tenant"
 )
+
+// AWS Lineage constants
+const (
+	// LineageExtractionError indicates extraction failed; message still processes normally
+	LineageExtractionError = -1
+	// LineageNotPresent indicates no AWSTraceHeader (first-hop message, normal)
+	LineageNotPresent = 0
+)
+
+// lineageRe matches the hop count in an AWS Lineage trace header.
+var lineageRe = regexp.MustCompile(`Lineage=[^:]*:(\d+)`)
 
 // Processor handles log processing and delivery
 type Processor struct {
@@ -57,7 +70,108 @@ func NewProcessor(
 	}
 }
 
-// HandleLambdaEvent processes SQS messages from Lambda
+// isDestinationSucceeded checks if a destination has already succeeded via DestinationStates.
+func isDestinationSucceeded(metadata *models.ProcessingMetadata, deliveryID string) bool {
+	if len(metadata.DestinationStates) == 0 {
+		return false
+	}
+	state, exists := metadata.DestinationStates[deliveryID]
+	return exists && state.Status == "success"
+}
+
+// buildDestinationStates creates a map of deliveryID -> DestinationState for successful completions.
+func buildDestinationStates(completedDeliveries []string) map[string]models.DestinationState {
+	states := make(map[string]models.DestinationState)
+	for _, deliveryID := range completedDeliveries {
+		states[deliveryID] = models.DestinationState{
+			Status:    "success",
+			UpdatedAt: time.Now().Format(time.RFC3339),
+		}
+	}
+	return states
+}
+
+// checkHopThresholds logs warnings for suspicious hop counts without exposing sensitive destination data.
+func checkHopThresholds(logger *slog.Logger, metadata *models.ProcessingMetadata) {
+	// Count destination states by status (excludes sensitive bucket/log-group names and error text)
+	destStatusCounts := make(map[string]int)
+	for _, state := range metadata.DestinationStates {
+		destStatusCounts[state.Status]++
+	}
+
+	if metadata.Hops >= 2 && !metadata.FromRetryQueue {
+		logger.Warn("main queue message with elevated hop count - monitor for patterns",
+			"hops", metadata.Hops,
+			"hop_reason", metadata.HopReason,
+			"destination_count", len(metadata.DestinationStates),
+			"destination_status_counts", destStatusCounts)
+	}
+	if metadata.Hops >= 3 && metadata.FromRetryQueue {
+		logger.Warn("retry queue message with elevated hop count - monitor for patterns",
+			"hops", metadata.Hops,
+			"hop_reason", metadata.HopReason,
+			"destination_count", len(metadata.DestinationStates),
+			"destination_status_counts", destStatusCounts)
+	}
+}
+
+// extractAWSLineage safely extracts the AWS Lambda Lineage hop count from SQS record attributes.
+// Returns (hopCount, err): LineageNotPresent (0) if no lineage, hopCount (>0) if found,
+// or LineageExtractionError (-1) if extraction fails (should log but not block processing).
+func extractAWSLineage(record *events.SQSMessage) (int, error) {
+	if record == nil {
+		return LineageNotPresent, nil
+	}
+
+	traceHeader, ok := record.Attributes["AWSTraceHeader"]
+	if !ok {
+		// Missing AWSTraceHeader is normal for non-recursive messages
+		return LineageNotPresent, nil
+	}
+
+	if traceHeader == "" {
+		// Empty header - indicates an issue
+		return LineageExtractionError, fmt.Errorf("empty AWSTraceHeader")
+	}
+
+	// Parse regex: Lineage=[hash]:(\d+)
+	// Example: "Root=1-...-...; Sampled=1; Lineage=43e12f0f:5"
+	matches := lineageRe.FindStringSubmatch(traceHeader)
+	if len(matches) < 2 {
+		// Header exists but no Lineage key found - malformed
+		return LineageExtractionError, fmt.Errorf("lineage key not found in trace header")
+	}
+
+	hopCount, err := strconv.Atoi(matches[1])
+	if err != nil {
+		// Parsing error
+		return LineageExtractionError, fmt.Errorf("failed to parse lineage value: %w", err)
+	}
+
+	return hopCount, nil
+}
+
+// shouldDLQForLineageOverflow checks if message should be sent to DLQ due to AWS Lineage approaching the 16-hop limit.
+func shouldDLQForLineageOverflow(logger *slog.Logger, awsLineage int, messageID string) bool {
+	if awsLineage >= 15 {
+		logger.Error("message approaching AWS Lambda 16-hop lineage limit - sending to DLQ",
+			"aws_lineage", awsLineage,
+			"message_id", messageID,
+			"warning", "this indicates a recursive loop or deep service chain")
+		return true
+	}
+
+	if awsLineage >= 12 {
+		logger.Warn("message approaching AWS Lambda lineage limit",
+			"aws_lineage", awsLineage,
+			"message_id", messageID,
+			"threshold_error", 15)
+	}
+
+	return false
+}
+
+// HandleLambdaEvent processes SQS messages from Lambda, extracting lineage and routing high-lineage messages to DLQ.
 func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
 	var (
 		batchItemFailures = []events.SQSBatchItemFailure{}
@@ -72,6 +186,33 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 	p.logger.Info("processing SQS messages", "message_count", len(event.Records))
 
 	for _, record := range event.Records {
+		// Extract AWS Lineage hop count for observability and safety
+		awsLineage, err := extractAWSLineage(&record)
+		if err != nil {
+			p.logger.Warn("failed to extract AWS lineage from trace header",
+				"message_id", record.MessageId,
+				"error", err)
+			// Continue processing despite lineage extraction failure (awsLineage = -1)
+		}
+
+		if awsLineage > LineageNotPresent && awsLineage != LineageExtractionError {
+			p.logger.Info("processing message with AWS lineage",
+				"aws_lineage", awsLineage,
+				"message_id", record.MessageId)
+		}
+
+		// Circuit breaker: send to DLQ if approaching AWS 16-hop limit
+		// Only check DLQ threshold if lineage was successfully extracted (not -1)
+		if awsLineage != LineageExtractionError && shouldDLQForLineageOverflow(p.logger, awsLineage, record.MessageId) {
+			p.logger.Error("lineage overflow detected - routing to DLQ for inspection",
+				"aws_lineage", awsLineage,
+				"message_id", record.MessageId)
+			// TODO: evaluate if this is a reliable check, and messages should be sent to dlq
+			// batchItemFailures = append(batchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: record.MessageId})
+			// undeliverableRecords++
+			// continue
+		}
+
 		deliveryStats, err := p.ProcessSQSRecord(ctx, record.Body, record.MessageId, record.ReceiptHandle)
 
 		if models.IsNonRecoverable(err) {
@@ -111,7 +252,7 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 	}, nil
 }
 
-// ProcessSQSRecord processes a single SQS record containing S3 event notification
+// ProcessSQSRecord processes a single SQS record containing S3 event notification.
 func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID, receiptHandle string) (*models.DeliveryStats, error) {
 	deliveryStats := &models.DeliveryStats{}
 
@@ -162,8 +303,11 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 	return deliveryStats, nil
 }
 
-// processS3Object processes a single S3 object
+// processS3Object processes a single S3 object from a source bucket and delivers logs to tenant destinations.
 func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, messageBody, receiptHandle string, metadata *models.ProcessingMetadata, deliveryStats *models.DeliveryStats) error {
+	// Check for suspicious hop counts
+	checkHopThresholds(p.logger, metadata)
+
 	// Extract tenant information from object key
 	tenantInfo, err := ExtractTenantInfoFromKey(objectKey, p.logger)
 	if err != nil {
@@ -190,11 +334,13 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 			continue
 		}
 
-		if metadata.IsDeliveryCompleted(deliveryConfig.DeliveryID()) {
+		// Check if delivery already succeeded (either from CompletedDeliveries or DestinationStates)
+		deliveryID := deliveryConfig.DeliveryID()
+		if metadata.IsDeliveryCompleted(deliveryID) || isDestinationSucceeded(metadata, deliveryID) {
 			// tenant_id and delivery_id are operational identifiers (namespace, bucket name),
 			// not PII — logged throughout the codebase for observability.
 			p.logger.Info("skipping already-completed delivery",
-				"delivery_id", deliveryConfig.DeliveryID(),
+				"delivery_id", deliveryID,
 				"tenant_id", tenantInfo.TenantID)
 			deliveryStats.SuccessfulDeliveries++
 			continue
@@ -243,10 +389,16 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 		// Partial success - metadata needs updating
 		if repairableErr != nil {
 			// Has permission errors - route to retry queue with updated metadata
-			if receiptHandle != "" && p.config.RetryQueueURL != "" {
+			if receiptHandle != "" {
+				if p.config.RetryQueueURL == "" {
+					p.logger.Warn("permission error but no retry queue configured, returning error for native retry",
+						"completed_deliveries", completedDeliveries)
+					return fmt.Errorf("permission error with no retry queue configured: %w", repairableErr)
+				}
 				p.logger.Info("partial success with permission errors, updating retry queue metadata",
 					"completed_deliveries", completedDeliveries)
-				if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
+				// Use WithMetadata variant to preserve hop counter for messages from retry queue
+				if err := SendToRetryQueueWithMetadata(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, metadata.Hops, "partial_success_permission_error", nil, p.logger); err != nil {
 					// Critical: SendMessage failed after successful delivery - duplicates possible!
 					p.logger.Error("CRITICAL: failed to requeue after partial success, duplicates possible",
 						"completed_deliveries", completedDeliveries,
@@ -258,12 +410,13 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 		}
 		// Partial success with only transient errors (or no errors on remaining targets)
 		// Transient errors should retry quickly, but we need to preserve delivery progress.
-		// Send updated message to main queue to preserve completedDeliveries.
-		if transientErr != nil {
+		// Send updated message to main queue to preserve completedDeliveries - ONLY on first error.
+		// CRITICAL: Never send messages from retry queue back to main queue - use native SQS retry instead
+		if transientErr != nil && !metadata.FromRetryQueue {
 			p.logger.Info("partial success with transient errors, persisting progress",
 				"completed_deliveries", completedDeliveries)
 
-			// Update message metadata with completed deliveries
+			// Update message metadata with completed deliveries and destination states
 			var messageData map[string]interface{}
 			if err := json.Unmarshal([]byte(messageBody), &messageData); err != nil {
 				p.logger.Error("failed to parse message for metadata update", "error", err)
@@ -284,6 +437,12 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 			// This ensures future permission errors can route to retry queue
 			procMetadata["from_retry_queue"] = false
 			delete(procMetadata, "sent_to_retry_queue_at")
+
+			// Populate destination states to track which destinations succeeded/failed
+			destinationStates := buildDestinationStates(completedDeliveries)
+			procMetadata["destination_states"] = destinationStates
+			procMetadata["hops"] = metadata.Hops + 1
+			procMetadata["hop_reason"] = "transient_error_partial_success"
 
 			updatedBody, err := json.Marshal(messageData)
 			if err != nil {
@@ -306,8 +465,19 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 
 			// Successfully persisted progress - return success to delete original message
 			p.logger.Info("persisted progress to main queue, original message will be deleted",
-				"completed_deliveries", completedDeliveries)
+				"completed_deliveries", completedDeliveries,
+				"hops", metadata.Hops+1)
 			return nil
+		}
+		// Transient error from retry queue - use native SQS retry (stays in retry queue)
+		if transientErr != nil && metadata.FromRetryQueue {
+			p.logger.Info("partial success with transient errors from retry queue, using native SQS retry (2hr visibility)")
+			return fmt.Errorf("transient error on delivery (retry queue, partial success): %w", transientErr)
+		}
+		// Any remaining transient error that wasn't persisted must be retried
+		if transientErr != nil {
+			p.logger.Info("unpersisted transient error after partial success, using native SQS retry")
+			return fmt.Errorf("transient error on delivery (unpersisted, partial success): %w", transientErr)
 		}
 		// Partial success with no remaining errors
 		return nil

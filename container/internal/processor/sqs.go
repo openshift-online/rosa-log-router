@@ -19,7 +19,7 @@ type SQSClientAPI interface {
 	SendMessage(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
 }
 
-// ExtractProcessingMetadata extracts processing metadata from SQS record
+// ExtractProcessingMetadata extracts processing metadata from SQS record.
 func ExtractProcessingMetadata(sqsRecordBody string) (*models.ProcessingMetadata, error) {
 	var message struct {
 		ProcessingMetadata *models.ProcessingMetadata `json:"processing_metadata"`
@@ -36,7 +36,7 @@ func ExtractProcessingMetadata(sqsRecordBody string) (*models.ProcessingMetadata
 	return message.ProcessingMetadata, nil
 }
 
-// ShouldSkipProcessedEvents skips events that have already been processed based on offset
+// ShouldSkipProcessedEvents skips events that have already been processed based on offset.
 func ShouldSkipProcessedEvents(events []*models.LogEvent, offset int, logger *slog.Logger) []*models.LogEvent {
 	if offset <= 0 {
 		return events
@@ -57,9 +57,8 @@ func ShouldSkipProcessedEvents(events []*models.LogEvent, offset int, logger *sl
 	return events[offset:]
 }
 
-// SendToRetryQueue sends a message to the retry queue with completed delivery metadata.
-// Used for permission errors that need slow retry with longer backoff.
-func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL, messageBody string, completedDeliveries []string, logger *slog.Logger) error {
+// SendToRetryQueueWithMetadata sends a message to the retry queue with metadata tracking, preserving hop count and destination states.
+func SendToRetryQueueWithMetadata(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL, messageBody string, completedDeliveries []string, currentHops int, hopReason string, destinationStates map[string]models.DestinationState, logger *slog.Logger) error {
 	var messageData map[string]interface{}
 	if err := json.Unmarshal([]byte(messageBody), &messageData); err != nil {
 		return fmt.Errorf("failed to parse message body: %w", err)
@@ -78,6 +77,11 @@ func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL
 	procMetadata["retry_count"] = 0
 	procMetadata["from_retry_queue"] = true
 	procMetadata["sent_to_retry_queue_at"] = time.Now().Format(time.RFC3339)
+	procMetadata["hops"] = currentHops + 1
+	procMetadata["hop_reason"] = hopReason
+	if len(destinationStates) > 0 {
+		procMetadata["destination_states"] = destinationStates
+	}
 
 	updatedBody, err := json.Marshal(messageData)
 	if err != nil {
@@ -93,11 +97,18 @@ func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL
 	}
 
 	logger.Info("sent message to retry queue",
-		"completed_deliveries", completedDeliveries)
+		"completed_deliveries", completedDeliveries,
+		"hops", currentHops+1,
+		"hop_reason", hopReason)
 	return nil
 }
 
-// RequeueSQSMessageWithOffset re-queues an SQS message with processing offset information
+// SendToRetryQueue sends a message to the retry queue with completed delivery metadata for initial errors.
+func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL, messageBody string, completedDeliveries []string, logger *slog.Logger) error {
+	return SendToRetryQueueWithMetadata(ctx, sqsClient, retryQueueURL, messageBody, completedDeliveries, 0, "initial_permission_error", nil, logger)
+}
+
+// RequeueSQSMessageWithOffset re-queues an SQS message with processing offset and exponential backoff.
 func RequeueSQSMessageWithOffset(ctx context.Context, sqsClient SQSClientAPI, queueURL, messageBody, originalReceiptHandle string, processingOffset, maxRetries int, completedDeliveries []string, logger *slog.Logger) error {
 	if queueURL == "" {
 		logger.Warn("SQS_QUEUE_URL not configured, cannot re-queue message")
