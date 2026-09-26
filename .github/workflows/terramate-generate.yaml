@@ -22,6 +22,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # SECURITY: This checkout of head.sha is safe ONLY because the trigger
+          # is 'pull_request' (unprivileged). NEVER use with 'pull_request_target'.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
       - name: Install Terramate
@@ -37,18 +39,14 @@ jobs:
 
       - name: Find directories and run terramate generate
         run: |
-          dirs=$(find terraform/terramate -type f -name "*.tm.hcl" -exec dirname {} \; | sort -u)
           echo "Found directories:"
-          echo "$dirs"
-          
-          while IFS= read -r dir; do
-            if [ -n "$dir" ]; then
-              echo "Running terramate generate in $dir"
-              cd "$dir"
-              terramate generate
-              cd - > /dev/null
-            fi
-          done <<< "$dirs"
+          find terraform/terramate -type f -name "*.tm.hcl" -exec dirname {} \; | sort -u
+
+          # Use null-delimited paths to safely handle spaces and newlines
+          while IFS= read -r -d '' dir; do
+            echo "Running terramate generate in $dir"
+            (cd "$dir" && terramate generate)
+          done < <(find terraform/terramate -type f -name "*.tm.hcl" -exec dirname {} \; | sort -u | tr '\n' '\0')
 
       - name: Check for changes
         id: verify-changed-files
@@ -57,8 +55,10 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
             # Generate diff content
             diff_output=$(git --no-pager diff)
+            # Use random delimiter to prevent HEREDOC injection
+            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
             {
-              echo "diff_content<<EOF"
+              echo "diff_content<<$EOF"
               echo "## Terramate Generate Changes"
               echo ""
               echo "The following files were updated by \`terramate generate\`:"
@@ -66,7 +66,7 @@ jobs:
               echo '```diff'
               echo "$diff_output"
               echo '```'
-              echo "EOF"
+              echo "$EOF"
             } >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
@@ -98,7 +98,7 @@ jobs:
             }
 
             // Add new comment
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
