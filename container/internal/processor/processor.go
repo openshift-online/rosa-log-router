@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -25,15 +23,6 @@ import (
 )
 
 // AWS Lineage constants
-const (
-	// LineageExtractionError indicates extraction failed; message still processes normally
-	LineageExtractionError = -1
-	// LineageNotPresent indicates no AWSTraceHeader (first-hop message, normal)
-	LineageNotPresent = 0
-)
-
-// lineageRe matches the hop count in an AWS Lineage trace header.
-var lineageRe = regexp.MustCompile(`Lineage=[^:]*:(\d+)`)
 
 // Processor handles log processing and delivery
 type Processor struct {
@@ -115,63 +104,7 @@ func checkHopThresholds(logger *slog.Logger, metadata *models.ProcessingMetadata
 	}
 }
 
-// extractAWSLineage safely extracts the AWS Lambda Lineage hop count from SQS record attributes.
-// Returns (hopCount, err): LineageNotPresent (0) if no lineage, hopCount (>0) if found,
-// or LineageExtractionError (-1) if extraction fails (should log but not block processing).
-func extractAWSLineage(record *events.SQSMessage) (int, error) {
-	if record == nil {
-		return LineageNotPresent, nil
-	}
-
-	traceHeader, ok := record.Attributes["AWSTraceHeader"]
-	if !ok {
-		// Missing AWSTraceHeader is normal for non-recursive messages
-		return LineageNotPresent, nil
-	}
-
-	if traceHeader == "" {
-		// Empty header - indicates an issue
-		return LineageExtractionError, fmt.Errorf("empty AWSTraceHeader")
-	}
-
-	// Parse regex: Lineage=[hash]:(\d+)
-	// Example: "Root=1-...-...; Sampled=1; Lineage=43e12f0f:5"
-	matches := lineageRe.FindStringSubmatch(traceHeader)
-	if len(matches) < 2 {
-		// Header exists but no Lineage key found - malformed
-		return LineageExtractionError, fmt.Errorf("lineage key not found in trace header")
-	}
-
-	hopCount, err := strconv.Atoi(matches[1])
-	if err != nil {
-		// Parsing error
-		return LineageExtractionError, fmt.Errorf("failed to parse lineage value: %w", err)
-	}
-
-	return hopCount, nil
-}
-
-// shouldDLQForLineageOverflow checks if message should be sent to DLQ due to AWS Lineage approaching the 16-hop limit.
-func shouldDLQForLineageOverflow(logger *slog.Logger, awsLineage int, messageID string) bool {
-	if awsLineage >= 15 {
-		logger.Error("message approaching AWS Lambda 16-hop lineage limit - sending to DLQ",
-			"aws_lineage", awsLineage,
-			"message_id", messageID,
-			"warning", "this indicates a recursive loop or deep service chain")
-		return true
-	}
-
-	if awsLineage >= 12 {
-		logger.Warn("message approaching AWS Lambda lineage limit",
-			"aws_lineage", awsLineage,
-			"message_id", messageID,
-			"threshold_error", 15)
-	}
-
-	return false
-}
-
-// HandleLambdaEvent processes SQS messages from Lambda, extracting lineage and routing high-lineage messages to DLQ.
+// HandleLambdaEvent processes SQS messages from Lambda.
 func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
 	var (
 		batchItemFailures = []events.SQSBatchItemFailure{}
@@ -186,33 +119,6 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 	p.logger.Info("processing SQS messages", "message_count", len(event.Records))
 
 	for _, record := range event.Records {
-		// Extract AWS Lineage hop count for observability and safety
-		awsLineage, err := extractAWSLineage(&record)
-		if err != nil {
-			p.logger.Warn("failed to extract AWS lineage from trace header",
-				"message_id", record.MessageId,
-				"error", err)
-			// Continue processing despite lineage extraction failure (awsLineage = -1)
-		}
-
-		if awsLineage > LineageNotPresent && awsLineage != LineageExtractionError {
-			p.logger.Info("processing message with AWS lineage",
-				"aws_lineage", awsLineage,
-				"message_id", record.MessageId)
-		}
-
-		// Circuit breaker: send to DLQ if approaching AWS 16-hop limit
-		// Only check DLQ threshold if lineage was successfully extracted (not -1)
-		if awsLineage != LineageExtractionError && shouldDLQForLineageOverflow(p.logger, awsLineage, record.MessageId) {
-			p.logger.Error("lineage overflow detected - routing to DLQ for inspection",
-				"aws_lineage", awsLineage,
-				"message_id", record.MessageId)
-			// TODO: evaluate if this is a reliable check, and messages should be sent to dlq
-			// batchItemFailures = append(batchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: record.MessageId})
-			// undeliverableRecords++
-			// continue
-		}
-
 		deliveryStats, err := p.ProcessSQSRecord(ctx, record.Body, record.MessageId, record.ReceiptHandle)
 
 		if models.IsNonRecoverable(err) {
