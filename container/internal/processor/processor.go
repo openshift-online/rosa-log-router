@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -15,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	awsmetrics "github.com/openshift/rosa-log-router/internal/aws"
 	"github.com/openshift/rosa-log-router/internal/delivery"
@@ -27,36 +29,108 @@ import (
 // Processor handles log processing and delivery
 type Processor struct {
 	s3Client         *s3.Client
-	sqsClient        *sqs.Client
+	sqsClient        SQSClientAPI
 	tenantConfig     *tenant.ConfigManager
 	cwDeliverer      *delivery.CloudWatchDeliverer
 	s3Deliverer      *delivery.S3Deliverer
 	metricsPublisher *awsmetrics.MetricsPublisher
 	config           *models.Config
 	logger           *slog.Logger
+
+	// Queue visibility defaults (queried once at startup from AWS)
+	mainQueueVisibility  int32
+	retryQueueVisibility int32
 }
 
 // NewProcessor creates a new log processor
 func NewProcessor(
 	s3Client *s3.Client,
 	dynamoClient tenant.DynamoDBQueryAPI,
-	sqsClient *sqs.Client,
+	sqsClient SQSClientAPI,
 	stsClient *sts.Client,
 	cwClient *cloudwatch.Client,
 	endpointURL string,
 	config *models.Config,
 	logger *slog.Logger,
 ) *Processor {
+	// Query queue visibility timeouts from AWS at startup (single source of truth)
+	mainVis, retryVis := queryQueueVisibilityDefaults(sqsClient, config, logger)
+
 	return &Processor{
-		s3Client:         s3Client,
-		sqsClient:        sqsClient,
-		tenantConfig:     tenant.NewConfigManager(dynamoClient, config.TenantConfigTable, logger),
-		cwDeliverer:      delivery.NewCloudWatchDeliverer(stsClient, config.CentralLogDistributionRoleArn, endpointURL, logger),
-		s3Deliverer:      delivery.NewS3Deliverer(stsClient, config.CentralLogDistributionRoleArn, config.S3UsePathStyle, endpointURL, logger),
-		metricsPublisher: awsmetrics.NewMetricsPublisher(cwClient, logger),
-		config:           config,
-		logger:           logger,
+		s3Client:             s3Client,
+		sqsClient:            sqsClient,
+		tenantConfig:         tenant.NewConfigManager(dynamoClient, config.TenantConfigTable, logger),
+		cwDeliverer:          delivery.NewCloudWatchDeliverer(stsClient, config.CentralLogDistributionRoleArn, endpointURL, logger),
+		s3Deliverer:          delivery.NewS3Deliverer(stsClient, config.CentralLogDistributionRoleArn, config.S3UsePathStyle, endpointURL, logger),
+		metricsPublisher:     awsmetrics.NewMetricsPublisher(cwClient, logger),
+		config:               config,
+		logger:               logger,
+		mainQueueVisibility:  mainVis,
+		retryQueueVisibility: retryVis,
 	}
+}
+
+// queryQueueVisibilityDefaults queries AWS for queue visibility timeouts at startup.
+// This ensures we have the actual configured values as our single source of truth.
+func queryQueueVisibilityDefaults(sqsClient SQSClientAPI, config *models.Config, logger *slog.Logger) (mainVis, retryVis int32) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Cast to concrete type to access GetQueueAttributes (not in our interface)
+	// If using mock in tests, return defaults
+	concreteClient, ok := sqsClient.(*sqs.Client)
+	if !ok {
+		logger.Warn("SQS client is not *sqs.Client (likely mock), using default visibility timeouts",
+			"main_default", 900,
+			"retry_default", 7200)
+		return 900, 7200
+	}
+
+	// Query main queue
+	if config.SQSQueueURL != "" {
+		mainAttrs, err := concreteClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+			QueueUrl:       aws.String(config.SQSQueueURL),
+			AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameVisibilityTimeout},
+		})
+		if err != nil {
+			logger.Warn("failed to query main queue visibility, using default 900s", "error", err)
+			mainVis = 900
+		} else if visStr, exists := mainAttrs.Attributes["VisibilityTimeout"]; exists {
+			if vis, err := strconv.ParseInt(visStr, 10, 32); err == nil {
+				mainVis = int32(vis)
+				logger.Info("queried main queue visibility timeout", "visibility_seconds", mainVis)
+			} else {
+				logger.Warn("failed to parse main queue visibility, using default 900s", "error", err)
+				mainVis = 900
+			}
+		}
+	} else {
+		mainVis = 900 // Default if no main queue configured
+	}
+
+	// Query retry queue
+	if config.RetryQueueURL != "" {
+		retryAttrs, err := concreteClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+			QueueUrl:       aws.String(config.RetryQueueURL),
+			AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameVisibilityTimeout},
+		})
+		if err != nil {
+			logger.Warn("failed to query retry queue visibility, using default 7200s", "error", err)
+			retryVis = 7200
+		} else if visStr, exists := retryAttrs.Attributes["VisibilityTimeout"]; exists {
+			if vis, err := strconv.ParseInt(visStr, 10, 32); err == nil {
+				retryVis = int32(vis)
+				logger.Info("queried retry queue visibility timeout", "visibility_seconds", retryVis)
+			} else {
+				logger.Warn("failed to parse retry queue visibility, using default 7200s", "error", err)
+				retryVis = 7200
+			}
+		}
+	} else {
+		retryVis = 7200 // Default if no retry queue configured
+	}
+
+	return mainVis, retryVis
 }
 
 // isDestinationSucceeded checks if a destination has already succeeded via DestinationStates.
@@ -104,6 +178,98 @@ func checkHopThresholds(logger *slog.Logger, metadata *models.ProcessingMetadata
 	}
 }
 
+// getReceiveCount extracts the approximate number of times this message has been received from the queue.
+// This value is used for progressive backoff calculations in the retry queue.
+//
+// Returns:
+//   - The receive count as an integer (1-based)
+//   - Defaults to 1 if the attribute is not found or cannot be parsed
+//
+// Note: ApproximateReceiveCount is a system-managed SQS attribute that increments
+// with each receive (including receives that result in visibility timeout expiration).
+func getReceiveCount(record events.SQSMessage) int {
+	if countStr, exists := record.Attributes["ApproximateReceiveCount"]; exists {
+		if count, err := strconv.Atoi(countStr); err == nil {
+			return count
+		}
+	}
+	// Default to 1 for first receive
+	return 1
+}
+
+// applyProgressiveBackoff implements progressive backoff for permission errors.
+// Transient errors use queue defaults. Permission errors get progressive backoff tiers
+// to give customers time to fix IAM permissions, API keys, etc.
+//
+// Backoff progression for permission errors:
+//   - Receive 1: 30 minutes  (config: PermissionBackoffTier1, default 1800s)
+//   - Receive 2: 60 minutes  (config: PermissionBackoffTier2, default 3600s)
+//   - Receive 3+: 120 minutes (config: PermissionBackoffTier3, default 7200s)
+//
+// Transient errors always use queue default visibility (no ChangeMessageVisibility call).
+//
+// Optimization: Skips ChangeMessageVisibility if desired backoff == queue default.
+//
+// Parameters:
+//   - ctx: Context for the API call
+//   - queueURL: URL of the queue (main or retry)
+//   - receiptHandle: Receipt handle of the message
+//   - receiveCount: Number of times message has been received (from ApproximateReceiveCount)
+//   - isPermissionError: true for permission errors, false for transient errors
+//   - queueDefaultVisibility: Queue's configured default visibility timeout (queried at startup)
+func (p *Processor) applyProgressiveBackoff(ctx context.Context, queueURL, receiptHandle string, receiveCount int, isPermissionError bool, queueDefaultVisibility int32) {
+	if receiptHandle == "" {
+		p.logger.Debug("cannot apply progressive backoff without receipt handle")
+		return
+	}
+
+	// Transient errors: always use queue default (no CMV)
+	if !isPermissionError {
+		p.logger.Debug("transient error, using queue default visibility",
+			"queue_default", queueDefaultVisibility)
+		return
+	}
+
+	// Permission errors: calculate desired backoff
+	var desiredTimeout int32
+	switch receiveCount {
+	case 1:
+		desiredTimeout = p.config.PermissionBackoffTier1 // Default: 1800s (30 min)
+	case 2:
+		desiredTimeout = p.config.PermissionBackoffTier2 // Default: 3600s (60 min)
+	default:
+		desiredTimeout = p.config.PermissionBackoffTier3 // Default: 7200s (120 min)
+	}
+
+	// Optimization: skip CMV if desired equals queue default
+	if desiredTimeout == queueDefaultVisibility {
+		p.logger.Debug("desired backoff matches queue default, skipping CMV",
+			"desired", desiredTimeout,
+			"receive_count", receiveCount)
+		return
+	}
+
+	// Override queue default with progressive backoff
+	_, err := p.sqsClient.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
+		QueueUrl:          aws.String(queueURL),
+		ReceiptHandle:     aws.String(receiptHandle),
+		VisibilityTimeout: desiredTimeout,
+	})
+
+	if err != nil {
+		p.logger.Warn("failed to apply progressive backoff, will use queue default",
+			"error", err,
+			"desired", desiredTimeout,
+			"queue_default", queueDefaultVisibility,
+			"receive_count", receiveCount)
+		return
+	}
+
+	p.logger.Debug("applied progressive backoff",
+		"timeout_seconds", desiredTimeout,
+		"receive_count", receiveCount)
+}
+
 // HandleLambdaEvent processes SQS messages from Lambda.
 func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
 	var (
@@ -119,7 +285,7 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 	p.logger.Info("processing SQS messages", "message_count", len(event.Records))
 
 	for _, record := range event.Records {
-		deliveryStats, err := p.ProcessSQSRecord(ctx, record.Body, record.MessageId, record.ReceiptHandle)
+		deliveryStats, err := p.ProcessSQSRecord(ctx, record.Body, record.MessageId, record.ReceiptHandle, getReceiveCount(record))
 
 		if models.IsNonRecoverable(err) {
 			// Non-recoverable errors should not be retried
@@ -159,7 +325,7 @@ func (p *Processor) HandleLambdaEvent(ctx context.Context, event events.SQSEvent
 }
 
 // ProcessSQSRecord processes a single SQS record containing S3 event notification.
-func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID, receiptHandle string) (*models.DeliveryStats, error) {
+func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID, receiptHandle string, receiveCount int) (*models.DeliveryStats, error) {
 	deliveryStats := &models.DeliveryStats{}
 
 	// Parse the SQS message body (SNS message)
@@ -194,7 +360,7 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 			"bucket", bucketName,
 			"key", objectKey)
 
-		if err := p.processS3Object(ctx, bucketName, objectKey, messageBody, receiptHandle, metadata, deliveryStats); err != nil {
+		if err := p.processS3Object(ctx, bucketName, objectKey, messageBody, receiptHandle, receiveCount, metadata, deliveryStats); err != nil {
 			// Check if error is non-recoverable
 			if models.IsNonRecoverable(err) {
 				p.logger.Warn("non-recoverable error processing S3 object, continuing",
@@ -210,7 +376,7 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 }
 
 // processS3Object processes a single S3 object from a source bucket and delivers logs to tenant destinations.
-func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, messageBody, receiptHandle string, metadata *models.ProcessingMetadata, deliveryStats *models.DeliveryStats) error {
+func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, messageBody, receiptHandle string, receiveCount int, metadata *models.ProcessingMetadata, deliveryStats *models.DeliveryStats) error {
 	// Check for suspicious hop counts
 	checkHopThresholds(p.logger, metadata)
 
@@ -283,130 +449,186 @@ func (p *Processor) processS3Object(ctx context.Context, bucketName, objectKey, 
 		deliveryStats.SuccessfulDeliveries++
 	}
 
-	// Performance-optimized error routing:
-	// Only call SendMessage when metadata needs updating OR first permission error from main queue.
-	// Otherwise use native SQS retry (return error, stays in same queue).
-	// This eliminates ~150ms SendMessage overhead for "no progress" retries.
+	// ============================================================================
+	// RETRY STATE MACHINE - PARTIAL SUCCESS PATH
+	// ============================================================================
+	// Partial success means some log destinations succeeded while others failed.
+	// This requires preserving metadata to prevent duplicate log deliveries.
+	//
+	// STATE TRANSITIONS:
+	//   Main Queue (partial success) → Retry Queue: SendMessage with updated metadata
+	//   Retry Queue (partial success) → Retry Queue: Native retry + progressive backoff
+	//
+	// CRITICAL: This is the ONLY scenario where we use SendMessage.
+	// Both permission errors AND transient errors follow the same path when
+	// partial success occurs - the error type doesn't matter, what matters is
+	// preserving the list of successful deliveries in metadata.
+	//
+	// HOP COUNT SAFETY:
+	//   - SendMessage increments hop count by +1 (bounded at hop=2)
+	//   - Native retry increments hop count by +0
+	//   - ChangeMessageVisibility increments hop count by +0
+	// ============================================================================
 
 	// Check if any new deliveries succeeded (metadata changed)
 	metadataChanged := len(completedDeliveries) > len(metadata.CompletedDeliveries)
 
 	if metadataChanged {
-		// Partial success - metadata needs updating
+		// ========================================================================
+		// PARTIAL SUCCESS DETECTED
+		// Some destinations succeeded, some failed.
+		// Must preserve successful deliveries to prevent duplicate log entries.
+		// ========================================================================
+
+		// Determine error type for logging/observability
+		var errorType string
+		var lastErr error
 		if repairableErr != nil {
-			// Has permission errors - route to retry queue with updated metadata
+			errorType = "permission"
+			lastErr = repairableErr
+		} else if transientErr != nil {
+			errorType = "transient"
+			lastErr = transientErr
+		}
+
+		if !metadata.FromRetryQueue {
+			// ====================================================================
+			// FROM MAIN QUEUE: Send to retry queue to preserve metadata
+			// ====================================================================
+			// Partial success from main queue - ALWAYS send to retry queue.
+			// This is the ONLY case where we use SendMessage.
+			//
+			// Why: We need to update message metadata with the list of successful
+			// deliveries. Can't update metadata in the same queue without SendMessage.
+			//
+			// Error type doesn't matter: Whether remaining failures are permission
+			// errors (customer needs to fix IAM) or transient errors (network issues),
+			// we still need to preserve the progress already made.
+			//
+			// STATE TRANSITION: main → retry queue (SendMessage)
+			// HOP INCREMENT: +1
+			// COST: 1 SendMessage API call (~$0.0000004)
+			// ====================================================================
+
 			if receiptHandle != "" {
 				if p.config.RetryQueueURL == "" {
-					p.logger.Warn("permission error but no retry queue configured, returning error for native retry",
-						"completed_deliveries", completedDeliveries)
-					return fmt.Errorf("permission error with no retry queue configured: %w", repairableErr)
+					p.logger.Warn("partial success but no retry queue configured, using native retry (metadata may be lost)",
+						"completed_delivery_count", len(completedDeliveries),
+						"error_type", errorType)
+					// Fall back to native retry - accept small duplicate risk
+					return fmt.Errorf("partial success with %s error, no retry queue: %w", errorType, lastErr)
 				}
-				p.logger.Info("partial success with permission errors, updating retry queue metadata",
-					"completed_deliveries", completedDeliveries)
-				// Use WithMetadata variant to preserve hop counter for messages from retry queue
-				if err := SendToRetryQueueWithMetadata(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, metadata.Hops, "partial_success_permission_error", nil, p.logger); err != nil {
-					// Critical: SendMessage failed after successful delivery - duplicates possible!
+
+				// Determine hop reason based on error type (for observability)
+				hopReason := "partial_success"
+				if errorType == "permission" {
+					hopReason = "partial_success_permission_error"
+				} else if errorType == "transient" {
+					hopReason = "partial_success_transient_error"
+				}
+
+				p.logger.Info("partial success from main queue, sending to retry queue to preserve metadata",
+					"completed_delivery_count", len(completedDeliveries),
+					"error_type", errorType,
+					"hop_reason", hopReason)
+
+				// Use WithMetadata variant to preserve hop counter
+				if err := SendToRetryQueueWithMetadata(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, metadata.Hops, hopReason, nil, p.logger); err != nil {
+					// CRITICAL: SendMessage failed after successful delivery
+					// Some destinations already received logs, but message still in main queue
+					// Retrying from main queue will cause duplicate deliveries
 					p.logger.Error("CRITICAL: failed to requeue after partial success, duplicates possible",
-						"completed_deliveries", completedDeliveries,
+						"completed_delivery_count", len(completedDeliveries),
+						"error_type", errorType,
 						"error", err)
 					return fmt.Errorf("failed to requeue after partial success: %w", err)
 				}
+
+				// Successfully sent to retry queue - delete original from main queue
 				return nil
 			}
 		}
-		// Partial success with only transient errors (or no errors on remaining targets)
-		// Transient errors should retry quickly, but we need to preserve delivery progress.
-		// Send updated message to main queue to preserve completedDeliveries - ONLY on first error.
-		// CRITICAL: Never send messages from retry queue back to main queue - use native SQS retry instead
-		if transientErr != nil && !metadata.FromRetryQueue {
-			p.logger.Info("partial success with transient errors, persisting progress",
-				"completed_deliveries", completedDeliveries)
 
-			// Update message metadata with completed deliveries and destination states
-			var messageData map[string]interface{}
-			if err := json.Unmarshal([]byte(messageBody), &messageData); err != nil {
-				p.logger.Error("failed to parse message for metadata update", "error", err)
-				// Fall back to native retry - metadata will be lost but message will retry
-				return fmt.Errorf("transient error after partial success: %w", transientErr)
+		// ====================================================================
+		// FROM RETRY QUEUE: Native retry with progressive backoff
+		// ====================================================================
+		// Partial success from retry queue - use native retry.
+		// Cannot update metadata without SendMessage, but we already have
+		// the successful deliveries preserved from when we first moved to
+		// retry queue.
+		//
+		// Progressive backoff gives customer time between retry attempts:
+		//   Recv 1: 30 min (customer likely still fixing issues)
+		//   Recv 2: 60 min (customer may need more time)
+		//   Recv 3+: 2 hr (queue default - issue is persistent)
+		//
+		// STATE TRANSITION: retry queue → retry queue (native retry)
+		// HOP INCREMENT: +0
+		// COST: Up to 2 ChangeMessageVisibility API calls (~$0.0000008)
+		// ====================================================================
+
+		if metadata.FromRetryQueue {
+			// ====================================================================
+			// Partial success from retry queue - use native retry.
+			//
+			// NOTE: With 2 destinations (S3 + CloudWatch), partial success means
+			// exactly 1 succeeded and 1 failed. On retry queue receive, we only
+			// attempt the 1 failed destination. No duplicate risk because:
+			// - If it succeeds: completedDeliveries = both, done
+			// - If it fails: completedDeliveries unchanged, retry same state
+			//
+			// Future: If >2 destinations are added, this may need enhancement
+			// (additional queues or external state persistence).
+			// ====================================================================
+
+			// Apply progressive backoff based on error type
+			// Permission errors: 30min → 60min → 120min
+			// Transient errors: use queue default (queried at startup)
+			p.applyProgressiveBackoff(ctx, p.config.RetryQueueURL, receiptHandle, receiveCount, repairableErr != nil, p.retryQueueVisibility)
+
+			// Return error to trigger native SQS retry (message stays in retry queue)
+			if repairableErr != nil {
+				p.logger.Info("partial success with permission errors from retry queue, using native retry",
+					"receive_count", receiveCount,
+					"completed_delivery_count", len(completedDeliveries))
+				return fmt.Errorf("permission error (retry queue, partial success): %w", repairableErr)
 			}
-
-			if messageData["processing_metadata"] == nil {
-				messageData["processing_metadata"] = make(map[string]interface{})
+			if transientErr != nil {
+				p.logger.Info("partial success with transient errors from retry queue, using native retry",
+					"receive_count", receiveCount,
+					"completed_delivery_count", len(completedDeliveries))
+				return fmt.Errorf("transient error (retry queue, partial success): %w", transientErr)
 			}
-			procMetadata, ok := messageData["processing_metadata"].(map[string]interface{})
-			if !ok {
-				procMetadata = make(map[string]interface{})
-				messageData["processing_metadata"] = procMetadata
-			}
-			procMetadata["completed_deliveries"] = completedDeliveries
-			// Clear retry queue metadata when sending back to main queue
-			// This ensures future permission errors can route to retry queue
-			procMetadata["from_retry_queue"] = false
-			delete(procMetadata, "sent_to_retry_queue_at")
-
-			// Populate destination states to track which destinations succeeded/failed
-			destinationStates := buildDestinationStates(completedDeliveries)
-			procMetadata["destination_states"] = destinationStates
-			procMetadata["hops"] = metadata.Hops + 1
-			procMetadata["hop_reason"] = "transient_error_partial_success"
-
-			updatedBody, err := json.Marshal(messageData)
-			if err != nil {
-				p.logger.Error("failed to marshal updated message", "error", err)
-				return fmt.Errorf("transient error after partial success: %w", transientErr)
-			}
-
-			// Send to main queue with updated metadata
-			_, err = p.sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
-				QueueUrl:    aws.String(p.config.SQSQueueURL),
-				MessageBody: aws.String(string(updatedBody)),
-			})
-			if err != nil {
-				// Critical: Failed to persist progress - duplicates possible!
-				p.logger.Error("CRITICAL: failed to send to main queue after partial success, duplicates possible",
-					"completed_deliveries", completedDeliveries,
-					"error", err)
-				return fmt.Errorf("failed to persist progress after partial success: %w", err)
-			}
-
-			// Successfully persisted progress - return success to delete original message
-			p.logger.Info("persisted progress to main queue, original message will be deleted",
-				"completed_deliveries", completedDeliveries,
-				"hops", metadata.Hops+1)
-			return nil
 		}
-		// Transient error from retry queue - use native SQS retry (stays in retry queue)
-		if transientErr != nil && metadata.FromRetryQueue {
-			p.logger.Info("partial success with transient errors from retry queue, using native SQS retry (2hr visibility)")
-			return fmt.Errorf("transient error on delivery (retry queue, partial success): %w", transientErr)
+
+		// Partial success with no remaining errors - all deliveries succeeded
+		// BUT: if we still have errors and skipped all branches above, return the error
+		if lastErr != nil {
+			p.logger.Warn("partial success with errors but no receipt handle to requeue",
+				"error_type", errorType,
+				"completed_delivery_count", len(completedDeliveries))
+			return fmt.Errorf("partial success with %s error: %w", errorType, lastErr)
 		}
-		// Any remaining transient error that wasn't persisted must be retried
-		if transientErr != nil {
-			p.logger.Info("unpersisted transient error after partial success, using native SQS retry")
-			return fmt.Errorf("transient error on delivery (unpersisted, partial success): %w", transientErr)
-		}
-		// Partial success with no remaining errors
 		return nil
 	}
 
-	// No metadata change (no new successes)
+	// No metadata change (no new successes) - total failure
+	// All destinations failed - use native retry in current queue
 	if repairableErr != nil {
-		if !metadata.FromRetryQueue {
-			// First permission error from main queue - route to retry queue for 2hr visibility
-			if receiptHandle != "" && p.config.RetryQueueURL != "" {
-				p.logger.Info("first permission error from main queue, routing to retry queue")
-				if err := SendToRetryQueue(ctx, p.sqsClient, p.config.RetryQueueURL, messageBody, completedDeliveries, p.logger); err != nil {
-					p.logger.Error("failed to send to retry queue, falling back to native retry", "error", err)
-					return fmt.Errorf("permission error on delivery: %w", repairableErr)
-				}
-				return nil
-			}
-			p.logger.Warn("permission error with no retry queue configured, using native retry")
-			return fmt.Errorf("permission error on delivery: %w", repairableErr)
+		// Permission errors get progressive backoff in both queues
+		// (customer needs time to fix IAM permissions)
+		queueURL := p.config.SQSQueueURL
+		queueVisibility := p.mainQueueVisibility
+		if metadata.FromRetryQueue {
+			queueURL = p.config.RetryQueueURL
+			queueVisibility = p.retryQueueVisibility
 		}
-		// Permission error from retry queue, no progress - use native SQS retry (stays in retry queue)
-		p.logger.Info("permission error from retry queue with no progress, using native SQS retry (2hr visibility)")
-		return fmt.Errorf("permission error on delivery (retry queue, no progress): %w", repairableErr)
+
+		p.applyProgressiveBackoff(ctx, queueURL, receiptHandle, receiveCount, true, queueVisibility)
+		p.logger.Info("permission error with no progress, using native retry",
+			"receive_count", receiveCount,
+			"from_retry_queue", metadata.FromRetryQueue)
+		return fmt.Errorf("permission error on delivery: %w", repairableErr)
 	}
 
 	if transientErr != nil {

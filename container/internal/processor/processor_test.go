@@ -3,6 +3,9 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -147,7 +150,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		messageBody := createSNSMessageWithS3Event("test-bucket", "cluster/namespace/app/pod/file.json.gz")
 
 		// Will fail due to missing AWS clients, but should parse successfully
-		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 1)
 
 		// Error is expected (no DynamoDB client), but should not be InvalidS3NotificationError
 		if err != nil {
@@ -158,7 +161,7 @@ func TestProcessSQSRecord(t *testing.T) {
 	t.Run("returns non-recoverable error for invalid SNS message", func(t *testing.T) {
 		invalidMessage := "not valid json"
 
-		_, err := proc.ProcessSQSRecord(context.Background(), invalidMessage, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), invalidMessage, "msg-1", "receipt-1", 1)
 
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
@@ -169,7 +172,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		snsMessage := models.SNSMessage{Message: "invalid s3 event"}
 		messageBody, _ := json.Marshal(snsMessage)
 
-		_, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1", 1)
 
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
@@ -181,7 +184,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		encodedKey := "cluster%2Fnamespace%2Fapp%2Fpod%2Ffile.json.gz"
 		messageBody := createSNSMessageWithS3Event("test-bucket", encodedKey)
 
-		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 1)
 
 		// Should decode successfully (error will be from missing clients, not decoding)
 		if err != nil {
@@ -193,7 +196,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		// Object key with insufficient path segments
 		messageBody := createSNSMessageWithS3Event("test-bucket", "invalid/path")
 
-		stats, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		stats, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 1)
 
 		// Non-recoverable errors are logged and swallowed during S3 processing
 		// The record is skipped and processing continues
@@ -223,7 +226,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		snsMessage := models.SNSMessage{Message: string(s3EventJSON)}
 		messageBody, _ := json.Marshal(snsMessage)
 
-		stats, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1")
+		stats, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1", 1)
 
 		// Will fail due to missing clients, but should attempt to process both
 		assert.NotNil(t, stats)
@@ -261,7 +264,7 @@ func TestProcessSQSRecordErrorClassification(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := proc.ProcessSQSRecord(context.Background(), tc.messageBody, "msg-1", "receipt-1")
+			_, err := proc.ProcessSQSRecord(context.Background(), tc.messageBody, "msg-1", "receipt-1", 1)
 
 			require.Error(t, err)
 			assert.Equal(t, tc.expectNonRecoverable, models.IsNonRecoverable(err))
@@ -504,3 +507,190 @@ func TestURLDecoding(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================================
+// Tests for new progressive backoff functionality
+// ============================================================================
+
+func TestGetReceiveCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		attributes    map[string]string
+		expectedCount int
+	}{
+		{
+			name: "valid receive count",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "3",
+			},
+			expectedCount: 3,
+		},
+		{
+			name: "receive count is 1",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "1",
+			},
+			expectedCount: 1,
+		},
+		{
+			name:          "missing attribute - defaults to 1",
+			attributes:    map[string]string{},
+			expectedCount: 1,
+		},
+		{
+			name: "invalid numeric value - defaults to 1",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "not-a-number",
+			},
+			expectedCount: 1,
+		},
+		{
+			name: "empty string - defaults to 1",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "",
+			},
+			expectedCount: 1,
+		},
+		{
+			name: "zero value - returns 0",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "0",
+			},
+			expectedCount: 0,
+		},
+		{
+			name: "large receive count",
+			attributes: map[string]string{
+				"ApproximateReceiveCount": "42",
+			},
+			expectedCount: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := events.SQSMessage{
+				Attributes: tt.attributes,
+			}
+
+			result := getReceiveCount(record)
+			assert.Equal(t, tt.expectedCount, result, "receive count mismatch")
+		})
+	}
+}
+
+func TestApplyProgressiveBackoff(t *testing.T) {
+	tests := []struct {
+		name            string
+		receiveCount    int
+		receiptHandle   string
+		expectCMVCall   bool
+		expectedTimeout int32
+	}{
+		{
+			name:            "receive count 1 - apply 30 minute backoff",
+			receiveCount:    1,
+			receiptHandle:   "valid-receipt-handle",
+			expectCMVCall:   true,
+			expectedTimeout: 1800, // 30 minutes
+		},
+		{
+			name:            "receive count 2 - apply 60 minute backoff",
+			receiveCount:    2,
+			receiptHandle:   "valid-receipt-handle",
+			expectCMVCall:   true,
+			expectedTimeout: 3600, // 60 minutes
+		},
+		{
+			name:            "receive count 3 - no CMV, use queue default",
+			receiveCount:    3,
+			receiptHandle:   "valid-receipt-handle",
+			expectCMVCall:   false,
+			expectedTimeout: 0, // Not used
+		},
+		{
+			name:            "receive count 10 - no CMV, use queue default",
+			receiveCount:    10,
+			receiptHandle:   "valid-receipt-handle",
+			expectCMVCall:   false,
+			expectedTimeout: 0, // Not used
+		},
+		{
+			name:            "empty receipt handle - no CMV call",
+			receiveCount:    1,
+			receiptHandle:   "",
+			expectCMVCall:   false,
+			expectedTimeout: 0, // Not used
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create mock SQS client
+			mockSQS := &mockSQSClient{
+				changeVisibilityFunc: func(ctx context.Context, params *sqs.ChangeMessageVisibilityInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error) {
+					// Verify parameters if CMV should be called
+					if tt.expectCMVCall {
+						assert.Equal(t, "https://sqs.us-east-1.amazonaws.com/123456789012/test-retry-queue", *params.QueueUrl)
+						assert.Equal(t, tt.receiptHandle, *params.ReceiptHandle)
+						assert.Equal(t, tt.expectedTimeout, params.VisibilityTimeout)
+					} else {
+						t.Error("ChangeMessageVisibility should not have been called")
+					}
+					return &sqs.ChangeMessageVisibilityOutput{}, nil
+				},
+			}
+
+			// Create processor with mock
+			proc := &Processor{
+				sqsClient: mockSQS,
+				logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+				config:    &models.Config{PermissionBackoffTier1: 1800, PermissionBackoffTier2: 3600, PermissionBackoffTier3: 7200},
+			}
+
+			// Call applyProgressiveBackoff (test permission error with 7200s queue default)
+			proc.applyProgressiveBackoff(
+				context.Background(),
+				"https://sqs.us-east-1.amazonaws.com/123456789012/test-retry-queue",
+				tt.receiptHandle,
+				tt.receiveCount,
+				true, // isPermissionError
+				7200, // queueDefaultVisibility (2hr)
+			)
+
+			// If CMV should not be called, the test passes if we get here without the mock erroring
+		})
+	}
+}
+
+func TestApplyProgressiveBackoff_CMVFailure(t *testing.T) {
+	t.Run("CMV failure falls back gracefully", func(t *testing.T) {
+		// Create mock SQS client that returns an error
+		mockSQS := &mockSQSClient{
+			changeVisibilityFunc: func(ctx context.Context, params *sqs.ChangeMessageVisibilityInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error) {
+				return nil, fmt.Errorf("simulated CMV failure")
+			},
+		}
+
+		// Create processor with mock
+		proc := &Processor{
+			sqsClient: mockSQS,
+			logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+			config:    &models.Config{PermissionBackoffTier1: 1800, PermissionBackoffTier2: 3600, PermissionBackoffTier3: 7200},
+		}
+
+		// Should not panic, just log warning
+		proc.applyProgressiveBackoff(
+			context.Background(),
+			"https://sqs.us-east-1.amazonaws.com/123456789012/test-retry-queue",
+			"valid-receipt-handle",
+			1,    // Receive count 1
+			true, // isPermissionError
+			7200, // queueDefaultVisibility
+		)
+
+		// If we get here, the function handled the error gracefully
+	})
+}
+
+// Mock SQS client for testing progressive backoff

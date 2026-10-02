@@ -159,17 +159,26 @@ type Config struct {
 	ScanInterval                  int    // For scan mode
 	S3UsePathStyle                bool   // Use path-style S3 URLs (for LocalStack; defaults to false for AWS virtual-hosted style)
 	AWSEndpointURL                string // AWS endpoint URL (for LocalStack/testing; empty for real AWS)
+
+	// Progressive backoff configuration for permission errors
+	// (customer needs time to fix IAM permissions, API keys, etc.)
+	PermissionBackoffTier1 int32 // Receive 1: default 1800s (30 min)
+	PermissionBackoffTier2 int32 // Receive 2: default 3600s (60 min)
+	PermissionBackoffTier3 int32 // Receive 3+: default 7200s (120 min)
 }
 
 // DefaultConfig returns a configuration with default values
 func DefaultConfig() *Config {
 	return &Config{
-		TenantConfigTable: "tenant-configurations",
-		MaxBatchSize:      1000,
-		RetryAttempts:     3,
-		AWSRegion:         "us-east-1",
-		ScanInterval:      10,
-		S3UsePathStyle:    false, // Default to AWS virtual-hosted style
+		TenantConfigTable:      "tenant-configurations",
+		MaxBatchSize:           1000,
+		RetryAttempts:          3,
+		AWSRegion:              "us-east-1",
+		ScanInterval:           10,
+		S3UsePathStyle:         false, // Default to AWS virtual-hosted style
+		PermissionBackoffTier1: 1800,  // 30 min
+		PermissionBackoffTier2: 3600,  // 60 min
+		PermissionBackoffTier3: 7200,  // 120 min
 	}
 }
 

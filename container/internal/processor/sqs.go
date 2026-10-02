@@ -17,6 +17,7 @@ import (
 // SQSClientAPI defines the interface for SQS operations needed for testing
 type SQSClientAPI interface {
 	SendMessage(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
+	ChangeMessageVisibility(ctx context.Context, params *sqs.ChangeMessageVisibilityInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error)
 }
 
 // ExtractProcessingMetadata extracts processing metadata from SQS record.

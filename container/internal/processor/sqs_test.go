@@ -17,7 +17,8 @@ import (
 
 // Mock SQS client for testing
 type mockSQSClient struct {
-	sendMessageFunc func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
+	sendMessageFunc      func(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
+	changeVisibilityFunc func(ctx context.Context, params *sqs.ChangeMessageVisibilityInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error)
 }
 
 func (m *mockSQSClient) SendMessage(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
@@ -27,6 +28,13 @@ func (m *mockSQSClient) SendMessage(ctx context.Context, params *sqs.SendMessage
 	return &sqs.SendMessageOutput{
 		MessageId: aws.String("test-message-id"),
 	}, nil
+}
+
+func (m *mockSQSClient) ChangeMessageVisibility(ctx context.Context, params *sqs.ChangeMessageVisibilityInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error) {
+	if m.changeVisibilityFunc != nil {
+		return m.changeVisibilityFunc(ctx, params, optFns...)
+	}
+	return &sqs.ChangeMessageVisibilityOutput{}, nil
 }
 
 func TestExtractProcessingMetadata(t *testing.T) {
