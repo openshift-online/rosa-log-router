@@ -30,9 +30,11 @@ globals "private" {
   config = {
     "us-gov-west-1" = {
       private_endpoint = true
+      vpc_id_var       = "allowed_vpc_id_west"
     }
     "us-gov-east-1" = {
       private_endpoint = true
+      vpc_id_var       = "allowed_vpc_id_east"
     }
   }
 }
@@ -87,7 +89,7 @@ generate_hcl "main.tf" {
         route53_zone_id                   = var.route53_zone_id
         base_domain                       = var.base_domain
         private_endpoint                  = global.private.config[region.value].private_endpoint
-        allowed_vpc_id                    = tm_hcl_expression("lookup(var.allowed_vpc_ids, \"${region.value}\", \"\")")
+        allowed_vpc_id                    = tm_hcl_expression("var.${global.private.config[region.value].vpc_id_var}")
       }
     }
   }
