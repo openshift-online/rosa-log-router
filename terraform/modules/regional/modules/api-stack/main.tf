@@ -837,6 +837,15 @@ resource "aws_api_gateway_domain_name" "domain" {
   endpoint_configuration {
     types = var.private_endpoint ? ["PRIVATE"] : ["REGIONAL"]
   }
+
+  # A PRIVATE custom domain enforces its OWN resource policy on invoke, evaluated
+  # separately from (and in addition to) the REST API's resource policy. Without a
+  # policy here, API Gateway denies every request through the domain AFTER the
+  # authorizer allows it (ACCESS_DENIED / "not authorized to perform this
+  # operation"). Reuse local.api_policy so the domain is gated to the same
+  # allowed_vpc_id as the API and the two can't drift. REGIONAL domains don't use
+  # a domain-level invoke policy, so leave it unset there.
+  policy = var.private_endpoint ? local.api_policy : null
 }
 
 resource "aws_route53_record" "api" {

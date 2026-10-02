@@ -41,7 +41,7 @@ module "regional-resource-us-gov-west-1" {
   route53_zone_id                   = var.route53_zone_id
   base_domain                       = var.base_domain
   private_endpoint                  = true
-  allowed_vpc_id                    = lookup(var.allowed_vpc_ids, "us-gov-west-1", "")
+  allowed_vpc_id                    = var.allowed_vpc_id_west
 }
 module "regional-resource-us-gov-east-1" {
   source = "../../../modules/regional"
@@ -66,5 +66,5 @@ module "regional-resource-us-gov-east-1" {
   route53_zone_id                   = var.route53_zone_id
   base_domain                       = var.base_domain
   private_endpoint                  = true
-  allowed_vpc_id                    = lookup(var.allowed_vpc_ids, "us-gov-east-1", "")
+  allowed_vpc_id                    = var.allowed_vpc_id_east
 }
