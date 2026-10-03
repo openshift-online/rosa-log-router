@@ -94,3 +94,8 @@ cloudformation/cluster/rendered/
 terraform.tfplan
 terraform.tfplan.*
 terraform/local/*.zip
+# Test artifacts and local documentation
+test-artifacts/
+coverage.out
+coverage_*.out
+*.tar.gz

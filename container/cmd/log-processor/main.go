@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/openshift/rosa-log-router/internal/models"
 	"github.com/openshift/rosa-log-router/internal/processor"
@@ -192,10 +193,11 @@ func sqsPollingMode(ctx context.Context, proc *processor.Processor, sqsClient *s
 
 		// Poll for messages
 		resp, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl:            &cfg.SQSQueueURL,
-			MaxNumberOfMessages: 10,
-			WaitTimeSeconds:     20, // Long polling
-			VisibilityTimeout:   300,
+			QueueUrl:                    &cfg.SQSQueueURL,
+			MaxNumberOfMessages:         10,
+			WaitTimeSeconds:             20, // Long polling
+			VisibilityTimeout:           300,
+			MessageSystemAttributeNames: []types.MessageSystemAttributeName{types.MessageSystemAttributeNameApproximateReceiveCount},
 		})
 
 		if err != nil {
@@ -214,7 +216,15 @@ func sqsPollingMode(ctx context.Context, proc *processor.Processor, sqsClient *s
 		for _, message := range resp.Messages {
 			shouldDelete := false
 
-			deliveryStats, err := proc.ProcessSQSRecord(ctx, *message.Body, *message.MessageId, *message.ReceiptHandle)
+			// Parse ApproximateReceiveCount from message attributes
+			receiveCount := 1 // Default to 1 if attribute is missing
+			if countStr, exists := message.Attributes["ApproximateReceiveCount"]; exists {
+				if parsedCount, err := strconv.Atoi(countStr); err == nil {
+					receiveCount = parsedCount
+				}
+			}
+
+			deliveryStats, err := proc.ProcessSQSRecord(ctx, *message.Body, *message.MessageId, *message.ReceiptHandle, receiveCount)
 
 			if models.IsNonRecoverable(err) {
 				logger.Warn("non-recoverable error, deleting message to prevent infinite retries",
@@ -267,7 +277,7 @@ func manualInputMode(ctx context.Context, proc *processor.Processor, logger *slo
 
 	// Process as SQS record
 	// TODO: Need to check on sending data as python has different
-	deliveryStats, err := proc.ProcessSQSRecord(ctx, string(inputData), "manual-input", "manual")
+	deliveryStats, err := proc.ProcessSQSRecord(ctx, string(inputData), "manual-input", "manual", 1)
 	if err != nil {
 		return fmt.Errorf("failed to process manual input: %w", err)
 	}
@@ -331,7 +341,7 @@ func scanMode(ctx context.Context, proc *processor.Processor, s3Client *s3.Clien
 			snsMessage := models.SNSMessage{Message: string(s3EventJSON)}
 			snsMessageJSON, _ := json.Marshal(snsMessage)
 
-			deliveryStats, err := proc.ProcessSQSRecord(ctx, string(snsMessageJSON), fmt.Sprintf("scan-%s", objectKey), "")
+			deliveryStats, err := proc.ProcessSQSRecord(ctx, string(snsMessageJSON), fmt.Sprintf("scan-%s", objectKey), "", 1)
 			if err != nil {
 				logger.Error("failed to process object", "key", objectKey, "error", err)
 				continue
