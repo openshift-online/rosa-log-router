@@ -68,10 +68,16 @@ variable "api_image" {
   type        = string
 }
 
-variable "allowed_vpc_ids" {
-  description = "Per-region VPC id permitted to invoke the private API, matched against aws:sourceVpc in the resource policy. Keyed by AWS region (e.g. us-gov-west-1). Injected by CI/CD. A region absent from the map (or mapped to \"\") produces a deny-all lockdown policy for that region. Only used when private_endpoint is true."
-  type        = map(string)
-  default     = {}
+variable "allowed_vpc_id_west" {
+  description = "VPC id permitted to invoke the private API in west region, matched against aws:sourceVpc in the resource policy. Only used when private_endpoint is true."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_vpc_id_east" {
+  description = "VPC id permitted to invoke the private API in east region, matched against aws:sourceVpc in the resource policy. Only used when private_endpoint is true."
+  type        = string
+  default     = ""
 }
 
 variable "route53_zone_id" {
