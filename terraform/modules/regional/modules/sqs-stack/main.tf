@@ -41,6 +41,29 @@ resource "aws_sqs_queue" "log_delivery_retry_queue" {
   tags = local.common_tags
 }
 
+# Partial queue DLQ for messages with partial success
+resource "aws_sqs_queue" "log_delivery_partial_dlq" {
+  name                      = "${var.project_name}-${var.environment}-log-delivery-partial-dlq"
+  message_retention_seconds = 1209600 # 14 days
+
+  tags = local.common_tags
+}
+
+# Partial success queue (Q3) for messages with processing metadata
+resource "aws_sqs_queue" "log_delivery_partial_queue" {
+  name                       = "${var.project_name}-${var.environment}-log-delivery-partial-queue"
+  message_retention_seconds  = 604800 # 7 days (aligned with S3 bucket lifecycle)
+  visibility_timeout_seconds = 900    # 15 minutes between retries (same as main)
+  receive_wait_time_seconds  = 20     # Long polling
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.log_delivery_partial_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = local.common_tags
+}
+
 # SQS queue for log delivery processing
 resource "aws_sqs_queue" "log_delivery_queue" {
   name                       = "${var.project_name}-${var.environment}-log-delivery-queue"

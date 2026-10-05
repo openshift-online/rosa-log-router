@@ -40,6 +40,8 @@ module "lambda_stack" {
   sqs_queue_url                     = module.sqs_stack.log_delivery_queue_url
   retry_queue_arn                   = module.sqs_stack.log_delivery_retry_queue_arn
   retry_queue_url                   = module.sqs_stack.log_delivery_retry_queue_url
+  partial_queue_arn                 = module.sqs_stack.log_delivery_partial_queue_arn
+  partial_queue_url                 = module.sqs_stack.log_delivery_partial_queue_url
   central_log_distribution_role_arn = var.central_log_distribution_role_arn
   processor_image                   = var.processor_image
   lambda_execution_role_arn         = var.lambda_execution_role_arn

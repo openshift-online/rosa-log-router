@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/openshift/rosa-log-router/internal/models"
 	"github.com/openshift/rosa-log-router/internal/processor"
@@ -163,12 +164,26 @@ func loadConfig() (*models.Config, error) {
 	if v := os.Getenv("RETRY_QUEUE_URL"); v != "" {
 		cfg.RetryQueueURL = v
 	}
+	if v := os.Getenv("PARTIAL_QUEUE_URL"); v != "" {
+		cfg.PartialQueueURL = v
+	}
 	if v := os.Getenv("AWS_S3_USE_PATH_STYLE"); v != "" {
 		cfg.S3UsePathStyle = v == "true" || v == "1"
 	}
 	if v := os.Getenv("AWS_ENDPOINT_URL"); v != "" {
 		cfg.AWSEndpointURL = v
 	}
+
+	// MaxReadBytes limits uncompressed S3 object size during processing.
+	//
+	// Set to 66 MiB (Vector's max_bytes 64 MiB + 3% padding for batch boundaries).
+	// This is the maximum safe limit for 512 MB Lambda - 68 MiB would cause OOM.
+	//
+	// To increase: measure baseline memory, test with memory-profile-padding tool,
+	// ensure (baseline + MaxReadBytes*3 + margin) < Lambda allocation.
+	const maxReadBytes = 66 * 1024 * 1024 // 66 MiB
+
+	cfg.MaxReadBytes = maxReadBytes
 
 	return cfg, nil
 }
@@ -196,6 +211,9 @@ func sqsPollingMode(ctx context.Context, proc *processor.Processor, sqsClient *s
 			MaxNumberOfMessages: 10,
 			WaitTimeSeconds:     20, // Long polling
 			VisibilityTimeout:   300,
+			MessageSystemAttributeNames: []types.MessageSystemAttributeName{
+				types.MessageSystemAttributeNameApproximateReceiveCount,
+			},
 		})
 
 		if err != nil {
@@ -214,7 +232,13 @@ func sqsPollingMode(ctx context.Context, proc *processor.Processor, sqsClient *s
 		for _, message := range resp.Messages {
 			shouldDelete := false
 
-			deliveryStats, err := proc.ProcessSQSRecord(ctx, *message.Body, *message.MessageId, *message.ReceiptHandle)
+			// Extract receiveCount for routing decisions (defaults to 0 if not present)
+			receiveCount := 0
+			if countStr, ok := message.Attributes["ApproximateReceiveCount"]; ok {
+				_, _ = fmt.Sscanf(countStr, "%d", &receiveCount)
+			}
+
+			deliveryStats, err := proc.ProcessSQSRecord(ctx, *message.Body, *message.MessageId, *message.ReceiptHandle, receiveCount, "main")
 
 			if models.IsNonRecoverable(err) {
 				logger.Warn("non-recoverable error, deleting message to prevent infinite retries",
@@ -265,9 +289,9 @@ func manualInputMode(ctx context.Context, proc *processor.Processor, logger *slo
 		return fmt.Errorf("no input data provided")
 	}
 
-	// Process as SQS record
+	// Process as SQS record (manual mode - no retries, defaults to main queue behavior)
 	// TODO: Need to check on sending data as python has different
-	deliveryStats, err := proc.ProcessSQSRecord(ctx, string(inputData), "manual-input", "manual")
+	deliveryStats, err := proc.ProcessSQSRecord(ctx, string(inputData), "manual-input", "manual", 0, "main")
 	if err != nil {
 		return fmt.Errorf("failed to process manual input: %w", err)
 	}
@@ -331,7 +355,7 @@ func scanMode(ctx context.Context, proc *processor.Processor, s3Client *s3.Clien
 			snsMessage := models.SNSMessage{Message: string(s3EventJSON)}
 			snsMessageJSON, _ := json.Marshal(snsMessage)
 
-			deliveryStats, err := proc.ProcessSQSRecord(ctx, string(snsMessageJSON), fmt.Sprintf("scan-%s", objectKey), "")
+			deliveryStats, err := proc.ProcessSQSRecord(ctx, string(snsMessageJSON), fmt.Sprintf("scan-%s", objectKey), "", 0, "main")
 			if err != nil {
 				logger.Error("failed to process object", "key", objectKey, "error", err)
 				continue
