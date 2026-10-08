@@ -18,9 +18,17 @@ locals {
   }
 }
 
-# Dead Letter Queue for failed messages
+# Dead Letter Queue for main queue
 resource "aws_sqs_queue" "log_delivery_dlq" {
   name                      = "${var.project_name}-${var.environment}-log-delivery-dlq"
+  message_retention_seconds = 1209600 # 14 days
+
+  tags = local.common_tags
+}
+
+# Dead Letter Queue for retry queue (separate DLQ per queue for proper error isolation)
+resource "aws_sqs_queue" "log_delivery_retry_dlq" {
+  name                      = "${var.project_name}-${var.environment}-log-delivery-retry-dlq"
   message_retention_seconds = 1209600 # 14 days
 
   tags = local.common_tags
@@ -34,7 +42,7 @@ resource "aws_sqs_queue" "log_delivery_retry_queue" {
   receive_wait_time_seconds  = 20     # Long polling
 
   redrive_policy = jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.log_delivery_dlq.arn
+    deadLetterTargetArn = aws_sqs_queue.log_delivery_retry_dlq.arn
     maxReceiveCount     = 3
   })
 

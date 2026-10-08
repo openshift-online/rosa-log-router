@@ -326,7 +326,7 @@ func (p *Processor) ProcessSQSRecord(ctx context.Context, messageBody, messageID
 		p.logger.Error("unable to determine source queue, routing disabled - using native retry only",
 			"completed_delivery_count", len(routingState.completedDeliveries))
 		// Return errors to trigger native retry in actual queue (wherever it is)
-		// If this persists, message goes to DLQ of actual source queue for investigation
+		// If this persists, message goes to source queue's DLQ for investigation
 		if routingState.repairableErr != nil {
 			return nil, fmt.Errorf("permission error with unknown source queue: %w", routingState.repairableErr)
 		}
