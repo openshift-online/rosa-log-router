@@ -282,6 +282,41 @@ invalid json line
 		assert.Equal(t, "another valid log", events[1].Message)
 	})
 
+	t.Run("handles mixed NDJSON with object and array lines", func(t *testing.T) {
+		// Regression test: NDJSON mixing object and array lines should parse all events
+		// Fallback parser must handle both formats when line-by-line parsing encounters arrays
+		ndjson := `{"timestamp":"2024-01-01T12:00:00Z","message":"first"}
+[{"timestamp":"2024-01-01T12:01:00Z","message":"second"},{"timestamp":"2024-01-01T12:02:00Z","message":"third"}]`
+
+		events, err := ProcessJSON([]byte(ndjson), logger)
+
+		require.NoError(t, err)
+		assert.Len(t, events, 3) // 1 from object + 2 from array
+		assert.Equal(t, "first", events[0].Message)
+		assert.Equal(t, "second", events[1].Message)
+		assert.Equal(t, "third", events[2].Message)
+	})
+
+	t.Run("handles object followed by oversized line", func(t *testing.T) {
+		// Regression test: NDJSON with small object followed by 10MB+ line should parse both events
+		// Previously failed when scanner had hardcoded 10 MB line limit - scanner now handles
+		// lines up to file size (bounded by MaxReadBytes 66 MiB) to support large JSON objects
+
+		// Create a large JSON line (15 MB) with valid structure
+		largeMessage := strings.Repeat("A", 15*1024*1024) // 15 MB of 'A's
+		largeLineJSON := fmt.Sprintf(`{"timestamp":"2024-01-01T12:01:00Z","message":"%s"}`, largeMessage)
+
+		ndjson := `{"timestamp":"2024-01-01T12:00:00Z","message":"first"}
+` + largeLineJSON
+
+		events, err := ProcessJSON([]byte(ndjson), logger)
+
+		require.NoError(t, err)
+		assert.Len(t, events, 2) // Both events parsed successfully
+		assert.Equal(t, "first", events[0].Message)
+		assert.Equal(t, largeMessage, events[1].Message)
+	})
+
 	t.Run("handles empty content", func(t *testing.T) {
 		events, err := ProcessJSON([]byte(""), logger)
 
@@ -472,10 +507,11 @@ func (zeroReader) Read(p []byte) (int, error) {
 func TestProcessLogFile(t *testing.T) {
 	logger := getTestLogger()
 	ctx := context.Background()
+	const testMaxReadBytes = 85 * 1024 * 1024 // 85 MB for testing (matches 512MB Lambda calculation)
 
 	t.Run("processes plain JSON file", func(t *testing.T) {
-		content := `{"timestamp":"2024-01-01T12:00:00Z","message":"hello"}`
-		events, err := ProcessLogFile(ctx, "test.json", strings.NewReader(content), logger)
+		content := []byte(`{"timestamp":"2024-01-01T12:00:00Z","message":"hello"}`)
+		events, err := ProcessLogFile(ctx, "test.json", content, logger, testMaxReadBytes)
 		require.NoError(t, err)
 		assert.Len(t, events, 1)
 	})
@@ -487,14 +523,15 @@ func TestProcessLogFile(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gz.Close())
 
-		events, err := ProcessLogFile(ctx, "test.json.gz", &buf, logger)
+		events, err := ProcessLogFile(ctx, "test.json.gz", buf.Bytes(), logger, testMaxReadBytes)
 		require.NoError(t, err)
 		assert.Len(t, events, 1)
 	})
 
 	t.Run("rejects oversized plain file", func(t *testing.T) {
-		oversized := io.LimitReader(zeroReader{}, maxReadBytes+1)
-		_, err := ProcessLogFile(ctx, "test.json", oversized, logger)
+		// Create oversized content
+		oversizedContent := make([]byte, testMaxReadBytes+1)
+		_, err := ProcessLogFile(ctx, "test.json", oversizedContent, logger, testMaxReadBytes)
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
 		assert.Contains(t, err.Error(), "exceeds maximum allowed size")
@@ -503,11 +540,11 @@ func TestProcessLogFile(t *testing.T) {
 	t.Run("rejects gzip bomb", func(t *testing.T) {
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
-		_, err := io.CopyN(gz, zeroReader{}, maxReadBytes+1)
+		_, err := io.CopyN(gz, zeroReader{}, testMaxReadBytes+1)
 		require.NoError(t, err)
 		require.NoError(t, gz.Close())
 
-		_, err = ProcessLogFile(ctx, "bomb.json.gz", &buf, logger)
+		_, err = ProcessLogFile(ctx, "bomb.json.gz", buf.Bytes(), logger, testMaxReadBytes)
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
 		assert.Contains(t, err.Error(), "decompressed size exceeds")

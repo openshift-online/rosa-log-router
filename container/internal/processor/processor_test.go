@@ -147,7 +147,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		messageBody := createSNSMessageWithS3Event("test-bucket", "cluster/namespace/app/pod/file.json.gz")
 
 		// Will fail due to missing AWS clients, but should parse successfully
-		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 0, "main")
 
 		// Error is expected (no DynamoDB client), but should not be InvalidS3NotificationError
 		if err != nil {
@@ -158,7 +158,7 @@ func TestProcessSQSRecord(t *testing.T) {
 	t.Run("returns non-recoverable error for invalid SNS message", func(t *testing.T) {
 		invalidMessage := "not valid json"
 
-		_, err := proc.ProcessSQSRecord(context.Background(), invalidMessage, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), invalidMessage, "msg-1", "receipt-1", 0, "main")
 
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
@@ -169,7 +169,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		snsMessage := models.SNSMessage{Message: "invalid s3 event"}
 		messageBody, _ := json.Marshal(snsMessage)
 
-		_, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1", 0, "main")
 
 		require.Error(t, err)
 		assert.True(t, models.IsNonRecoverable(err))
@@ -181,7 +181,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		encodedKey := "cluster%2Fnamespace%2Fapp%2Fpod%2Ffile.json.gz"
 		messageBody := createSNSMessageWithS3Event("test-bucket", encodedKey)
 
-		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		_, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 0, "main")
 
 		// Should decode successfully (error will be from missing clients, not decoding)
 		if err != nil {
@@ -193,7 +193,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		// Object key with insufficient path segments
 		messageBody := createSNSMessageWithS3Event("test-bucket", "invalid/path")
 
-		stats, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1")
+		stats, err := proc.ProcessSQSRecord(context.Background(), messageBody, "msg-1", "receipt-1", 0, "main")
 
 		// Non-recoverable errors are logged and swallowed during S3 processing
 		// The record is skipped and processing continues
@@ -223,7 +223,7 @@ func TestProcessSQSRecord(t *testing.T) {
 		snsMessage := models.SNSMessage{Message: string(s3EventJSON)}
 		messageBody, _ := json.Marshal(snsMessage)
 
-		stats, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1")
+		stats, err := proc.ProcessSQSRecord(context.Background(), string(messageBody), "msg-1", "receipt-1", 0, "main")
 
 		// Will fail due to missing clients, but should attempt to process both
 		assert.NotNil(t, stats)
@@ -261,7 +261,7 @@ func TestProcessSQSRecordErrorClassification(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := proc.ProcessSQSRecord(context.Background(), tc.messageBody, "msg-1", "receipt-1")
+			_, err := proc.ProcessSQSRecord(context.Background(), tc.messageBody, "msg-1", "receipt-1", 0, "main")
 
 			require.Error(t, err)
 			assert.Equal(t, tc.expectNonRecoverable, models.IsNonRecoverable(err))

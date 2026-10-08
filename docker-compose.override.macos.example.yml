@@ -1,0 +1,32 @@
+# macOS LocalStack Override Example
+#
+# This file provides a working docker-compose override for macOS users running LocalStack.
+#
+# PROBLEM:
+#   - macOS Podman socket paths differ from Linux Docker socket paths
+#   - The default docker-compose.yml mounts /run/user/1000/podman/podman.sock
+#   - This path doesn't exist on macOS and causes LocalStack to fail
+#
+# SOLUTION:
+#   - Copy this file to docker-compose.override.yml:
+#       cp docker-compose.override.macos.example.yml docker-compose.override.yml
+#   - Docker-compose will automatically merge the override with docker-compose.yml
+#
+# NOTE:
+#   - This disables Lambda executor (LocalStack Pro Lambda features won't work)
+#   - For basic LocalStack testing (S3, SQS, DynamoDB, etc.) this is sufficient
+#   - Linux users should NOT use this override - it removes Docker socket access
+#
+# USAGE:
+#   1. Copy to docker-compose.override.yml
+#   2. Run: make start
+#   3. LocalStack will start without Lambda executor
+#
+services:
+  localstack:
+    volumes:
+      # Remove the Podman socket mount (only keep init scripts)
+      - ./local-aws:/etc/localstack/init/ready.d
+    environment:
+      # Disable Lambda executor since we don't have socket access on macOS
+      - LAMBDA_EXECUTOR=local

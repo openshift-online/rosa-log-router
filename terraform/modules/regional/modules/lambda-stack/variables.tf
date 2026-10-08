@@ -29,12 +29,22 @@ variable "sqs_queue_url" {
 }
 
 variable "retry_queue_arn" {
-  description = "ARN of the retry SQS queue for permission error retries"
+  description = "ARN of the persistent queue (Q2) for retryable errors with long backoff"
   type        = string
 }
 
 variable "retry_queue_url" {
-  description = "URL of the retry SQS queue"
+  description = "URL of the persistent queue (Q2)"
+  type        = string
+}
+
+variable "partial_queue_arn" {
+  description = "ARN of the partial success queue (Q3) for messages with metadata"
+  type        = string
+}
+
+variable "partial_queue_url" {
+  description = "URL of the partial success queue (Q3)"
   type        = string
 }
 

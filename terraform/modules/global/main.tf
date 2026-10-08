@@ -264,7 +264,8 @@ resource "aws_iam_role_policy" "lambda_log_processor_policy" {
         ]
         Resource = [
           "arn:${data.aws_partition.current.partition}:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-queue",
-          "arn:${data.aws_partition.current.partition}:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-retry-queue"
+          "arn:${data.aws_partition.current.partition}:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-retry-queue",
+          "arn:${data.aws_partition.current.partition}:sqs:*:${data.aws_caller_identity.current.account_id}:${var.project_name}-${var.environment}-log-delivery-partial-queue"
         ]
       },
       {

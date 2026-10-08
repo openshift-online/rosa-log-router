@@ -108,6 +108,59 @@ func SendToRetryQueue(ctx context.Context, sqsClient SQSClientAPI, retryQueueURL
 	return SendToRetryQueueWithMetadata(ctx, sqsClient, retryQueueURL, messageBody, completedDeliveries, 0, "initial_permission_error", nil, logger)
 }
 
+// SendToPartialQueueWithMetadata sends a message to the partial queue (Q3) with partial success metadata.
+func SendToPartialQueueWithMetadata(ctx context.Context, sqsClient SQSClientAPI, partialQueueURL, messageBody string, completedDeliveries []string, currentHops int, hopReason string, logger *slog.Logger) error {
+	var messageData map[string]interface{}
+	if err := json.Unmarshal([]byte(messageBody), &messageData); err != nil {
+		return fmt.Errorf("failed to parse message body: %w", err)
+	}
+
+	if messageData["processing_metadata"] == nil {
+		messageData["processing_metadata"] = make(map[string]interface{})
+	}
+	procMetadata, ok := messageData["processing_metadata"].(map[string]interface{})
+	if !ok {
+		procMetadata = make(map[string]interface{})
+		messageData["processing_metadata"] = procMetadata
+	}
+
+	procMetadata["completed_deliveries"] = completedDeliveries
+	procMetadata["retry_count"] = 0
+	procMetadata["from_partial_queue"] = true
+	procMetadata["sent_to_partial_queue_at"] = time.Now().Format(time.RFC3339)
+	procMetadata["hops"] = currentHops + 1
+	procMetadata["hop_reason"] = hopReason
+
+	// Build destination states for partial success tracking
+	destinationStates := make(map[string]models.DestinationState)
+	for _, deliveryID := range completedDeliveries {
+		destinationStates[deliveryID] = models.DestinationState{
+			Status:    "success",
+			UpdatedAt: time.Now().Format(time.RFC3339),
+		}
+	}
+	procMetadata["destination_states"] = destinationStates
+
+	updatedBody, err := json.Marshal(messageData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated message body: %w", err)
+	}
+
+	_, err = sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    aws.String(partialQueueURL),
+		MessageBody: aws.String(string(updatedBody)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send message to partial queue: %w", err)
+	}
+
+	logger.Info("sent message to partial queue",
+		"completed_deliveries", completedDeliveries,
+		"hops", currentHops+1,
+		"hop_reason", hopReason)
+	return nil
+}
+
 // RequeueSQSMessageWithOffset re-queues an SQS message with processing offset and exponential backoff.
 func RequeueSQSMessageWithOffset(ctx context.Context, sqsClient SQSClientAPI, queueURL, messageBody, originalReceiptHandle string, processingOffset, maxRetries int, completedDeliveries []string, logger *slog.Logger) error {
 	if queueURL == "" {

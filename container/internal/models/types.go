@@ -152,13 +152,15 @@ type Config struct {
 	RetryAttempts                 int
 	CentralLogDistributionRoleArn string
 	SQSQueueURL                   string
-	RetryQueueURL                 string
+	RetryQueueURL                 string // Q2: Retryable errors with 60min backoff
+	PartialQueueURL               string // Q3: Partial success with metadata
 	AWSRegion                     string
 	ExecutionMode                 string // lambda, sqs, manual, scan
 	SourceBucket                  string // For scan mode
 	ScanInterval                  int    // For scan mode
 	S3UsePathStyle                bool   // Use path-style S3 URLs (for LocalStack; defaults to false for AWS virtual-hosted style)
 	AWSEndpointURL                string // AWS endpoint URL (for LocalStack/testing; empty for real AWS)
+	MaxReadBytes                  int64  // Maximum bytes to read from S3 objects (dynamic based on Lambda memory)
 }
 
 // DefaultConfig returns a configuration with default values

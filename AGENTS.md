@@ -35,6 +35,17 @@ export AWS_REGION=us-east-1
 - Use `make deploy` to deploy infrastructure locally
 - See Makefile for all available targets
 
+**macOS LocalStack Setup:**
+If you encounter Podman socket errors on macOS when running `make start`:
+```bash
+# Copy the macOS override file
+cp docker-compose.override.macos.example.yml docker-compose.override.yml
+
+# Then start LocalStack
+make start
+```
+This disables Lambda executor but allows LocalStack to run for basic testing (S3, SQS, DynamoDB, etc.).
+
 **Security Note**: Never commit credentials to version control.
 
 ## Local Development

@@ -70,12 +70,17 @@ venv.bak/
 htmlcov/
 .coverage
 .coverage.*
+coverage.out
 .cache
 nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+
+# Build artifacts
+container/log-processor
+log-processor
 
 # Documentation builds
 _build/
@@ -94,3 +99,7 @@ cloudformation/cluster/rendered/
 terraform.tfplan
 terraform.tfplan.*
 terraform/local/*.zip
+
+# Test artifacts and temporary files (never commit test data, analysis, or planning docs)
+test-artifacts/
+docker-compose.override.yml

@@ -45,6 +45,7 @@ resource "aws_lambda_function" "log_distributor_function" {
       CENTRAL_LOG_DISTRIBUTION_ROLE_ARN = var.central_log_distribution_role_arn
       SQS_QUEUE_URL                     = var.sqs_queue_url
       RETRY_QUEUE_URL                   = var.retry_queue_url
+      PARTIAL_QUEUE_URL                 = var.partial_queue_url
     }
   }
 
@@ -65,9 +66,20 @@ resource "aws_lambda_event_source_mapping" "log_delivery_event_source_mapping" {
   function_response_types            = ["ReportBatchItemFailures"]
 }
 
-# Event Source Mapping for Retry Queue to Lambda
+# Event Source Mapping for Retry Queue (Q2) to Lambda
+# Note: Resource name must stay "retry_queue_event_source_mapping" for backward compatibility
+# Renaming would cause Terraform to destroy+recreate, creating a consumer gap
 resource "aws_lambda_event_source_mapping" "retry_queue_event_source_mapping" {
   event_source_arn                   = var.retry_queue_arn
+  function_name                      = aws_lambda_function.log_distributor_function.arn
+  batch_size                         = 10
+  maximum_batching_window_in_seconds = 5
+  function_response_types            = ["ReportBatchItemFailures"]
+}
+
+# Event Source Mapping for Partial Queue (Q3) to Lambda
+resource "aws_lambda_event_source_mapping" "partial_queue_event_source_mapping" {
+  event_source_arn                   = var.partial_queue_arn
   function_name                      = aws_lambda_function.log_distributor_function.arn
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5
