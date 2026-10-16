@@ -16,6 +16,9 @@ maintainers:
   - aliceh
   - anispate
   - dwelch0
+  - serngawy
+  - tinaafitz
+  - andclt
 approvers:
   - jhjaggars
   - BumbleFeng
@@ -28,6 +31,9 @@ approvers:
   - nephomaniac
   - dustman9000
   - joshbranham
+  - serngawy
+  - tinaafitz
+  - andclt
 reviewers:
   - tnierman
   - clcollins
