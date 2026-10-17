@@ -1,0 +1,8 @@
+# macOS overrides for docker-compose.yml
+# Auto-detected by the Makefile on Darwin systems.
+# Fixes: SELinux :Z flag (unsupported on macOS), socket path for Podman VM.
+services:
+  localstack:
+    volumes:
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./local-aws:/etc/localstack/init/ready.d
